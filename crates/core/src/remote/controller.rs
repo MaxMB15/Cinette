@@ -68,6 +68,8 @@ pub enum Event {
     Error(ErrorCode),
     /// Something about the transfer this controller asked for.
     Transfer(ControllerEvent),
+    /// The target's name changed. [`Controller::peer`] has it too.
+    Renamed(String),
     /// The connection ended. Close the socket. [`CloseReason::Timeout`]
     /// means the controller gave up on the target itself.
     Closed(CloseReason),
@@ -205,7 +207,10 @@ impl Controller {
                 }
                 Err(failure) => return closed(out, failure.reason),
             },
-            Stage::Requesting { mut channel, peer } => {
+            Stage::Requesting {
+                mut channel,
+                mut peer,
+            } => {
                 let message = match read(&mut channel, frame, &mut out) {
                     Ok(Some(message)) => message,
                     Ok(None) => {
@@ -236,6 +241,10 @@ impl Controller {
                         };
                     }
                     Message::Closed { reason } => return closed(out, reason),
+                    Message::Renamed { name } => {
+                        take_rename(&mut peer, &name, &mut out);
+                        self.stage = Stage::Requesting { channel, peer };
+                    }
                     other => {
                         handle_common(other, &mut out);
                         self.stage = Stage::Requesting { channel, peer };
@@ -244,7 +253,7 @@ impl Controller {
             }
             Stage::InSession {
                 mut channel,
-                peer,
+                mut peer,
                 session_id,
             } => {
                 let message = match read(&mut channel, frame, &mut out) {
@@ -292,6 +301,7 @@ impl Controller {
                         self.lose_flow(&mut out);
                         return closed(out, reason);
                     }
+                    Some(Message::Renamed { name }) => take_rename(&mut peer, &name, &mut out),
                     // A grant for a request this device stopped making,
                     // such as one cancelled on its way: the target is told,
                     // so it doesn't keep the grant.
@@ -509,6 +519,22 @@ impl Controller {
             .extend(flow_out.events.into_iter().map(Event::Transfer));
     }
 
+    /// Tells the target this device is called `name` now. `None` outside a
+    /// session, or when the target's hello doesn't offer
+    /// [`Feature::Rename`]: it learns the name on the next connection.
+    pub fn rename(&mut self, name: &str) -> Option<Vec<u8>> {
+        match &mut self.stage {
+            Stage::InSession { channel, peer, .. } if peer.features.contains(&Feature::Rename) => {
+                channel
+                    .seal(&Message::Renamed {
+                        name: name.to_owned(),
+                    })
+                    .ok()
+            }
+            _ => None,
+        }
+    }
+
     /// A ping, to send when nothing else went out for [`PING_INTERVAL`].
     pub fn ping(&mut self) -> Option<Vec<u8>> {
         match &mut self.stage {
@@ -549,6 +575,13 @@ fn seal_flow(channel: &mut Channel, flow_out: ControllerOut, out: &mut Output) {
     }
     out.events
         .extend(flow_out.events.into_iter().map(Event::Transfer));
+}
+
+/// The target sent a new name: reports it when it changed.
+fn take_rename(peer: &mut Peer, name: &str, out: &mut Output) {
+    if peer.rename(name) {
+        out.events.push(Event::Renamed(peer.name.clone()));
+    }
 }
 
 fn closed(mut out: Output, reason: CloseReason) -> Output {

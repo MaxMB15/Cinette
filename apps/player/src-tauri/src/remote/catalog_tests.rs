@@ -413,23 +413,25 @@ mod loading_episodes {
                 ep
             })
             .collect();
-        let (items, next) = episode_page(&providers, &many, None, 500).unwrap();
+        let (items, next) = episode_page(&providers, "series-1", &many, None, 500).unwrap();
         assert_eq!(items.len(), MAX_PAGE);
         assert_eq!(next.as_deref(), Some("ep100"));
-        let (rest, next) = episode_page(&providers, &many, next, 10).unwrap();
+        let (rest, next) = episode_page(&providers, "series-1", &many, next, 10).unwrap();
         let ids: Vec<&str> = rest.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, ["ep100", "ep101", "ep102"]);
         assert_eq!(next, None);
-        let (two, next) = episode_page(&providers, &many, Some("ep1".into()), 2).unwrap();
+        let (two, next) = episode_page(&providers, "series-1", &many, Some("ep1".into()), 2).unwrap();
         assert_eq!(two.len(), 2);
         assert_eq!(next.as_deref(), Some("ep3"));
-        let (one, _) = episode_page(&providers, &many, None, 0).unwrap();
+        let (one, _) = episode_page(&providers, "series-1", &many, None, 0).unwrap();
         assert_eq!(one.len(), 1, "at least one");
         assert_eq!(
-            episode_page(&providers, &many, Some("gone".into()), 10),
+            episode_page(&providers, "series-1", &many, Some("gone".into()), 10),
             Err(ErrorCode::NotFound)
         );
         assert!(items.iter().all(|i| i.logo.is_none()));
+        // Each names its series, so a controller can find the ones around it.
+        assert!(items.iter().all(|i| i.series_id.as_deref() == Some("series-1")));
     }
 }
 

@@ -44,12 +44,13 @@ use super::message::{
     PlaybackSnapshot, PlaybackStatus, RequestKind, VersionedState, PROTOCOL_VERSION,
 };
 use super::sessions::{Session, Sessions};
-use super::settings::{ControlMode, Decision, RemoteSettings};
+use super::settings::{self, ControlMode, Decision, RemoteSettings};
 use super::transfer::flow::{Asked, Progress, ProviderResult, ProviderSettings, Step, TargetFlow};
 use super::transfer::merge::Report;
 use super::transfer::refs::Salt;
 use super::transfer::{Export, What};
 use super::ConnId;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -111,6 +112,9 @@ pub enum Action {
     },
     /// Advertise this record, replacing any earlier one, or stop advertising.
     Advertise(Option<DiscoveryRecord>),
+    /// The blocked devices changed: save the list, for [`Target::block`]
+    /// at the next start.
+    BlockedChanged(Vec<BlockedDevice>),
     /// A controller is importing this device's history: save the playback
     /// position, export the history under `salt` with only `what`, and call
     /// [`Target::exported`].
@@ -164,6 +168,16 @@ pub struct ConsentPrompt {
     pub expires_at: Instant,
     /// What a controller in a session asks for. `None` asks for control.
     pub asked: Option<Asked>,
+}
+
+/// A device the user denied, which is refused without a dialog until the
+/// user unblocks it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedDevice {
+    pub device_id: DeviceId,
+    /// Its name when it was denied, for the list in settings.
+    pub name: String,
 }
 
 /// One controller in the target's list.
@@ -247,11 +261,15 @@ pub struct Target {
     evicted: Vec<(ConnId, Instant)>,
     /// What this device's hello offers.
     features: Vec<Feature>,
+    /// The devices the user denied, oldest first.
+    blocked: Vec<BlockedDevice>,
+    /// This device's name when the user gave it none.
+    default_name: String,
 }
 
 impl Target {
     pub fn new(key: DeviceKey, device_type: DeviceType, settings: RemoteSettings) -> Self {
-        Self {
+        let mut target = Self {
             key,
             device_type,
             settings,
@@ -266,15 +284,57 @@ impl Target {
             sessions: Sessions::new(),
             nonces: TokenBucket::new(NONCES_PER_SECOND, f64::from(NONCE_BURST)),
             evicted: Vec::new(),
-            features: vec![Feature::Control, Feature::Catalog],
+            features: Vec::new(),
+            blocked: Vec::new(),
+            default_name: settings::default_name(device_type).to_owned(),
+        };
+        target.offer(false, false);
+        target
+    }
+
+    /// Takes the blocked devices saved from [`Action::BlockedChanged`].
+    pub fn block(&mut self, blocked: Vec<BlockedDevice>) {
+        self.blocked = blocked;
+    }
+
+    pub fn blocked(&self) -> &[BlockedDevice] {
+        &self.blocked
+    }
+
+    fn is_blocked(&self, device: &DeviceId) -> bool {
+        self.blocked.iter().any(|b| b.device_id == *device)
+    }
+
+    /// Lets the device with this id ask again, from now on.
+    pub fn unblock(&mut self, device: &DeviceId) -> Vec<Action> {
+        self.consent.forgive(device);
+        let before = self.blocked.len();
+        self.blocked.retain(|b| b.device_id != *device);
+        if self.blocked.len() == before {
+            return Vec::new();
+        }
+        vec![Action::BlockedChanged(self.blocked.clone())]
+    }
+
+    /// Names the device `name` when the user gave it none, such as the name
+    /// the system has for it, in place of its type. Nothing changes for a
+    /// name with nothing left once cleaned.
+    pub fn name_by_default(&mut self, name: &str) {
+        if let Some(name) = settings::clean_name(name) {
+            self.default_name = name;
         }
     }
 
+    /// The name to show and advertise.
+    fn name(&self) -> String {
+        self.settings.name(&self.default_name)
+    }
+
     /// Offers history transfers or receiving providers too, once the
-    /// platform layer carries out their actions. Control and the catalog
-    /// are always offered. Connections from now on see the change.
+    /// platform layer carries out their actions. Control, the catalog and
+    /// renames are always offered. Connections from now on see the change.
     pub fn offer(&mut self, history: bool, providers: bool) {
-        self.features = vec![Feature::Control, Feature::Catalog];
+        self.features = vec![Feature::Control, Feature::Catalog, Feature::Rename];
         if history {
             self.features.push(Feature::History);
         }
@@ -296,7 +356,7 @@ impl Target {
         if !self.settings.advertise() {
             return None;
         }
-        let name = self.settings.name(self.device_type);
+        let name = self.name();
         Some(DiscoveryRecord {
             instance: name.clone(),
             txt: vec![
@@ -315,7 +375,7 @@ impl Target {
     fn hello(&self) -> Hello {
         Hello {
             id: self.device_id(),
-            name: self.settings.name(self.device_type),
+            name: self.name(),
             device_type: self.device_type,
             versions: vec![PROTOCOL_VERSION],
             features: self.features.clone(),
@@ -638,6 +698,15 @@ impl Target {
                         self.set_stage(conn, Stage::InSession(auth));
                         self.cancel_asking(conn, &mut actions);
                     }
+                    Message::Renamed { name } => {
+                        let renamed = auth.peer.rename(&name).then(|| auth.peer.name.clone());
+                        self.set_stage(conn, Stage::InSession(auth));
+                        if let Some(name) = renamed
+                            && self.sessions.rename(conn, name)
+                        {
+                            actions.push(self.sessions_changed());
+                        }
+                    }
                     step if is_transfer_step(&step) => {
                         self.set_stage(conn, Stage::InSession(auth));
                         self.transfer_step(conn, step, now, &mut actions);
@@ -677,11 +746,15 @@ impl Target {
         now: Instant,
         actions: &mut Vec<Action>,
     ) {
+        // A device the user denied hears so again, whatever the setting, and
+        // can't resume a session either.
+        let blocked = self.is_blocked(&auth.peer.id);
         // A session that dropped a moment ago comes back without asking.
         // It isn't a new connection, so being undiscoverable doesn't stop it,
         // but Never allow ended every session already.
-        if let Some(id) = resume
-            && let Ok(old) = self.sessions.resume(&id, &auth.peer.id, conn, now)
+        if !blocked
+            && let Some(id) = resume
+            && let Ok(old) = self.sessions.resume(&id, &auth.peer, conn, now)
         {
             if let Some(old) = old {
                 self.close(old, Some(CloseReason::Cancelled), actions);
@@ -700,7 +773,12 @@ impl Target {
             actions.push(self.sessions_changed());
             return;
         }
-        match self.settings.decide() {
+        let decision = if blocked {
+            Decision::Reject(CloseReason::Denied)
+        } else {
+            self.settings.decide()
+        };
+        match decision {
             Decision::Reject(reason) => {
                 self.set_stage(conn, Stage::Ready(auth));
                 self.close(conn, Some(reason), actions);
@@ -777,10 +855,26 @@ impl Target {
         }
     }
 
-    /// The user answered the dialog.
+    /// The user answered the dialog. Deny on a request for control blocks
+    /// that device and ends any session it has, as Disconnect does.
+    /// Dismissing it refuses only this request.
     pub fn answer(&mut self, request: RequestId, answer: Answer, now: Instant) -> Vec<Action> {
         let mut actions = Vec::new();
         if let Some(resolved) = self.consent.answer(request, answer, now) {
+            // A blocked device never gets this far, so it's never listed twice.
+            let peer = &resolved.request.peer;
+            if answer == Answer::Deny && resolved.request.kind == RequestKind::Control {
+                self.blocked.push(BlockedDevice {
+                    device_id: peer.id.clone(),
+                    name: peer.name.clone(),
+                });
+                actions.push(Action::BlockedChanged(self.blocked.clone()));
+                // A device has one session at most.
+                let held = self.sessions.list().iter().find(|s| s.peer.id == peer.id);
+                if let Some(session) = held.map(|s| s.id.clone()) {
+                    actions.extend(self.disconnect(&session));
+                }
+            }
             self.resolve(resolved, now, &mut actions);
         }
         self.sync_prompt(&mut actions);
@@ -865,6 +959,7 @@ impl Target {
     pub fn update_settings(&mut self, settings: RemoteSettings, _now: Instant) -> Vec<Action> {
         let mut actions = Vec::new();
         let before = self.discovery_record();
+        let old_name = self.name();
         let was_never = self.settings.remote_control == ControlMode::Never;
         let was_discoverable = self.settings.discoverable;
         self.settings = settings;
@@ -902,6 +997,10 @@ impl Target {
             }
         }
         self.sync_prompt(&mut actions);
+        let name = self.name();
+        if name != old_name {
+            self.send_rename(name, &mut actions);
+        }
         let after = self.discovery_record();
         if after != before {
             actions.push(Action::Advertise(after));
@@ -1370,7 +1469,22 @@ impl Target {
         }
     }
 
-    /// The name the device on `conn` gave in its handshake.
+    /// Tells every controller past the handshake whose hello offers
+    /// [`Feature::Rename`] that this device is called `name` now. One still
+    /// asking hears it too, since the user may rename while a dialog shows.
+    fn send_rename(&mut self, name: String, actions: &mut Vec<Action>) {
+        let message = Message::Renamed { name };
+        for (&conn, c) in &mut self.conns {
+            if let Stage::Ready(auth) | Stage::Waiting(auth, _) | Stage::InSession(auth) =
+                &mut c.stage
+                && auth.peer.features.contains(&Feature::Rename)
+            {
+                send(auth, conn, &message, actions);
+            }
+        }
+    }
+
+    /// The name the device on `conn` gave in its handshake, or since.
     fn peer_name(&self, conn: ConnId) -> String {
         match self.conns.get(&conn) {
             Some(Conn {

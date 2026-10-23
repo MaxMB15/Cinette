@@ -13,6 +13,7 @@ vi.mock("@/lib/tauri", () => ({
 	remoteDisconnect: vi.fn(() => Promise.resolve()),
 	remoteOpen: vi.fn(() => Promise.resolve()),
 	remoteLocalNetworkDenied: vi.fn(() => Promise.resolve(false)),
+	remoteUnblock: vi.fn(() => Promise.resolve()),
 }));
 
 const limit = vi.hoisted(() => ({ text: null as string | null }));
@@ -21,8 +22,11 @@ vi.mock("@/lib/remote-devices", async (importOriginal) => ({
 	discoveryLimit: () => limit.text,
 }));
 
-const sessions = vi.hoisted(() => ({ list: [] as unknown[] }));
-vi.mock("@/hooks/useRemoteTarget", () => ({ useRemoteSessions: () => sessions.list }));
+const sessions = vi.hoisted(() => ({ list: [] as unknown[], blocked: [] as unknown[] }));
+vi.mock("@/hooks/useRemoteTarget", () => ({
+	useRemoteSessions: () => sessions.list,
+	useRemoteBlocked: () => sessions.blocked,
+}));
 
 import {
 	remoteDisconnect,
@@ -31,6 +35,7 @@ import {
 	remoteOpen,
 	remoteResetIdentity,
 	remoteSetSettings,
+	remoteUnblock,
 } from "@/lib/tauri";
 import { LOCAL_NETWORK_DENIED } from "@/lib/remote-devices";
 import {
@@ -39,6 +44,7 @@ import {
 	RESET_DONE,
 	RemoteControlSettings,
 	SAVE_FAILED,
+	UNBLOCK_FAILED,
 } from "./RemoteControlSettings";
 
 const defaults: RemoteSettings = {
@@ -49,6 +55,24 @@ const defaults: RemoteSettings = {
 	deviceId: "abc",
 };
 
+/** Shows the card with blocked devices numbered `ids`. Returns how to give
+ *  it the backend's next list. */
+const showBlocked = async (...ids: number[]) => {
+	const devices = (list: number[]) =>
+		list.map((i) => ({ deviceId: `d${i}abcdefgh`, name: `Device ${i}` }));
+	sessions.blocked = devices(ids);
+	vi.mocked(remoteGetSettings).mockResolvedValue(defaults);
+	const view = render(<RemoteControlSettings />);
+	await screen.findByText("Remote control", { selector: "h3,div" });
+	return (...next: number[]) => {
+		sessions.blocked = devices(next);
+		view.rerender(<RemoteControlSettings />);
+	};
+};
+
+const unblock = (i: number) =>
+	screen.getByRole("button", { name: `Unblock Device ${i} · ID d${i}abcd` });
+
 const shown = async (settings: RemoteSettings = defaults) => {
 	vi.mocked(remoteGetSettings).mockResolvedValue(settings);
 	render(<RemoteControlSettings />);
@@ -58,6 +82,7 @@ const shown = async (settings: RemoteSettings = defaults) => {
 beforeEach(() => {
 	vi.clearAllMocks();
 	sessions.list = [];
+	sessions.blocked = [];
 	limit.text = null;
 	vi.mocked(remoteSetSettings).mockImplementation(async (s) => ({
 		...defaults,
@@ -508,6 +533,102 @@ describe("RemoteControlSettings", () => {
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Disconnect Laptop" }));
 		expect(remoteDisconnect).toHaveBeenCalledWith("s2");
+	});
+
+	it("says how a device gets blocked while none is", async () => {
+		await shown();
+		expect(screen.getByText(/No device is blocked/)).toHaveTextContent(
+			"No device is blocked. Denying a request to control this device blocks the device that asked."
+		);
+	});
+
+	it("lists the blocked devices by name and id, each with Unblock", async () => {
+		sessions.blocked = [
+			{ deviceId: "d1abcdefgh", name: "Neighbor" },
+			{ deviceId: "d2abcdefgh", name: "Phone" },
+		];
+		await shown();
+		expect(screen.queryByText(/No device is blocked/)).toBeNull();
+		expect(screen.getByText("Neighbor").tagName, "the name is set apart").toBe("BDI");
+		expect(screen.getByText("Neighbor").closest("li")?.textContent).toBe(
+			"Neighbor · ID d1abcdUnblock"
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Unblock Phone · ID d2abcd" }));
+		expect(remoteUnblock).toHaveBeenCalledWith("d2abcdefgh");
+	});
+
+	it("keeps going when unblocking fails", async () => {
+		vi.mocked(remoteUnblock).mockRejectedValueOnce("gone");
+		sessions.blocked = [{ deviceId: "d1abcdefgh", name: "Neighbor" }];
+		await shown();
+		fireEvent.click(screen.getByRole("button", { name: "Unblock Neighbor · ID d1abcd" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent(UNBLOCK_FAILED);
+		expect(screen.getByText("Neighbor")).toBeInTheDocument();
+	});
+
+	it("gives both lists' buttons room for a finger", async () => {
+		sessions.list = [
+			{
+				sessionId: "s1",
+				deviceId: "d1",
+				name: "Phone",
+				deviceType: "iphone",
+				connected: true,
+			},
+		];
+		sessions.blocked = [{ deviceId: "d2abcdefgh", name: "Neighbor" }];
+		await shown();
+		for (const name of ["Disconnect Phone", "Unblock Neighbor · ID d2abcd"]) {
+			expect(screen.getByRole("button", { name })).toHaveClass("pointer-coarse:min-h-11");
+		}
+	});
+
+	it("moves focus to the next row, or the heading, when a row goes", async () => {
+		const backendLists = await showBlocked(1, 2);
+		unblock(1).focus();
+		fireEvent.click(unblock(1));
+		// The backend's list comes back without it.
+		backendLists(2);
+		expect(unblock(2)).toHaveFocus();
+
+		fireEvent.click(unblock(2));
+		backendLists();
+		const heading = screen.getByText("Blocked devices");
+		expect(heading).toHaveFocus();
+		// It takes focus from code, but isn't a Tab stop.
+		expect(heading).toHaveAttribute("tabindex", "-1");
+	});
+
+	it("moves focus to the row now in the first one's place, not the last", async () => {
+		const backendLists = await showBlocked(1, 2, 3);
+		unblock(1).focus();
+		fireEvent.click(unblock(1));
+		backendLists(2, 3);
+		expect(unblock(2)).toHaveFocus();
+	});
+
+	it("moves focus to the row before the last one when that goes", async () => {
+		const backendLists = await showBlocked(1, 2);
+		unblock(2).focus();
+		fireEvent.click(unblock(2));
+		backendLists(1);
+		expect(unblock(1)).toHaveFocus();
+	});
+
+	it("leaves focus alone when the list changes with no button pressed", async () => {
+		const backendLists = await showBlocked(1);
+		// A device blocked from the prompt while Settings is open.
+		backendLists(1, 2);
+		expect(document.body).toHaveFocus();
+	});
+
+	it("leaves focus alone when it moved on before the row went", async () => {
+		const backendLists = await showBlocked(1);
+		fireEvent.click(unblock(1));
+		const reset = screen.getByRole("button", { name: "Reset" });
+		reset.focus();
+		backendLists();
+		expect(reset).toHaveFocus();
 	});
 
 	it("tells two devices with one name apart", async () => {

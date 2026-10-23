@@ -250,6 +250,9 @@ fn known_types_match_the_message_enum() {
             grant: String::new(),
             results: vec![],
         },
+        Message::Renamed {
+            name: String::new(),
+        },
     ];
     let types: Vec<String> = samples
         .iter()
@@ -345,4 +348,17 @@ fn common_version_picks_the_highest_both_speak() {
     assert_eq!(common_version(&[1, 2, 3], &[2, 3, 4]), Some(3));
     assert_eq!(common_version(&[1], &[2]), None);
     assert_eq!(common_version(&[], &[1]), None);
+}
+
+#[test]
+fn a_rename_and_its_feature_on_the_wire() {
+    assert_eq!(
+        decode(&bytes(json!({"v": 1, "type": "renamed", "name": "Den"}))),
+        Ok(Message::Renamed { name: "Den".into() })
+    );
+    assert_eq!(serde_json::to_value(Feature::Rename).unwrap(), "rename");
+    assert_eq!(
+        serde_json::from_value::<Feature>(json!("rename")).unwrap(),
+        Feature::Rename
+    );
 }

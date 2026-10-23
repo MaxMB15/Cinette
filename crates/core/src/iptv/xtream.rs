@@ -528,6 +528,19 @@ pub(crate) fn series_id_for_episode_id(episode_id: &str) -> Option<String> {
     is_number(series_id).then(|| channel_id("series", series_id))
 }
 
+/// The card id of the series a provider's episode belongs to, from the
+/// episode's channel id: `{provider}-xt-ep-{series}-s{season}-{index}` gives
+/// `{provider}-series-{series}`. Returns None for any other id, such as a
+/// movie's, a live channel's or an M3U episode's.
+pub fn series_card_for_episode(episode_id: &str) -> Option<String> {
+    let (provider, episode) = episode_id.split_once("-xt-ep-")?;
+    if provider.is_empty() {
+        return None;
+    }
+    let series = series_id_for_episode_id(&format!("xt-ep-{episode}"))?;
+    Some(format!("{provider}-{series}"))
+}
+
 /// The stream id in a live or movie URL, which ends in `/{id}.{extension}`.
 fn stream_id_in_url(url: &str) -> Option<&str> {
     let file = url.rsplit('/').next()?;
@@ -1258,6 +1271,33 @@ mod tests {
             "series-42",
         ] {
             assert_eq!(series_id_for_episode_id(id), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn a_providers_episode_names_its_series_card() {
+        assert_eq!(
+            series_card_for_episode(&format!("p1-{}", episode_id(42, 1, 0))).as_deref(),
+            Some("p1-series-42")
+        );
+        // A provider id with dashes in it.
+        assert_eq!(
+            series_card_for_episode("a-b-c-xt-ep-7-s2-3").as_deref(),
+            Some("a-b-c-series-7")
+        );
+        for id in [
+            "p1-xt-ep-",
+            "p1-xt-ep-42",
+            "p1-xt-ep--s1-0",
+            "p1-xt-ep-x-s1-0",
+            "xt-ep-42-s1-0",
+            "-xt-ep-42-s1-0",
+            "p1-series-42",
+            "p1-movie-8",
+            "p1-live-3",
+            "m3u-4f2a",
+        ] {
+            assert_eq!(series_card_for_episode(id), None, "{id}");
         }
     }
 
