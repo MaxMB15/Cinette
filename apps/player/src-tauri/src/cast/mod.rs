@@ -41,6 +41,11 @@ use receivers::{ReceiverList, Registry};
 
 /// A subtitle for the receiver to show, which the frontend wrote as
 /// WebVTT. Only Linux and macOS cast.
+///
+/// Its cue times count on the stream the receiver gets. A direct route
+/// keeps the item's own times. A converted stream starts at 0 where the load
+/// starts, so its cues come `start_at` earlier, and those that end before 0
+/// are left out. It's served as given.
 #[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
@@ -282,7 +287,7 @@ pub fn hold_cast_receivers<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) {
 /// rejects with `notConnected` once that cast has ended. `freed` when
 /// something on this computer just let go of the provider's stream, such as
 /// its own player. `subtitle`, which a live channel leaves out, is shown
-/// from the start.
+/// from the start, with its cues timed as [`Subtitle`] says.
 // The frontend names each argument, so they stay apart rather than in one
 // struct.
 #[allow(clippy::too_many_arguments)]

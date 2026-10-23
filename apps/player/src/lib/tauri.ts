@@ -673,7 +673,10 @@ export type CastAction =
 	/** Shows the subtitle the load gave, or hides it. */
 	| { action: "tracks"; on: boolean };
 
-/** A subtitle for a Cast receiver to show, written as WebVTT. */
+/** A subtitle for a Cast receiver to show, written as WebVTT. Its cue
+ *  times count on the stream the receiver gets: a direct route keeps the
+ *  item's own, and a converted stream starts at 0 at the load's `startAt`,
+ *  so its cues come that much earlier, without those that end before 0. */
 export interface CastSubtitle {
 	vtt: string;
 	name: string;

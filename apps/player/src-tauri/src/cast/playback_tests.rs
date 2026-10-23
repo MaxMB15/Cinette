@@ -2297,6 +2297,7 @@ async fn a_subtitle_over_the_limit_is_turned_away() {
     let movie = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
     add_channel(&app, &movie);
     let limit = super::playback::SUBTITLE_LIMIT;
+    assert_eq!(limit, 2_097_152);
     let over = "a".repeat(limit + 1);
     assert_eq!(
         load_with(&app, "cast:tv", &movie, direct("mp4"), None, english(&over)),
