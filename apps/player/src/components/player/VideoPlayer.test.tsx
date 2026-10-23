@@ -5170,6 +5170,50 @@ describe("another Cinette device", () => {
 		expect(tauri.remoteCatalog).not.toHaveBeenCalled();
 	});
 
+	it("names the device as it's called now, after a rename there", async () => {
+		renderPlayer(null);
+		await flush();
+		const { link, send } = linkTo();
+		send.mockRejectedValue("unreachable");
+		act(() => fakeRemote.set({ ...link, name: "Study Mac" }));
+		await press(" ");
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Study Mac.");
+	});
+
+	it("keeps its note when a cast starts later", async () => {
+		await openItem(lanternKeeper());
+		const { link, send } = linkTo();
+		send.mockRejectedValue("unreachable");
+		act(() => fakeRemote.set(link));
+		await press(" ");
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
+		act(() => {
+			fakeRemote.set(null);
+			fakeCast.set({
+				receivers: [
+					{ id: "cast:tv", name: "Hotel TV", model: "TV", status: null, available: true },
+				],
+				statuses: new Map([["cast:tv", { via: "direct" as const }]]),
+			});
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Cast" }));
+		await flush();
+		fireEvent.click(screen.getByRole("button", { name: /Hotel TV/ }));
+		await flush();
+		expect(fakeCast.get().send).toHaveBeenCalled();
+		// It's not about a cast, so a cast that went leaves it.
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
+	});
+
+	it("shows no empty top bar over the view, with no name or Back to show", async () => {
+		const view = renderPlayer(null);
+		await flush();
+		act(() => fakeRemote.set(linkTo().link));
+		await flush();
+		expect(panel()).not.toBeNull();
+		expect(view.container.querySelector(".from-black\\/60")).toBeNull();
+	});
+
 	it("shows while the link reconnects, and not before it connects", async () => {
 		renderPlayer(null);
 		await flush();

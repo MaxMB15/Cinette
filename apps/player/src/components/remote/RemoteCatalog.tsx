@@ -105,6 +105,7 @@ export const RemoteCatalog = ({
 		() => () => {
 			pickRef.current = null;
 		},
+		// Stryker disable next-line ArrayDeclaration: A list that never changes runs the cleanup only on unmount, whatever it holds.
 		[]
 	);
 	const connected = link.phase.phase === "connected";
