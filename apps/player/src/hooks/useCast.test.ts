@@ -7,6 +7,7 @@ import type * as Bridge from "@/lib/tauri";
 import type { StreamFormats } from "@/lib/route-profiles";
 import type { StreamFormat } from "@/lib/route";
 import { makeMovie } from "@/test/detail-fixtures";
+import { fakeDestination } from "@/test/destination-fixtures";
 import { writeStreamThrough } from "@/lib/player-prefs";
 import { RELEASE_RETRY_MS, type NowPlaying } from "@/lib/now-playing";
 
@@ -19,6 +20,8 @@ const events = vi.hoisted(() => {
 	const handlers = new Map<string, Set<(e: { payload: unknown }) => void>>();
 	return {
 		handlers,
+		/** Events whose next listen fails. */
+		failing: new Set<string>(),
 		emit: (name: string, payload: unknown) => {
 			for (const h of [...(handlers.get(name) ?? [])]) h({ payload });
 		},
@@ -28,6 +31,7 @@ const events = vi.hoisted(() => {
 
 vi.mock("@tauri-apps/api/event", () => ({
 	listen: async (name: string, handler: (e: { payload: unknown }) => void) => {
+		if (events.failing.delete(name)) throw new Error("no listener");
 		const set = events.handlers.get(name) ?? new Set();
 		set.add(handler);
 		events.handlers.set(name, set);
@@ -108,6 +112,31 @@ const render = async (enabled = true) => {
 };
 
 describe("useCast", () => {
+	it("listens for the receivers' updates again after a listen that failed", async () => {
+		events.failing.add("cast://update");
+		const first = await render();
+		expect(events.count("cast://update")).toBe(0);
+		first.unmount();
+		await render();
+		expect(events.count("cast://update")).toBe(1);
+	});
+
+	it("leaves AirPlay alone, and has no cast of its own then", async () => {
+		const { result } = await render();
+		const airplay = fakeDestination("airplay", "Living Room TV");
+		await act(async () => {
+			await nowPlaying.send(airplay, film, {
+				decision: { ok: true, route: { via: "direct", format: 0 } },
+				stopLocal: async () => {},
+			});
+		});
+		expect(result.current.destination).toBeNull();
+		expect(result.current.current()).toBeNull();
+		await act(() => result.current.stop());
+		expect(airplay.stop).not.toHaveBeenCalled();
+		expect(nowPlaying.getState().destination).toBe(airplay);
+	});
+
 	it("lists nothing and asks for nothing when it's off", async () => {
 		const { result } = await render(false);
 		expect(result.current.receivers).toEqual([]);
@@ -845,7 +874,7 @@ describe("useCast", () => {
 			}
 		});
 
-		it("shows the cast stopped when the user says no after it let go", async () => {
+		it("stops the cast when the user says no after it let go", async () => {
 			const { result } = await casting();
 			oneConnection();
 			tauri.getStreamFormats.mockImplementation(async () => {
@@ -860,8 +889,9 @@ describe("useCast", () => {
 				});
 			});
 			expect(why).toBeNull();
-			expect(result.current.state).toMatchObject({ status: "idle" });
-			expect(result.current.destination?.id).toBe("cast:tv");
+			// It let go of its stream and gets nothing new, so it stops.
+			expect(result.current.destination).toBeNull();
+			expect(tauri.castStop).toHaveBeenCalledWith("cast:tv");
 		});
 
 		it("doesn't let go of anything for a first cast that can't be routed", async () => {
@@ -871,7 +901,7 @@ describe("useCast", () => {
 			await act(async () => {
 				why = await result.current.send("cast:tv", film, { stopLocal });
 			});
-			expect(why).toBe("Couldn't reach the stream");
+			expect(why).toBe("The provider refused the stream. The login may have expired.");
 			expect(tauri.castRelease).not.toHaveBeenCalled();
 		});
 	});

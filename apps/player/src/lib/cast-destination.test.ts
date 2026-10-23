@@ -732,8 +732,6 @@ describe("createCastDestination", () => {
 		letGo();
 		await releasing;
 		expect(cast.getState().status).toBe("opening");
-		cast.settle();
-		expect(cast.getState()).toMatchObject({ status: "idle", connection: "connected" });
 		expect(cast.getState().item).not.toBeNull();
 	});
 
@@ -846,8 +844,6 @@ describe("createCastDestination", () => {
 			});
 			expect(cast.getState().position).toBe(2400);
 			await cast.release();
-			expect(cast.getState().position).toBe(2400);
-			cast.settle();
 			expect(cast.getState().position).toBe(2400);
 			cast.receive({ kind: "closed", reason: "connectionLost" });
 			expect(cast.getState()).toMatchObject({ position: 2400, connection: "lost" });

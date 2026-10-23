@@ -194,6 +194,8 @@ export interface PlaybackDestination {
 	release?(): Promise<void>;
 	/** Lets go of what it holds once it's done with, where it holds any. */
 	dispose?(): void;
+	/** Whether this device converts what plays there, where it can. */
+	converted?(): boolean;
 
 	/** The latest state. The same object until the state changes, so it
 	 *  works with `useSyncExternalStore`. */

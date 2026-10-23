@@ -17,17 +17,12 @@ import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } fr
 import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
 import { useLocalPlayback } from "@/hooks/useLocalPlayback";
-import { useAirPlay, type SendResult } from "@/hooks/useAirPlay";
+import { useAirPlay } from "@/hooks/useAirPlay";
 import { useCast } from "@/hooks/useCast";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
 import { useRemoteEpisodes } from "@/hooks/useRemoteEpisodes";
-import {
-	airplayConvertWarning,
-	airplayBlockedMessage,
-	airplayFailureMessage,
-	airplaySeekMessage,
-	airplayKey,
-} from "@/lib/airplay";
+import { nowPlaying, sentMessage } from "@/lib/now-playing";
+import { airplayConvertWarning, airplaySeekMessage, airplayKey } from "@/lib/airplay";
 import { AirPlayButton } from "@/components/player/AirPlayButton";
 import { CastButton } from "@/components/player/CastButton";
 import { DestinationView } from "@/components/player/DestinationView";
@@ -495,22 +490,6 @@ export const PlayerView = () => {
 	);
 	// Stryker disable next-line ArrayDeclaration: The cleanup reads the ref when it runs, so any deps that never change run it only on unmount.
 	useEffect(() => () => castQuestion.current?.(false), []);
-	/** Says why sending to AirPlay didn't work, if it didn't. */
-	const airplaySaid = useCallback(
-		(result: SendResult) => {
-			if (result.sent || result.why === "cancelled") return;
-			if (result.why === "blocked") {
-				setNotice({ text: airplayBlockedMessage(result.decision), cast: false });
-				return;
-			}
-			console.warn("[VideoPlayer] AirPlay failed:", result.error);
-			const message = airplayFailureMessage(result.error);
-			const text = result.stopped ? `${message} Nothing is playing.` : message;
-			setNotice({ text, cast: false });
-		},
-		// Stryker disable next-line ArrayDeclaration: It only uses a state setter, so it's the same function with any deps.
-		[]
-	);
 
 	/**
 	 * Actually start playing `ch` (optionally from `startPos`), replacing
@@ -533,28 +512,24 @@ export const PlayerView = () => {
 				apply?.();
 			};
 			// The TV drops a live channel's start, and a live channel has no
-			// resume point to keep one in.
-			const casting = castRef.current.current();
-			if (casting) {
-				return castRef.current
-					.send(casting.id, ch, {
+			// resume point to keep one in. One that already converts doesn't
+			// ask again.
+			const tv = castRef.current.current() ?? airplayRef.current.current();
+			if (tv) {
+				return nowPlaying
+					.send(tv, ch, {
 						startAt: startPos,
-						confirm: casting.converted()
+						confirm: tv.converted?.()
 							? undefined
-							: (keep) => confirmCast(casting.name, keep),
+							: (keep) => confirmCast(tv.name, keep),
 						stopLocal: moveTo,
 					})
-					.then((why) => setNotice(afterCast(why)));
-			}
-			const airplaying = airplayRef.current.current();
-			if (airplaying) {
-				return airplayRef.current
-					.resend(ch, {
-						startAt: startPos,
-						confirm: (keep) => confirmCast(airplaying.name, keep),
-						stopLocal: moveTo,
-					})
-					.then(airplaySaid);
+					.then((sent) => {
+						const why = sentMessage(tv, sent);
+						// A cast's note goes once a cast goes; AirPlay's stays.
+						if (tv.kind === "cast") setNotice(afterCast(why));
+						else if (why) setNotice({ text: why, cast: false });
+					});
 			}
 			recordEnd();
 			playStartTimeRef.current = Date.now();
@@ -586,8 +561,8 @@ export const PlayerView = () => {
 			apply?.();
 			return loaded;
 		},
-		// Stryker disable next-line ArrayDeclaration: mpv's load is the one useMpv keeps with useCallback, recordEnd and rememberLoadedUrl only read refs, castRef and airplayRef are refs, and confirmCast and airplaySaid never change.
-		[mpv, rememberLoadedUrl, recordEnd, castRef, airplayRef, confirmCast, airplaySaid]
+		// Stryker disable next-line ArrayDeclaration: mpv's load is the one useMpv keeps with useCallback, recordEnd and rememberLoadedUrl only read refs, castRef and airplayRef are refs, and confirmCast never changes.
+		[mpv, rememberLoadedUrl, recordEnd, castRef, airplayRef, confirmCast]
 	);
 
 	/**
@@ -651,7 +626,8 @@ export const PlayerView = () => {
 	// here again from there, as if AirPlay never started.
 	const airplayFrom = useRef<number | undefined>(undefined);
 	const playHereAgain = useLatestRef(async () => {
-		await airplay.stop();
+		// AirPlay ended already, and nothing needs saying.
+		nowPlaying.dismiss();
 		// Stryker disable next-line ConditionalExpression: A send needs a channel, and nothing clears it while AirPlay plays.
 		if (!activeChannel) return;
 		await playback
@@ -667,7 +643,8 @@ export const PlayerView = () => {
 	useEffect(
 		() =>
 			setProgressSaver(async () => {
-				await flushProgress();
+				// A TV's position too, which goes on with the page closed.
+				await Promise.all([flushProgress(), nowPlaying.flush()]);
 				// Stryker disable next-line OptionalChaining: with no channel, the throw is caught by saveProgressNow, which gives the same null.
 				return activeChannelRef.current?.id ?? null;
 			}),
@@ -1550,7 +1527,8 @@ export const PlayerView = () => {
 	): Promise<string | null> => {
 		const startAt = sendFrom(channel);
 		airplayFrom.current = startAt;
-		airplaySaid(await airplay.send(channel, { anchor, startAt, confirm, stopLocal }));
+		const why = await airplay.send(channel, { anchor, startAt, confirm, stopLocal });
+		if (why) deviceNotice(why);
 		return null;
 	};
 	/** Casts `channel` to `receiverId`, from where it plays here for a movie

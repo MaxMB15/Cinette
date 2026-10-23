@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useLatestRef } from "@/hooks/useLatestRef";
+import { useDestinationState } from "@/hooks/useDestinationState";
 import { useNowPlaying } from "@/hooks/useNowPlaying";
 import { readStreamThrough } from "@/lib/player-prefs";
 import {
-	SUPERSEDED,
 	createCastDestination,
 	type CastBackend,
 	type CastDestination,
 } from "@/lib/cast-destination";
-import { castEndedMessage, castFailureMessage, castStatus, newerList } from "@/lib/cast";
+import { castEndedMessage, castStatus, newerList } from "@/lib/cast";
 import type { PlaybackState } from "@/lib/destination";
-import { blockerText, type DestinationStatus } from "@/lib/device-picker";
-import { nowPlaying } from "@/lib/now-playing";
+import type { DestinationStatus } from "@/lib/device-picker";
+import { nowPlaying, sentMessage } from "@/lib/now-playing";
 import type { RouteDecision } from "@/lib/route";
 import {
 	CAST_RECEIVERS_EVENT,
@@ -46,10 +46,6 @@ const backend: CastBackend = {
 	castRelease,
 };
 
-// Stryker disable next-line ArrowFunction: React skips an unsubscribe that isn't a function, and this one does nothing.
-const noState = () => () => {};
-// Stryker disable next-line ArrowFunction: The state is only read while there's a destination, which has its own snapshot.
-const getNull = () => null;
 const NO_RECEIVERS: CastReceiver[] = [];
 
 /** Each receiver's destination. They outlive the player page, as a cast
@@ -197,6 +193,7 @@ export const useCast = (enabled: boolean): Cast => {
 					setStatuses((old) => new Map(old).set(receiver.id, castStatus(decision)));
 				});
 		},
+		// Stryker disable next-line ArrayDeclaration: It only uses module functions, refs and a state setter, so it's the same function with any deps.
 		[]
 	);
 
@@ -239,10 +236,7 @@ export const useCast = (enabled: boolean): Cast => {
 		[]
 	);
 
-	const state = useSyncExternalStore(
-		destination?.subscribe ?? noState,
-		destination?.getState ?? getNull
-	);
+	const state = useDestinationState(destination);
 
 	const send: Cast["send"] = useCallback(
 		async (receiverId, channel, opts) => {
@@ -252,30 +246,25 @@ export const useCast = (enabled: boolean): Cast => {
 			const sent = await nowPlaying.send(target, channel, {
 				...opts,
 				decision: decisions.current.get(routeKey(receiverId, channel)),
-				lost: () => castEndedMessage(target.name, target.closedReason()),
+				// A cast that's lost goes back to this device, and says why.
+				ends: (s) =>
+					s.connection === "lost"
+						? castEndedMessage(target.name, target.closedReason())
+						: null,
 			});
-			if (sent.ok || sent.why === "overtaken") return null;
-			// A cast that let go of its stream, and gets nothing new, has
-			// stopped.
-			if (sent.why !== "failed" && sent.released) target.settle();
-			if (sent.why === "declined") return null;
-			if (sent.why === "blocked")
-				return blockerText(sent.decision.reason, sent.decision.detail);
-			if (sent.why === "unrouted") {
-				if (!sent.released) return blockerText("unreachable");
-				return `${castFailureMessage(receiver.name, sent.error)} Nothing is playing.`;
-			}
-			// A switch keeps the cast, whose view says why and offers Play here.
-			if (String(sent.error) === SUPERSEDED) return null;
-			return `${castFailureMessage(receiver.name, sent.error)} Nothing is playing.`;
+			return sentMessage(target, sent);
 		},
 		// Stryker disable next-line ArrayDeclaration: receiversRef is a ref, so the function is the same with any deps.
 		[receiversRef]
 	);
 
-	const stop = useCallback(async () => {
-		if (castPlaying()) await nowPlaying.stop();
-	}, []);
+	const stop = useCallback(
+		async () => {
+			if (castPlaying()) await nowPlaying.stop();
+		},
+		// Stryker disable next-line ArrayDeclaration: It only uses module functions, so it's the same function with any deps.
+		[]
+	);
 
 	return {
 		receivers,

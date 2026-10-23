@@ -60,11 +60,13 @@ export interface PlaybackProgress {
 	pendingStart: number | null;
 }
 
+// Stryker disable next-line ObjectLiteral: With no key, saveProgress saves nothing and a player compares nothing, whatever the rest holds.
 export const EMPTY_PROGRESS: PlaybackProgress = {
 	key: null,
 	url: null,
 	position: 0,
 	duration: 0,
+	// Stryker disable next-line BooleanLiteral: With no key, saveProgress saves nothing, changed or not.
 	dirty: false,
 	lastSaved: 0,
 	pendingStart: null,

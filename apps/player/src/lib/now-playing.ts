@@ -8,8 +8,15 @@
  * the store keeps the item's resume point while it plays.
  */
 
-import { airplayProgress } from "./airplay";
+import {
+	SUPERSEDED,
+	airplayBlockedMessage,
+	airplayFailureMessage,
+	airplayProgress,
+} from "./airplay";
+import { castFailureMessage } from "./cast";
 import type { PlaybackDestination, PlaybackState } from "./destination";
+import { blockerText } from "./device-picker";
 import {
 	EMPTY_PROGRESS,
 	PROGRESS_SAVE_INTERVAL,
@@ -39,9 +46,9 @@ export interface SendOptions {
 	/** Stops this device's player, since many accounts allow one connection
 	 *  at a time. */
 	stopLocal: () => Promise<void>;
-	/** Says why the TV ended, for one that ends when its connection is lost.
-	 *  Without it, a lost TV stays until it's stopped. */
-	lost?: () => string;
+	/** Why the TV is over after `state`, which ends it, or `null` while it
+	 *  isn't. A switch to another item on the same TV keeps the last one's. */
+	ends?: (state: PlaybackState) => string | null;
 }
 
 /** What a send came to. Where nothing was sent, `released` says the TV that
@@ -71,6 +78,25 @@ export type Sent =
  */
 export const RELEASE_RETRY_MS = [0, 1000, 2000];
 
+/** What the player says about a send to `target` that didn't go, or `null`
+ *  for one that went, that something took over, or that the user called
+ *  off. */
+export const sentMessage = (target: PlaybackDestination, sent: Sent): string | null => {
+	if (sent.ok || sent.why === "overtaken" || sent.why === "declined") return null;
+	const airplay = target.kind === "airplay";
+	if (sent.why === "blocked")
+		return airplay
+			? airplayBlockedMessage(sent.decision)
+			: blockerText(sent.decision.reason, sent.decision.detail);
+	const why = airplay
+		? airplayFailureMessage(sent.error)
+		: castFailureMessage(target.name, sent.error);
+	// A route that failed leaves the TV playing, unless it let go of its
+	// stream to look again. A load that failed played nothing there.
+	const stopped = sent.why === "failed" || sent.released;
+	return stopped ? `${why} Nothing is playing.` : why;
+};
+
 export interface NowPlaying {
 	getState(): NowPlayingState;
 	subscribe(listener: () => void): () => void;
@@ -85,6 +111,8 @@ export interface NowPlaying {
 	send(target: PlaybackDestination, channel: Channel, opts: SendOptions): Promise<Sent>;
 	/** Stops the TV and forgets it, saving where it got to. */
 	stop(): Promise<void>;
+	/** Saves where the TV got to now. */
+	flush(): Promise<void> | undefined;
 	/** Forgets why the last TV ended. */
 	dismiss(): void;
 }
@@ -99,7 +127,7 @@ export const createNowPlaying = ({
 	/** The newest send's token. A newer send or a stop puts in another. */
 	let token = {};
 	let progress: PlaybackProgress = EMPTY_PROGRESS;
-	let lost: (() => string) | undefined;
+	let ends: SendOptions["ends"];
 	let unfollow = () => {};
 
 	const publish = (next: Partial<NowPlayingState>) => {
@@ -107,18 +135,18 @@ export const createNowPlaying = ({
 		for (const listener of listeners) listener();
 	};
 
-	/** Keeps the resume point of what plays, once it got to where it was
-	 *  started from, and ends a TV that ends when it's lost. */
-	const follow = (destination: PlaybackDestination) => (s: PlaybackState) => {
-		if (state.destination !== destination) return;
-		if (s.connection === "lost" && lost) {
-			const why = lost();
+	/** Ends a TV that's over, and keeps the resume point of `channel`, once
+	 *  it got to where it was started from. */
+	const follow = (channel: Channel) => (s: PlaybackState) => {
+		const why = ends?.(s) ?? null;
+		if (why !== null) {
 			void stop().catch(() => {});
 			publish({ ended: why });
 			return;
 		}
 		const p = progress;
-		if (!p.key || s.item?.ref !== state.channel?.id) return;
+		if (!p.key || s.item?.ref !== channel.id) return;
+		// Stryker disable next-line ConditionalExpression: With no start to wait for, null - 5 is below any position, so the check passes either way.
 		if (p.pendingStart !== null) {
 			if (s.position < p.pendingStart - 5) return;
 			p.pendingStart = null;
@@ -133,9 +161,9 @@ export const createNowPlaying = ({
 		void saveProgress(progress);
 		unfollow();
 		progress = progressFor(channel, opts.startAt);
-		lost = opts.lost;
+		ends = opts.ends ?? (state.destination === destination ? ends : undefined);
 		publish({ destination, channel, ended: null });
-		unfollow = destination.subscribe(follow(destination));
+		unfollow = destination.subscribe(follow(channel));
 	};
 
 	const stop = async () => {
@@ -146,12 +174,20 @@ export const createNowPlaying = ({
 		unfollow();
 		unfollow = () => {};
 		progress = EMPTY_PROGRESS;
+		ends = undefined;
 		publish({ destination: null, channel: null });
 		try {
 			await left.stop();
 		} finally {
 			left.dispose?.();
 		}
+	};
+
+	/** What a send that sent nothing came to. A TV that let go of its
+	 *  stream for it has stopped, so it goes. */
+	const unsent = <T extends Sent & { released: boolean }>(sent: T): T => {
+		if (sent.released) void stop().catch(() => {});
+		return sent;
 	};
 
 	const send: NowPlaying["send"] = async (target, channel, opts) => {
@@ -182,24 +218,25 @@ export const createNowPlaying = ({
 				}
 			}
 			if ("error" in routed)
-				return { ok: false, why: "unrouted", error: routed.error, released };
+				return unsent({ ok: false, why: "unrouted", error: routed.error, released });
 			decision = routed.decision;
 		}
 		if (!newest()) return overtaken;
-		if (!decision.ok) return { ok: false, why: "blocked", decision, released };
+		if (!decision.ok) return unsent({ ok: false, why: "blocked", decision, released });
 		const { route } = decision;
 		if (route.via === "converted" && opts.confirm && !(await opts.confirm(route.keep)))
-			return { ok: false, why: "declined", released };
+			return unsent({ ok: false, why: "declined", released });
 		// Nothing is stopped for a send something overtook while it asked.
 		if (!newest()) return overtaken;
 		await opts.stopLocal();
 		if (!newest()) return overtaken;
 		const old = state.destination;
 		const switching = old === target;
-		if (old && !switching) {
-			void old.stop().catch(() => {});
-			old.dispose?.();
-		}
+		if (old && !switching)
+			void old
+				.stop()
+				.catch(() => {})
+				.finally(() => old.dispose?.());
 		activate(target, channel, opts);
 		// Unless the TV switches items, this device's player or another TV
 		// just let go of the stream, and the TV asks again if the provider
@@ -207,7 +244,8 @@ export const createNowPlaying = ({
 		return target.load(item, { startAt: opts.startAt, route, freed: !switching }).then(
 			() => ({ ok: true }) as const,
 			(error: unknown): Sent => {
-				if (!newest()) return overtaken;
+				// The backend says a newer load or a stop came, which says for itself.
+				if (!newest() || error === SUPERSEDED) return overtaken;
 				if (!switching) void stop().catch(() => {});
 				return { ok: false, why: "failed", error, switching };
 			}
@@ -224,6 +262,7 @@ export const createNowPlaying = ({
 		},
 		send,
 		stop,
+		flush: () => saveProgress(progress),
 		dismiss: () => publish({ ended: null }),
 	};
 };
