@@ -57,6 +57,16 @@ describe("remotePlaybackState", () => {
 		});
 	});
 
+	it("names an episode's series where the other device does", () => {
+		const item = { id: "e2", name: "Two", contentType: "series", group: "", seriesId: "s9" };
+		expect(remotePlaybackState(snapshot({ item }), "connected", 0).item).toStrictEqual({
+			title: "Two",
+			contentType: "series",
+			ref: "e2",
+			seriesId: "s9",
+		});
+	});
+
 	it("reads each known content type and calls anything else live", () => {
 		for (const t of ["live", "movie", "series", "recording"]) {
 			const item = { id: "x", name: "X", contentType: t, group: "" };
@@ -295,6 +305,10 @@ describe("createCinetteDestination", () => {
 		await d.pause();
 		await d.load({ kind: "remote", itemId: "live-1", title: "One" });
 		expect(d.getState().position, "from the start").toBe(0);
+		expect(d.getState().item).not.toHaveProperty("seriesId");
+		// An episode keeps its series, so what's around it stays known.
+		await d.load({ kind: "remote", itemId: "e2", title: "Two", seriesId: "s9" });
+		expect(d.getState().item).toMatchObject({ ref: "e2", seriesId: "s9" });
 		d.receive(versioned(snapshot(), 2), 10);
 		expect(d.getState().item?.ref).toBe("live-7");
 	});

@@ -2,7 +2,13 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect } from "vitest";
-import { dedupeEpisodes, findEpisode, sortEpisodes } from "./episodes";
+import {
+	dedupeEpisodes,
+	episodeNeighbors,
+	findEpisode,
+	isSameEpisode,
+	sortEpisodes,
+} from "./episodes";
 import type { Channel } from "./types";
 
 const ep = (id: string, season: number, episode: number, url = `http://a/${id}.mkv`): Channel => ({
@@ -103,5 +109,49 @@ describe("findEpisode", () => {
 		});
 		const extras = [extra("x1", "Show Making Of"), extra("x2", "Show Deleted Scenes")];
 		expect(findEpisode(extras, "x2", "Show Deleted Scenes")).toEqual(extras[1]);
+	});
+});
+
+describe("isSameEpisode", () => {
+	it("is the same season and episode, which both have", () => {
+		expect(isSameEpisode(ep("a", 1, 2), ep("b", 1, 2))).toBe(true);
+		expect(isSameEpisode(ep("a", 1, 2), ep("b", 1, 3))).toBe(false);
+		expect(isSameEpisode(ep("a", 1, 2), ep("b", 2, 2))).toBe(false);
+		const unnumbered = { id: "x" };
+		expect(isSameEpisode(unnumbered, unnumbered)).toBe(false);
+		expect(isSameEpisode({ id: "x", season: 1 }, { id: "y", season: 1 })).toBe(false);
+		expect(isSameEpisode({ id: "x", episode: 1 }, { id: "y", episode: 1 })).toBe(false);
+	});
+});
+
+describe("episodeNeighbors", () => {
+	const list = [ep("a", 1, 1), ep("b", 1, 2), ep("b2", 1, 2), ep("c", 1, 3)];
+
+	it("gives the episodes before and after, past other copies of this one", () => {
+		expect(episodeNeighbors(list, 1)).toEqual({ prev: list[0], next: list[3] });
+		expect(episodeNeighbors(list, 2)).toEqual({ prev: list[0], next: list[3] });
+	});
+
+	it("has nothing past either end, or for an episode not in the list", () => {
+		expect(episodeNeighbors(list, 0)).toEqual({ prev: null, next: list[1] });
+		expect(episodeNeighbors(list, 3)).toEqual({ prev: list[2], next: null });
+		expect(episodeNeighbors(list, -1)).toEqual({ prev: null, next: null });
+	});
+
+	it("tells unnumbered episodes apart by id, past another entry with the same one", () => {
+		const items = [{ id: "x" }, { id: "y" }, { id: "x" }];
+		expect(episodeNeighbors(items, 1)).toEqual({ prev: items[0], next: items[2] });
+		const twice = [{ id: "x" }, { id: "x" }, { id: "y" }];
+		expect(episodeNeighbors(twice, 0)).toEqual({ prev: null, next: twice[2] });
+	});
+
+	it("works on another device's catalog items", () => {
+		const items = sortEpisodes([
+			{ id: "e3", name: "Three", season: 1, episode: 3 },
+			{ id: "e1", name: "One", season: 1, episode: 1 },
+			{ id: "e2", name: "Two", season: 1, episode: 2 },
+		]);
+		expect(episodeNeighbors(items, 1)).toEqual({ prev: items[0], next: items[2] });
+		expect(items.map((i) => i.id)).toEqual(["e1", "e2", "e3"]);
 	});
 });

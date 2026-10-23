@@ -766,6 +766,11 @@ describe("RemoteBar", () => {
 		// It takes the bar's row, the same height, so nothing moves until
 		// it's dismissed.
 		expect(screen.getByRole("status")).toHaveClass("flex", "min-h-12", "border-b", "bg-card");
+		// Another Cinette device's icon, not a TV's.
+		expect(
+			screen.getByRole("status").querySelector(".lucide-monitor-smartphone")
+		).not.toBeNull();
+		expect(screen.getByRole("status").querySelector(".lucide-tv")).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("status")).toBeNull();
 		rerender(<RemoteBar />);

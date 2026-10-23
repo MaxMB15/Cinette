@@ -435,7 +435,13 @@ export const RemoteBar = () => {
 	return (
 		<>
 			{failed}
-			{text && <EndedRow text={text} onDismiss={() => setDismissed(ended)} />}
+			{text && (
+				<EndedRow
+					icon={MonitorSmartphone}
+					text={text}
+					onDismiss={() => setDismissed(ended)}
+				/>
+			)}
 		</>
 	);
 };
@@ -542,9 +548,18 @@ const DestinationBar = ({
 
 /** Why something that played elsewhere ended, in the bar's row, so the page
  *  doesn't move until it's dismissed. */
-const EndedRow = ({ text, onDismiss }: { text: string; onDismiss: () => void }) => (
+const EndedRow = ({
+	icon: Icon,
+	text,
+	onDismiss,
+}: {
+	/** What kind of device it played on. */
+	icon: LucideIcon;
+	text: string;
+	onDismiss: () => void;
+}) => (
 	<div role="status" className={cn(BAR, "text-sm")}>
-		<Tv className="h-4 w-4 text-primary shrink-0" aria-hidden />
+		<Icon className="h-4 w-4 text-primary shrink-0" aria-hidden />
 		<span className="min-w-0 flex-1 truncate" title={text}>
 			{text}
 		</span>
@@ -590,7 +605,7 @@ export const TvBar = () => {
 				onStop={nowPlaying.stop}
 			/>
 		);
-	return ended ? <EndedRow text={ended} onDismiss={nowPlaying.dismiss} /> : null;
+	return ended ? <EndedRow icon={Tv} text={ended} onDismiss={nowPlaying.dismiss} /> : null;
 };
 
 /**

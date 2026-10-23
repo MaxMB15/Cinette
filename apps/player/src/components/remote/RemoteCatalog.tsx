@@ -6,7 +6,7 @@ import { ChevronLeft, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useLatestRef } from "@/hooks/useLatestRef";
-import type { CatalogItem } from "@/lib/cinette-destination";
+import { CATALOG_PAGE, remoteItem, type CatalogItem } from "@/lib/cinette-destination";
 import type { Link } from "@/lib/remote-control";
 import { remoteCatalog, type CatalogQuery } from "@/lib/tauri";
 
@@ -18,8 +18,6 @@ const TYPES: { value: ContentType; label: string }[] = [
 	{ value: "series", label: "Series" },
 ];
 
-/** Items asked for in one page. */
-export const PAGE = 100;
 /** How long typing has to pause before a search goes out. */
 export const SEARCH_DELAY_MS = 300;
 
@@ -50,14 +48,20 @@ const queryFor = (
 	search: string,
 	cursor?: string
 ): CatalogQuery => {
-	if (search) return { kind: "search", query: search, contentType: type, limit: PAGE };
+	if (search) return { kind: "search", query: search, contentType: type, limit: CATALOG_PAGE };
 	switch (place.kind) {
 		case "groups":
-			return { kind: "groups", contentType: type, cursor, limit: PAGE };
+			return { kind: "groups", contentType: type, cursor, limit: CATALOG_PAGE };
 		case "group":
-			return { kind: "items", contentType: type, group: place.group, cursor, limit: PAGE };
+			return {
+				kind: "items",
+				contentType: type,
+				group: place.group,
+				cursor,
+				limit: CATALOG_PAGE,
+			};
 		case "episodes":
-			return { kind: "episodes", seriesId: place.series.id, cursor, limit: PAGE };
+			return { kind: "episodes", seriesId: place.series.id, cursor, limit: CATALOG_PAGE };
 	}
 };
 
@@ -167,7 +171,7 @@ export const RemoteCatalog = ({
 		setMessage(null);
 		const pick = {};
 		pickRef.current = pick;
-		link.destination.load({ kind: "remote", itemId: item.id, title: item.name }).then(
+		link.destination.load(remoteItem(item)).then(
 			() => {
 				if (pickRef.current === pick) onPlayed();
 			},

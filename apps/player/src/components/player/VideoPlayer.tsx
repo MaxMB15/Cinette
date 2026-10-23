@@ -20,6 +20,7 @@ import { useLocalPlayback } from "@/hooks/useLocalPlayback";
 import { useAirPlay } from "@/hooks/useAirPlay";
 import { useCast } from "@/hooks/useCast";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
+import { useRemoteEpisodes } from "@/hooks/useRemoteEpisodes";
 import { nowPlaying, sentMessage } from "@/lib/now-playing";
 import { airplayConvertWarning, airplaySeekMessage, airplayKey } from "@/lib/airplay";
 import { AirPlayButton } from "@/components/player/AirPlayButton";
@@ -29,6 +30,7 @@ import { castControlMessage, castFailureMessage, showsCastButton } from "@/lib/c
 import { convertWarning } from "@/lib/device-picker";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { remoteItem, type CatalogItem } from "@/lib/cinette-destination";
 import type { PlaybackDestination } from "@/lib/destination";
 import { usePublishRemoteState } from "@/hooks/useRemoteTarget";
 import { setProgressSaver } from "@/lib/player-progress";
@@ -75,7 +77,7 @@ import {
 } from "@/lib/playback";
 import { channelSources, withSource } from "@/lib/sources";
 import { downloadIconState } from "@/lib/download-status";
-import { sortEpisodes } from "@/lib/episodes";
+import { episodeNeighbors, isSameEpisode, sortEpisodes } from "@/lib/episodes";
 import { seriesTitleOf } from "@/lib/channels";
 import {
 	resolvePlayerHotkey,
@@ -195,10 +197,6 @@ const handOffToRust = (p: PlaybackProgress) => {
 	const { key, url, pendingStart } = p;
 	handOffProgress(key && url ? { key, url, pendingStart } : null).catch(() => {});
 };
-
-/** Same season + episode (duplicate entries of one episode from different sources). */
-const isSameEpisode = (a: Channel, b: Channel): boolean =>
-	a.season != null && a.episode != null && a.season === b.season && a.episode === b.episode;
 
 interface PendingResume {
 	channel: Channel;
@@ -615,6 +613,8 @@ export const PlayerView = () => {
 		if (failure) setNotice(failure);
 	};
 	const tvRef = useLatestRef(tv);
+	// The other device's episodes, where a link plays one.
+	const remoteEpisodes = useRemoteEpisodes(remoteLink);
 	const reportFailureRef = useLatestRef(reportFailure);
 	/** Stops what plays here before something else takes over, keeping
 	 *  where it got to. */
@@ -1041,14 +1041,10 @@ export const PlayerView = () => {
 	}, [activeChannel, sortedEpisodes]);
 
 	// Skip over duplicate entries of the current episode (same S/E from another source).
-	const { prevEpisode, nextEpisode } = useMemo(() => {
-		if (currentEpIdx < 0 || !activeChannel) return { prevEpisode: null, nextEpisode: null };
-		const current = sortedEpisodes[currentEpIdx];
-		const differs = (ep: Channel) => !isSameEpisode(ep, current) && ep.id !== current.id;
-		const prev = sortedEpisodes.slice(0, currentEpIdx).reverse().find(differs) ?? null;
-		const next = sortedEpisodes.slice(currentEpIdx + 1).find(differs) ?? null;
-		return { prevEpisode: prev, nextEpisode: next };
-	}, [activeChannel, sortedEpisodes, currentEpIdx]);
+	const { prev: prevEpisode, next: nextEpisode } = useMemo(
+		() => episodeNeighbors(sortedEpisodes, currentEpIdx),
+		[sortedEpisodes, currentEpIdx]
+	);
 
 	// Every stream URL for the current item: its own sources plus, for series,
 	// duplicate entries of the same episode elsewhere in the episode list.
@@ -1281,6 +1277,28 @@ export const PlayerView = () => {
 		if (!fullscreenButton && isFullscreen) setFullscreen(false);
 	}, [fullscreenButton, isFullscreen, setFullscreen]);
 
+	/** Says why something the other Cinette device was asked to do failed. */
+	// Stryker disable next-line BooleanLiteral: Another Cinette device's failure reads the same for a seek.
+	const remoteFailed = (error: unknown) => reportFailure(error, false);
+	/** Plays `item` of the other device's catalog there. */
+	const playOn = (device: PlaybackDestination, item: CatalogItem) =>
+		void device.load(remoteItem(item)).catch(remoteFailed);
+	// The episodes around the one that plays, which the controls, a TV's view
+	// and the keys go to: another Cinette device's, from its catalog, or this
+	// player's.
+	const { prev: remotePrev, next: remoteNext } = remoteEpisodes;
+	const episodes =
+		tv?.kind === "cinette"
+			? {
+					onPrevEpisode: remotePrev ? () => playOn(tv, remotePrev) : undefined,
+					onNextEpisode: remoteNext ? () => playOn(tv, remoteNext) : undefined,
+				}
+			: {
+					onPrevEpisode: prevEpisode ? () => playEpisode(prevEpisode) : undefined,
+					onNextEpisode: nextEpisode ? () => playEpisode(nextEpisode) : undefined,
+				};
+	const episodesRef = useLatestRef(episodes);
+
 	// --- Keyboard ---
 	const flashOsd = useCallback((text: string) => {
 		if (osdTimerRef.current) clearTimeout(osdTimerRef.current);
@@ -1335,12 +1353,11 @@ export const PlayerView = () => {
 			e.preventDefault();
 			if (e.repeat && !repeatsWhenHeld(action)) return;
 
-			// While the TV plays, the keys drive it, and nothing starts here. A
-			// Cast or AirPlay TV also takes the next or previous episode, which
-			// goes there.
+			// While the TV plays, the keys drive it, and nothing starts here. The
+			// next or previous episode goes where the controls send it, there too.
 			const tv = tvRef.current;
 			const episode = action.type === "nextEpisode" || action.type === "prevEpisode";
-			if (tv && !(episode && (tv.kind === "cast" || tv.kind === "airplay"))) {
+			if (tv && !episode) {
 				const key = airplayKey(action, tv.getState(), tv.capabilities, performance.now());
 				const failed = (seeking: boolean) => (error: unknown) =>
 					reportFailureRef.current(error, seeking);
@@ -1392,10 +1409,10 @@ export const PlayerView = () => {
 					break;
 				}
 				case "nextEpisode":
-					if (nextEpisode) playEpisode(nextEpisode);
+					episodesRef.current.onNextEpisode?.();
 					break;
 				case "prevEpisode":
-					if (prevEpisode) playEpisode(prevEpisode);
+					episodesRef.current.onPrevEpisode?.();
 					break;
 				case "toggleSubtitles":
 					if (canShowSubtitles) setShowSubtitlePicker((v) => !v);
@@ -1432,6 +1449,7 @@ export const PlayerView = () => {
 			mpv,
 			playback,
 			tvRef,
+			episodesRef,
 			reportFailureRef,
 			pendingResume,
 			castConfirm,
@@ -1444,9 +1462,6 @@ export const PlayerView = () => {
 			subtitleEditMode,
 			toggleFullscreen,
 			flashOsd,
-			nextEpisode,
-			prevEpisode,
-			playEpisode,
 			canShowSubtitles,
 			hasInfo,
 			flushProgress,
@@ -1575,11 +1590,6 @@ export const PlayerView = () => {
 			.catch(() => failed("Couldn't play it on this device."));
 	};
 	const shared = { touchLayout: touchDevice, skip, onFailed: reportFailure };
-	// An episode picked on a TV's view goes to that TV.
-	const episodes = {
-		onPrevEpisode: prevEpisode ? () => playEpisode(prevEpisode) : undefined,
-		onNextEpisode: nextEpisode ? () => playEpisode(nextEpisode) : undefined,
-	};
 	const destinationView = airplayTv ? (
 		<DestinationView
 			{...shared}
@@ -1633,13 +1643,10 @@ export const PlayerView = () => {
 			name={remoteLink.name}
 			label="Cinette device"
 			icon={MonitorSmartphone}
+			{...episodes}
 			// It stops there, and this page goes back to that device's catalog.
 			onStop={() =>
-				void remoteLink.destination.stop().then(
-					() => navigate("/"),
-					// Stryker disable next-line BooleanLiteral: Another Cinette device's failure reads the same for a seek.
-					(error: unknown) => reportFailure(error, false)
-				)
+				void remoteLink.destination.stop().then(() => navigate("/"), remoteFailed)
 			}
 		/>
 	) : null;
@@ -1852,8 +1859,7 @@ export const PlayerView = () => {
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}
 					onInfo={hasInfo ? () => setShowInfoDrawer(true) : undefined}
-					onPrevEpisode={prevEpisode ? () => playEpisode(prevEpisode) : undefined}
-					onNextEpisode={nextEpisode ? () => playEpisode(nextEpisode) : undefined}
+					{...episodes}
 					autoplay={autoplay}
 					onAutoplayChange={setAutoplay}
 					hasSubtitles={selectedSubtitleId !== null}

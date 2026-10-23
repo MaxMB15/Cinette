@@ -12,6 +12,7 @@ import type {
 	PlaybackCapabilities,
 	PlaybackDestination,
 	PlaybackError,
+	PlaybackItem,
 	PlaybackState,
 	PlaybackStatus,
 	Track,
@@ -19,6 +20,9 @@ import type {
 import { UnsupportedError } from "@/lib/destination";
 import type { RemoteCommand } from "@/lib/remote-target";
 import type { Channel } from "@/lib/types";
+
+/** Catalog items asked for in one page. */
+export const CATALOG_PAGE = 100;
 
 /** One item of the other device's catalog. */
 export interface CatalogItem {
@@ -35,6 +39,14 @@ export interface CatalogItem {
 	 *  targets leave it out. */
 	seriesId?: string;
 }
+
+/** `item`, to play on the device whose catalog it's from. */
+export const remoteItem = (item: CatalogItem): PlaybackItem => ({
+	kind: "remote",
+	itemId: item.id,
+	title: item.name,
+	seriesId: item.seriesId,
+});
 
 /** The other device's state, as its player reports it. */
 export interface RemoteSnapshot {
@@ -106,6 +118,7 @@ export const remotePlaybackState = (
 					title: snapshot.item.name,
 					contentType: contentTypeOf(snapshot.item.contentType),
 					ref: snapshot.item.id,
+					...(snapshot.item.seriesId ? { seriesId: snapshot.item.seriesId } : {}),
 				}
 			: null,
 		position: snapshot.position,
@@ -276,8 +289,15 @@ export const createCinetteDestination = (
 			snapshot = {
 				...snapshot,
 				status: "opening",
-				// Stryker disable next-line StringLiteral: an empty type reads as live too, and the group shows nowhere.
-				item: { id: item.itemId, name: item.title, contentType: "live", group: "" },
+				item: {
+					id: item.itemId,
+					name: item.title,
+					// Stryker disable next-line StringLiteral: an empty type reads as live too.
+					contentType: "live",
+					// Stryker disable next-line StringLiteral: the group shows nowhere.
+					group: "",
+					seriesId: item.seriesId,
+				},
 				position: startAt ?? 0,
 				duration: 0,
 				subtitles: [],
