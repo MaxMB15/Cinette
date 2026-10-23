@@ -164,7 +164,7 @@ export const airplayConverterSupport = (): Promise<ConverterSupport> =>
 	invoke("airplay_converter_support");
 
 /** Looks for AirPlay receivers while the player is open. It costs power. */
-export const airplaySetDetection = (enabled: boolean): Promise<void> =>
+export const airplaySetDetection = (enabled: boolean): Promise<boolean | null> =>
 	invoke("plugin:mpv|airplay_set_detection", { enabled });
 
 /** Opens the system's AirPlay picker over a rect in CSS pixels. */
