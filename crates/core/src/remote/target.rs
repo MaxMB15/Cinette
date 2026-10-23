@@ -44,7 +44,7 @@ use super::message::{
     PlaybackSnapshot, PlaybackStatus, RequestKind, VersionedState, PROTOCOL_VERSION,
 };
 use super::sessions::{Session, Sessions};
-use super::settings::{self, ControlMode, Decision, RemoteSettings};
+use super::settings::{ControlMode, Decision, RemoteSettings};
 use super::transfer::flow::{Asked, Progress, ProviderResult, ProviderSettings, Step, TargetFlow};
 use super::transfer::merge::Report;
 use super::transfer::refs::Salt;
@@ -251,7 +251,7 @@ pub struct Target {
 
 impl Target {
     pub fn new(key: DeviceKey, device_type: DeviceType, settings: RemoteSettings) -> Self {
-        Self {
+        let mut target = Self {
             key,
             device_type,
             settings,
@@ -266,8 +266,10 @@ impl Target {
             sessions: Sessions::new(),
             nonces: TokenBucket::new(NONCES_PER_SECOND, f64::from(NONCE_BURST)),
             evicted: Vec::new(),
-            features: vec![Feature::Control, Feature::Catalog, Feature::Rename],
-        }
+            features: Vec::new(),
+        };
+        target.offer(false, false);
+        target
     }
 
     /// Offers history transfers or receiving providers too, once the
@@ -639,11 +641,11 @@ impl Target {
                         self.cancel_asking(conn, &mut actions);
                     }
                     Message::Renamed { name } => {
-                        let name = settings::shown_name(&name, auth.peer.device_type);
-                        let changed = auth.peer.name != name;
-                        auth.peer.name.clone_from(&name);
+                        let renamed = auth.peer.rename(&name).then(|| auth.peer.name.clone());
                         self.set_stage(conn, Stage::InSession(auth));
-                        if changed && self.sessions.rename(conn, name) {
+                        if let Some(name) = renamed
+                            && self.sessions.rename(conn, name)
+                        {
                             actions.push(self.sessions_changed());
                         }
                     }
@@ -1384,12 +1386,14 @@ impl Target {
         }
     }
 
-    /// Tells every controller in a session whose hello offers
-    /// [`Feature::Rename`] that this device is called `name` now.
+    /// Tells every controller past the handshake whose hello offers
+    /// [`Feature::Rename`] that this device is called `name` now. One still
+    /// asking hears it too, since the user may rename while a dialog shows.
     fn send_rename(&mut self, name: String, actions: &mut Vec<Action>) {
         let message = Message::Renamed { name };
         for (&conn, c) in &mut self.conns {
-            if let Stage::InSession(auth) = &mut c.stage
+            if let Stage::Ready(auth) | Stage::Waiting(auth, _) | Stage::InSession(auth) =
+                &mut c.stage
                 && auth.peer.features.contains(&Feature::Rename)
             {
                 send(auth, conn, &message, actions);

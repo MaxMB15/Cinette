@@ -173,13 +173,13 @@ impl RemoteService {
             Some(false) => return Err("That device doesn't allow remote control.".into()),
             Some(true) => {}
         }
-        let (key, name) = {
-            let saved = lock(&self.state);
-            (saved.key.clone(), saved.settings.name(device_type()))
-        };
+        // Held until the new link is in its slot, as set_settings holds it
+        // while it renames the link there, so a rename can't fall between.
+        let saved = lock(&self.state);
+        let key = saved.key.clone();
         let hello = Hello {
             id: key.device_id(),
-            name,
+            name: saved.settings.name(device_type()),
             device_type: device_type(),
             versions: vec![PROTOCOL_VERSION],
             features: vec![
@@ -208,6 +208,7 @@ impl RemoteService {
         let mut slot = lock(&self.link);
         let old = slot.replace(link::start(config, self.link_host.clone()));
         drop(slot);
+        drop(saved);
         if let Some(old) = old {
             tauri::async_runtime::spawn(async move { old.leave().await });
         }

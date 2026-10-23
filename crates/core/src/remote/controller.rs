@@ -21,7 +21,6 @@ use super::identity::{DeviceId, DeviceKey};
 use super::message::{
     self, CloseReason, Command, DecodeError, ErrorCode, Feature, Hello, Message, VersionedState,
 };
-use super::settings;
 use super::target::HANDSHAKE_TIMEOUT;
 use super::transfer::flow::{
     Asked, ControllerEvent, ControllerFlow, ControllerOut, Direction, ProviderName,
@@ -208,7 +207,10 @@ impl Controller {
                 }
                 Err(failure) => return closed(out, failure.reason),
             },
-            Stage::Requesting { mut channel, peer } => {
+            Stage::Requesting {
+                mut channel,
+                mut peer,
+            } => {
                 let message = match read(&mut channel, frame, &mut out) {
                     Ok(Some(message)) => message,
                     Ok(None) => {
@@ -239,6 +241,10 @@ impl Controller {
                         };
                     }
                     Message::Closed { reason } => return closed(out, reason),
+                    Message::Renamed { name } => {
+                        take_rename(&mut peer, &name, &mut out);
+                        self.stage = Stage::Requesting { channel, peer };
+                    }
                     other => {
                         handle_common(other, &mut out);
                         self.stage = Stage::Requesting { channel, peer };
@@ -295,13 +301,7 @@ impl Controller {
                         self.lose_flow(&mut out);
                         return closed(out, reason);
                     }
-                    Some(Message::Renamed { name }) => {
-                        let name = settings::shown_name(&name, peer.device_type);
-                        if name != peer.name {
-                            peer.name.clone_from(&name);
-                            out.events.push(Event::Renamed(name));
-                        }
-                    }
+                    Some(Message::Renamed { name }) => take_rename(&mut peer, &name, &mut out),
                     // A grant for a request this device stopped making,
                     // such as one cancelled on its way: the target is told,
                     // so it doesn't keep the grant.
@@ -575,6 +575,13 @@ fn seal_flow(channel: &mut Channel, flow_out: ControllerOut, out: &mut Output) {
     }
     out.events
         .extend(flow_out.events.into_iter().map(Event::Transfer));
+}
+
+/// The target sent a new name: reports it when it changed.
+fn take_rename(peer: &mut Peer, name: &str, out: &mut Output) {
+    if peer.rename(name) {
+        out.events.push(Event::Renamed(peer.name.clone()));
+    }
 }
 
 fn closed(mut out: Output, reason: CloseReason) -> Output {

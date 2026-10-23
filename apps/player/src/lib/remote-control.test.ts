@@ -176,6 +176,7 @@ describe("createRemoteControl", () => {
 			link: 1,
 			state: { epoch: "e", version: 1, state: snapshot },
 		});
+		emit("remote://renamed", { deviceId: "tv1", link: 1, name: "Attic" });
 		expect(rc.getState().link).toBeNull();
 		await rc.connect(tv);
 		const id = rc.getState().link!.id;

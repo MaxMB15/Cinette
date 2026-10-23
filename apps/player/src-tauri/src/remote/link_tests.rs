@@ -284,6 +284,12 @@ impl Link {
         self.until(|l| l.phases().contains(&phase)).await;
     }
 
+    /// Waits until the link is connected a second time, after a resume.
+    async fn until_connected_again(&mut self) {
+        self.until(|l| l.phases().iter().filter(|p| **p == Phase::Connected).count() == 2)
+            .await;
+    }
+
     async fn closed(&mut self) -> Ended {
         self.until(|l| matches!(l.phases().last(), Some(Phase::Closed { .. })))
             .await;
@@ -506,14 +512,7 @@ async fn a_dropped_connection_resumes_without_asking_again() {
 
     proxy.cut(false);
     link.until_phase(Phase::Reconnecting { attempt: 1 }).await;
-    link.until(|l| {
-        l.phases()
-            .iter()
-            .filter(|p| **p == Phase::Connected)
-            .count()
-            == 2
-    })
-    .await;
+    link.until_connected_again().await;
     assert!(t.prompts.try_recv().is_err(), "no second dialog");
     let codes = link
         .phases()
@@ -593,14 +592,7 @@ async fn commands_while_reconnecting_are_not_sent() {
         Err(LinkError::NotConnected)
     );
     proxy.reopen();
-    link.until(|l| {
-        l.phases()
-            .iter()
-            .filter(|p| **p == Phase::Connected)
-            .count()
-            == 2
-    })
-    .await;
+    link.until_connected_again().await;
 }
 
 #[tokio::test]
@@ -843,14 +835,7 @@ async fn a_device_missing_from_discovery_for_a_while_is_tried_again() {
     proxy.cut(false);
     link.until_phase(Phase::Reconnecting { attempt: 1 }).await;
     *found.lock().unwrap() = addresses;
-    link.until(|l| {
-        l.phases()
-            .iter()
-            .filter(|p| **p == Phase::Connected)
-            .count()
-            == 2
-    })
-    .await;
+    link.until_connected_again().await;
     assert!(!link
         .phases()
         .iter()
@@ -1098,14 +1083,7 @@ async fn a_resume_that_reaches_another_device_tries_again() {
     );
     link.until_phase(Phase::Connected).await;
     proxy.cut(false);
-    link.until(|l| {
-        l.phases()
-            .iter()
-            .filter(|p| **p == Phase::Connected)
-            .count()
-            == 2
-    })
-    .await;
+    link.until_connected_again().await;
     assert!(tries.load(Ordering::SeqCst) >= 3);
     assert!(!link
         .phases()
@@ -1384,14 +1362,7 @@ async fn a_name_changed_while_the_link_waits_to_try_again_goes_with_the_resume()
     tokio::time::sleep(Duration::from_millis(100)).await;
     link.handle.rename("Attic".into());
     *addresses.lock().unwrap() = kept;
-    link.until(|l| {
-        l.phases()
-            .iter()
-            .filter(|p| **p == Phase::Connected)
-            .count()
-            == 2
-    })
-    .await;
+    link.until_connected_again().await;
     controller_named(&t, "Attic").await;
 }
 
@@ -1412,4 +1383,21 @@ async fn a_name_changed_while_a_connection_is_being_opened_goes_with_it() {
     .await;
     assert!(connected.is_ok(), "{:?}", link.phases());
     controller_named(&t, "Attic").await;
+}
+
+#[tokio::test]
+async fn a_target_renamed_while_the_link_was_down_shows_its_name_on_the_resume() {
+    let t = target(ControlMode::Always).await;
+    let proxy = Proxy::new(t.port).await;
+    let mut link = link_to(&t, proxy.port, GRACE);
+    link.until_phase(Phase::Connected).await;
+    proxy.cut(true);
+    link.until_phase(Phase::Reconnecting { attempt: 1 }).await;
+    t.handle.update_settings(RemoteSettings {
+        device_name: Some("Den".into()),
+        ..RemoteSettings::default()
+    });
+    proxy.reopen();
+    link.until_connected_again().await;
+    assert_eq!(link.recorder.seen.lock().unwrap().names, ["Den"]);
 }

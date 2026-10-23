@@ -1673,15 +1673,31 @@ fn a_controller_reports_only_a_name_that_changed() {
 }
 
 #[test]
-fn a_rename_before_the_session_changes_nothing_on_the_controller() {
+fn a_rename_while_asking_reaches_the_controller() {
     let now = Instant::now();
     let (mut controller, mut target) = controller_and_bare_target(now);
     let bytes = target
         .seal(&Message::Renamed { name: "Den".into() })
         .unwrap();
     let out = controller.receive(&unframe(&bytes), now);
-    assert_eq!(out, Output::default());
-    assert_eq!(controller.peer().unwrap().name, "TV");
+    assert_eq!(out.events, [Event::Renamed("Den".into())]);
+    assert_eq!(controller.peer().unwrap().name, "Den");
+    assert_eq!(controller.session_id(), None);
+}
+
+#[test]
+fn a_controller_waiting_for_the_dialog_hears_a_new_name() {
+    let mut net = Net::new(RemoteSettings::default());
+    let phone = net.connect("Phone");
+    assert!(net.prompt().is_some());
+    net.change_settings(RemoteSettings {
+        device_name: Some("Den".into()),
+        ..net.target.settings().clone()
+    });
+    assert_eq!(renames(&net.clients[phone]), ["Den"]);
+    net.answer(Answer::Allow);
+    assert!(net.clients[phone].connected());
+    assert_eq!(net.clients[phone].controller.peer().unwrap().name, "Den");
 }
 
 #[test]
