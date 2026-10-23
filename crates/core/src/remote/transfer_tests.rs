@@ -1033,7 +1033,9 @@ fn a_new_control_request_ends_a_transfer_request_without_a_ghost_session() {
         net.clients[phone].connected(),
         "the session's connection stays"
     );
-    net.answer(Answer::Deny);
+    // Dismissed, so only this request is refused. Deny would block the
+    // device and end its session too.
+    net.answer(Answer::Dismiss);
     assert!(!net.clients[again].connected());
     let sessions = net.last_sessions().unwrap();
     assert_eq!(sessions.len(), 1);

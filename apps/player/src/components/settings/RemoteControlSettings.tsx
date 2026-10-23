@@ -7,9 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
+import { TOUCH } from "@/components/remote/RemoteControls";
 import { useRemoteBlocked, useRemoteSessions } from "@/hooks/useRemoteTarget";
 import { shortId } from "@/lib/device-picker";
 import { getPlatform } from "@/lib/platform";
+import { cn } from "@/lib/utils";
 import { deviceTypeName, discoveryLimit, fitName, localNetworkDenied } from "@/lib/remote-devices";
 import {
 	remoteDisconnect,
@@ -27,6 +29,8 @@ import {
  *  them until Cinette quits, which the card then shows. */
 export const SAVE_FAILED =
 	"Couldn't save the remote control settings, so this lasts only until Cinette quits. Try again.";
+/** What shows when a device couldn't be unblocked. */
+export const UNBLOCK_FAILED = "Couldn't unblock that device. Try again.";
 /** What shows when a new identity couldn't be made. */
 export const RESET_FAILED = "Couldn't reset the device identity. Try again.";
 /** What shows once a new identity was made. */
@@ -281,89 +285,41 @@ export const RemoteControlSettings = () => {
 					/>
 				</div>
 
-				<div>
-					<p className="text-sm font-medium mb-2">Connected devices</p>
-					{sessions.length === 0 ? (
-						<p className="text-xs text-muted-foreground">
-							No device is controlling this one.
-						</p>
-					) : (
-						<ul className="space-y-2">
-							{sessions.map((s) => {
-								const tag =
-									named.get(s.name)! > 1 ? ` · ${shortId(s.deviceId)}` : "";
-								return (
-									<li
-										key={s.sessionId}
-										className="flex items-center justify-between gap-3"
-									>
-										<span className="text-sm min-w-0 break-words">
-											<bdi className="font-medium">{s.name}</bdi>
-											<span className="text-xs text-muted-foreground">
-												{" "}
-												· {deviceTypeName(s.deviceType)}
-												{tag}
-												{s.connected ? "" : " · reconnecting"}
-											</span>
-										</span>
-										<Button
-											variant="secondary"
-											size="sm"
-											className="shrink-0"
-											aria-label={`Disconnect ${s.name}${tag}`}
-											onClick={() =>
-												void remoteDisconnect(s.sessionId).catch(() => {})
-											}
-										>
-											Disconnect
-										</Button>
-									</li>
-								);
-							})}
-						</ul>
-					)}
-				</div>
+				<DeviceList
+					title="Connected devices"
+					empty="No device is controlling this one."
+					action="Disconnect"
+					rows={sessions.map((s) => {
+						const tag = named.get(s.name)! > 1 ? ` · ${shortId(s.deviceId)}` : "";
+						return {
+							key: s.sessionId,
+							name: s.name,
+							tag,
+							detail: ` · ${deviceTypeName(s.deviceType)}${tag}${s.connected ? "" : " · reconnecting"}`,
+							act: () => void remoteDisconnect(s.sessionId).catch(() => {}),
+						};
+					})}
+				/>
 
-				<div>
-					<p className="text-sm font-medium mb-2">Blocked devices</p>
-					{blocked.length === 0 ? (
-						<p className="text-xs text-muted-foreground">
-							No device is blocked. Denying a request to control this device blocks
-							the device that asked.
-						</p>
-					) : (
-						<ul className="space-y-2">
-							{blocked.map((b) => {
-								// The id tells it from a device that only took its name.
-								const tag = ` · ${shortId(b.deviceId)}`;
-								return (
-									<li
-										key={b.deviceId}
-										className="flex items-center justify-between gap-3"
-									>
-										<span className="text-sm min-w-0 break-words">
-											<bdi className="font-medium">{b.name}</bdi>
-											<span className="text-xs text-muted-foreground">
-												{tag}
-											</span>
-										</span>
-										<Button
-											variant="secondary"
-											size="sm"
-											className="shrink-0"
-											aria-label={`Unblock ${b.name}${tag}`}
-											onClick={() =>
-												void remoteUnblock(b.deviceId).catch(() => {})
-											}
-										>
-											Unblock
-										</Button>
-									</li>
-								);
-							})}
-						</ul>
-					)}
-				</div>
+				<DeviceList
+					title="Blocked devices"
+					empty="No device is blocked. Denying a request to control this device blocks the device that asked."
+					action="Unblock"
+					rows={blocked.map((b) => {
+						// The id tells it from a device that only took its name.
+						const tag = ` · ${shortId(b.deviceId)}`;
+						return {
+							key: b.deviceId,
+							name: b.name,
+							tag,
+							detail: tag,
+							act: () =>
+								void remoteUnblock(b.deviceId).catch(() =>
+									setError(UNBLOCK_FAILED)
+								),
+						};
+					})}
+				/>
 
 				<div className="flex items-center justify-between gap-4">
 					<div>
@@ -428,5 +384,78 @@ export const RemoteControlSettings = () => {
 				}}
 			/>
 		</Card>
+	);
+};
+
+/** One device in a {@link DeviceList}. `tag` tells it from another with
+ *  its name, and `detail` follows the name. */
+interface DeviceRow {
+	key: string;
+	name: string;
+	tag: string;
+	detail: string;
+	act: () => void;
+}
+
+/**
+ * Other devices, each with one action, or `empty` when there are none.
+ * Once an action takes its row away, focus goes to the row now in its
+ * place, or to the heading, so a keyboard or TV remote isn't left on
+ * nothing.
+ */
+const DeviceList = ({
+	title,
+	empty,
+	action,
+	rows,
+}: {
+	title: string;
+	empty: string;
+	action: string;
+	rows: DeviceRow[];
+}) => {
+	const headingRef = useRef<HTMLParagraphElement>(null);
+	const listRef = useRef<HTMLUListElement>(null);
+	// The row whose action was used last, until the list changes.
+	const acted = useRef<number | null>(null);
+	useEffect(() => {
+		const at = acted.current;
+		acted.current = null;
+		if (at === null || document.activeElement !== document.body) return;
+		const buttons = listRef.current?.querySelectorAll("button") ?? [];
+		(buttons[Math.min(at, buttons.length - 1)] ?? headingRef.current)?.focus();
+	}, [rows.length]);
+	return (
+		<div>
+			<p ref={headingRef} tabIndex={-1} className="text-sm font-medium mb-2 outline-hidden">
+				{title}
+			</p>
+			{rows.length === 0 ? (
+				<p className="text-xs text-muted-foreground">{empty}</p>
+			) : (
+				<ul ref={listRef} className="space-y-2">
+					{rows.map((row, i) => (
+						<li key={row.key} className="flex items-center justify-between gap-3">
+							<span className="text-sm min-w-0 break-words">
+								<bdi className="font-medium">{row.name}</bdi>
+								<span className="text-xs text-muted-foreground">{row.detail}</span>
+							</span>
+							<Button
+								variant="secondary"
+								size="sm"
+								className={cn("shrink-0", TOUCH)}
+								aria-label={`${action} ${row.name}${row.tag}`}
+								onClick={() => {
+									acted.current = i;
+									row.act();
+								}}
+							>
+								{action}
+							</Button>
+						</li>
+					))}
+				</ul>
+			)}
+		</div>
 	);
 };

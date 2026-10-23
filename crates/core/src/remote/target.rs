@@ -718,10 +718,14 @@ impl Target {
         now: Instant,
         actions: &mut Vec<Action>,
     ) {
+        // A device the user denied hears so again, whatever the setting, and
+        // can't resume a session either.
+        let blocked = self.is_blocked(&auth.peer.id);
         // A session that dropped a moment ago comes back without asking.
         // It isn't a new connection, so being undiscoverable doesn't stop it,
         // but Never allow ended every session already.
-        if let Some(id) = resume
+        if !blocked
+            && let Some(id) = resume
             && let Ok(old) = self.sessions.resume(&id, &auth.peer.id, conn, now)
         {
             if let Some(old) = old {
@@ -741,8 +745,7 @@ impl Target {
             actions.push(self.sessions_changed());
             return;
         }
-        // A device the user denied hears so again, whatever the setting.
-        let decision = if self.is_blocked(&auth.peer.id) {
+        let decision = if blocked {
             Decision::Reject(CloseReason::Denied)
         } else {
             self.settings.decide()
@@ -825,7 +828,8 @@ impl Target {
     }
 
     /// The user answered the dialog. Deny on a request for control blocks
-    /// that device. Dismissing it refuses only this request.
+    /// that device and ends any session it has, as Disconnect does.
+    /// Dismissing it refuses only this request.
     pub fn answer(&mut self, request: RequestId, answer: Answer, now: Instant) -> Vec<Action> {
         let mut actions = Vec::new();
         if let Some(resolved) = self.consent.answer(request, answer, now) {
@@ -837,6 +841,11 @@ impl Target {
                     name: peer.name.clone(),
                 });
                 actions.push(Action::BlockedChanged(self.blocked.clone()));
+                // A device has one session at most.
+                let held = self.sessions.list().iter().find(|s| s.peer.id == peer.id);
+                if let Some(session) = held.map(|s| s.id.clone()) {
+                    actions.extend(self.disconnect(&session));
+                }
             }
             self.resolve(resolved, now, &mut actions);
         }

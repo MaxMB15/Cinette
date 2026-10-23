@@ -95,15 +95,15 @@ export const useRemoteTarget = (): void => {
 	});
 };
 
-/** A list the backend keeps: `fetch` once, then each `event` in its place.
+/** A list the backend keeps: `load` once, then each `event` in its place.
  *  Empty where remote control doesn't run. */
-const useBackendList = <T>(event: string, fetch: () => Promise<T[]>): T[] => {
+const useBackendList = <T>(event: string, load: () => Promise<T[]>): T[] => {
 	const [list, setList] = useState<T[]>([]);
 	useTauriEvent<T[]>(event, setList);
 	useEffect(
 		() => {
 			let current = true;
-			fetch()
+			load()
 				.then((got) => {
 					// Anything but a list, as from a backend without remote control, is none.
 					if (current) setList(Array.isArray(got) ? got : []);
@@ -114,7 +114,7 @@ const useBackendList = <T>(event: string, fetch: () => Promise<T[]>): T[] => {
 			};
 		},
 		// Stryker disable next-line ArrayDeclaration: each caller passes a module function, which never changes, so the effect runs once either way.
-		[fetch]
+		[load]
 	);
 	return list;
 };

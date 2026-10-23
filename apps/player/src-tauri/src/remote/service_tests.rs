@@ -121,14 +121,12 @@ impl Running {
     }
 
     async fn phone(&self) -> Client {
-        test_client::connect(
-            self.port,
-            self.device_id(),
-            DeviceKey::generate(),
-            "Phone",
-            None,
-        )
-        .await
+        self.phone_with(DeviceKey::generate()).await
+    }
+
+    /// A phone with `key`, as the same device asking again.
+    async fn phone_with(&self, key: DeviceKey) -> Client {
+        test_client::connect(self.port, self.device_id(), key, "Phone", None).await
     }
 
     /// The oldest event called `name` not yet taken, waiting for one.
@@ -341,17 +339,8 @@ async fn a_denied_device_is_blocked_until_unblocked() {
     assert_eq!(saved(&running.app, BLOCKED_KEY), blocked);
 
     // Asking again gets no dialog.
-    let again = |running: &Running| {
-        test_client::connect(
-            running.port,
-            running.device_id(),
-            phone.key.clone(),
-            "Phone",
-            None,
-        )
-    };
     assert_eq!(
-        again(&running).await.closed().await,
+        running.phone_with(phone.key.clone()).await.closed().await,
         Some(CloseReason::Denied)
     );
 
@@ -367,7 +356,7 @@ async fn a_denied_device_is_blocked_until_unblocked() {
     // No longer denied. The denial's short backoff still turns away every
     // new request for a few seconds, which the core's tests cover.
     assert_eq!(
-        again(&running).await.closed().await,
+        running.phone_with(phone.key.clone()).await.closed().await,
         Some(CloseReason::Busy)
     );
 }
@@ -378,6 +367,13 @@ async fn a_dismissed_request_blocks_nothing() {
     let mut phone = running.phone().await;
     phone.pending().await;
     let consent = running.event("remote://consent").await;
+    // Only allow, deny and dismiss are answers.
+    assert!(running
+        .invoke(
+            "remote_answer_consent",
+            json!({ "request": consent["request"], "answer": "block" }),
+        )
+        .is_err());
     running
         .invoke(
             "remote_answer_consent",
@@ -407,8 +403,7 @@ async fn devices_blocked_before_stay_blocked_after_a_restart_and_a_new_identity(
         running.invoke("remote_blocked", json!({})).unwrap(),
         blocked
     );
-    let mut phone =
-        test_client::connect(running.port, running.device_id(), key, "Phone", None).await;
+    let mut phone = running.phone_with(key).await;
     assert_eq!(phone.closed().await, Some(CloseReason::Denied));
 }
 

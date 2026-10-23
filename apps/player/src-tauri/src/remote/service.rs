@@ -795,6 +795,9 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
     }
 
     fn blocked_changed(&self, blocked: &[BlockedDevice]) {
+        // The block holds until Cinette quits even when the file can't be
+        // written. There's no one to tell here, since the change came from
+        // answering a dialog, so it's only logged.
         if let Err(e) = save(&self.app, BLOCKED_KEY, &blocked) {
             tracing::warn!("[remote] the blocked devices: {e}");
         }
@@ -1602,6 +1605,8 @@ fn start_on<R: Runtime>(
         key.clone(),
         device_type(),
         settings.clone(),
+        // A list with an id that doesn't read loads as none: the app wrote
+        // it, so only a damaged file does that.
         load(app, BLOCKED_KEY),
         host,
         limits,

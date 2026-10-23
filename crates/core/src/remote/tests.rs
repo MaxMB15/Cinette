@@ -392,6 +392,13 @@ impl Net {
         self.change_settings(settings);
     }
 
+    pub fn last_blocked(&self) -> Option<&Vec<BlockedDevice>> {
+        self.log.iter().rev().find_map(|a| match a {
+            Action::BlockedChanged(list) => Some(list),
+            _ => None,
+        })
+    }
+
     pub fn last_sessions(&self) -> Option<&Vec<SessionInfo>> {
         self.log.iter().rev().find_map(|a| match a {
             Action::SessionsChanged(list) => Some(list),
@@ -619,13 +626,6 @@ fn a_controller_that_hangs_up_takes_its_dialog_away() {
     assert_eq!(net.prompt(), None);
 }
 
-fn blocked_list(net: &Net) -> Option<&Vec<BlockedDevice>> {
-    net.log.iter().rev().find_map(|a| match a {
-        Action::BlockedChanged(list) => Some(list),
-        _ => None,
-    })
-}
-
 #[test]
 fn a_denied_device_is_blocked_until_the_user_unblocks_it() {
     let mut net = Net::new(RemoteSettings::default());
@@ -636,7 +636,7 @@ fn a_denied_device_is_blocked_until_the_user_unblocks_it() {
         device_id: key.device_id(),
         name: "Neighbor".into(),
     }];
-    assert_eq!(blocked_list(&net), Some(&blocked));
+    assert_eq!(net.last_blocked(), Some(&blocked));
     assert_eq!(net.target.blocked(), blocked);
     // After a denial's minute, and under Always allow too.
     net.advance(DENIAL_COOLDOWN);
@@ -675,6 +675,31 @@ fn unblocking_lets_a_device_ask_within_its_denials_minute() {
 }
 
 #[test]
+fn denying_a_device_that_holds_a_session_ends_it_and_its_resume() {
+    let mut net = Net::new(RemoteSettings::default());
+    let key = DeviceKey::generate();
+    let first = net.connect_with(key.clone(), "Phone", None);
+    net.answer(Answer::Allow);
+    let session = net.clients[first]
+        .controller
+        .session_id()
+        .unwrap()
+        .to_owned();
+    // The same device asks again on a second connection, and is denied.
+    net.connect_with(key.clone(), "Phone", None);
+    net.answer(Answer::Deny);
+    assert_eq!(
+        net.clients[first].closed_reason(),
+        Some(CloseReason::Revoked)
+    );
+    assert!(net.target.sessions().is_empty());
+    assert_eq!(net.last_sessions(), Some(&vec![]));
+    let back = net.connect_with(key, "Phone", Some(session));
+    assert_eq!(net.clients[back].closed_reason(), Some(CloseReason::Denied));
+    assert!(!net.clients[back].connected());
+}
+
+#[test]
 fn a_blocked_list_saved_earlier_refuses_at_once() {
     let mut net = Net::new(RemoteSettings::default());
     let key = DeviceKey::generate();
@@ -696,7 +721,7 @@ fn a_dismissed_dialog_refuses_only_that_request() {
     let key = DeviceKey::generate();
     net.connect_with(key.clone(), "Phone", None);
     net.answer(Answer::Dismiss);
-    assert_eq!(blocked_list(&net), None);
+    assert_eq!(net.last_blocked(), None);
     net.connect_with(key, "Phone", None);
     assert_eq!(net.prompt().unwrap().name, "Phone");
 }
