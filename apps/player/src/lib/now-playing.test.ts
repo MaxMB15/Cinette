@@ -630,6 +630,16 @@ describe("createNowPlaying", () => {
 			expect(store.getState().channel).toBe(ep2);
 		});
 
+		it("does nothing at the end before the page said what's up next", async () => {
+			const { store } = setUp();
+			const target = tv();
+			await store.send(target, ep1, opts());
+			expect(() => target.set(ended(ep1))).not.toThrow();
+			await settle();
+			expect(target.load).toHaveBeenCalledTimes(1);
+			expect(store.getState().channel).toBe(ep1);
+		});
+
 		it("does nothing with autoplay off, after the last episode, or at another item's end", async () => {
 			const { store } = setUp();
 			const target = tv();
