@@ -1269,6 +1269,7 @@ export const PlayerView = () => {
 	const playOn = (device: PlaybackDestination, item: CatalogItem) =>
 		void device
 			.load({ kind: "remote", itemId: item.id, title: item.name, seriesId: item.seriesId })
+			// Stryker disable next-line BooleanLiteral: Another Cinette device's failure reads the same for a seek.
 			.catch((error: unknown) => reportFailure(error, false));
 	// The episodes around the one that plays, which the controls, a TV's view
 	// and the keys go to: another Cinette device's, from its catalog, or this

@@ -25,7 +25,8 @@ export const useRemoteEpisodes = (
 	const seriesId = item?.seriesId;
 	const linkId = link?.id;
 	const connected = link?.phase.phase === "connected";
-	const key = linkId !== undefined && seriesId ? `${linkId}\n${seriesId}` : null;
+	// Only an item from a link names a series.
+	const key = seriesId ? `${linkId}\n${seriesId}` : null;
 	const [found, setFound] = useState<{ key: string; episodes: CatalogItem[] } | null>(null);
 	useEffect(() => {
 		if (key === null || !connected) return;

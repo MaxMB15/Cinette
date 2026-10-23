@@ -280,11 +280,12 @@ export const createCinetteDestination = (
 			snapshot = {
 				...snapshot,
 				status: "opening",
-				// Stryker disable next-line StringLiteral: an empty type reads as live too, and the group shows nowhere.
 				item: {
 					id: item.itemId,
 					name: item.title,
+					// Stryker disable next-line StringLiteral: an empty type reads as live too.
 					contentType: "live",
+					// Stryker disable next-line StringLiteral: the group shows nowhere.
 					group: "",
 					seriesId: item.seriesId,
 				},
