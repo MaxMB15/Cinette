@@ -376,10 +376,9 @@ jobs:
 
       - name: Install system libraries
         if: matrix.package != 'mvp-core'
-        run: |
-          # $APT_PACKAGES is a list of names, so it's split on purpose.
-          # shellcheck disable=SC2086
-          sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+        uses: ./.github/actions/install-linux-deps
+        with:
+          packages: ${{ env.APT_PACKAGES }}
 
       - name: Set up the frontend
         if: matrix.package == 'max-video-player'
