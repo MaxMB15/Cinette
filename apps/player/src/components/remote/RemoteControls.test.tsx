@@ -6,6 +6,7 @@ import { render, screen, fireEvent, act, waitFor, within } from "@testing-librar
 import type { RemoteControlState, Link } from "@/lib/remote-control";
 import { createCinetteDestination, type RemoteSnapshot } from "@/lib/cinette-destination";
 import type { RemoteDevice } from "@/lib/tauri";
+import { MemoryRouter, Route, Routes } from "react-router";
 
 const control = vi.hoisted(() => ({
 	state: { devices: [], link: null, ended: null } as unknown as RemoteControlState,
@@ -457,7 +458,7 @@ describe("RemoteBar", () => {
 			...control.state,
 			link: link({ phase: "connected" }, "123456", ["providers"]),
 		};
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		fireEvent.click(screen.getByRole("button", { name: "Send providers" }));
 		fireEvent.click(screen.getByRole("button", { name: "Close sending" }));
 		expect(screen.queryByRole("button", { name: "Close sending" })).toBeNull();
@@ -469,7 +470,7 @@ describe("RemoteBar", () => {
 			...control.state,
 			link: link({ phase: "connected" }, "123456", ["history"]),
 		};
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(screen.queryByRole("button", { name: "Send providers" })).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Transfer history" }));
 		fireEvent.click(screen.getByRole("button", { name: "Close transfer" }));
@@ -481,7 +482,7 @@ describe("RemoteBar", () => {
 			...control.state,
 			link: link({ phase: "connected" }, "123456", ["providers"]),
 		};
-		const { rerender } = render(<RemoteBar />);
+		const { rerender } = render(<RemoteBar />, { wrapper: MemoryRouter });
 		fireEvent.click(screen.getByRole("button", { name: "Send providers" }));
 		expect(screen.getByRole("button", { name: "Close sending" })).toBeInTheDocument();
 		control.state = {
@@ -506,20 +507,20 @@ describe("RemoteBar", () => {
 
 	it("doesn't offer it to a device that doesn't take them, or while reconnecting", () => {
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
-		const { unmount } = render(<RemoteBar />);
+		const { unmount } = render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(screen.queryByRole("button", { name: "Send providers" })).toBeNull();
 		unmount();
 		control.state = {
 			...control.state,
 			link: link({ phase: "reconnecting", attempt: 1 }, null, ["providers", "history"]),
 		};
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(screen.queryByRole("button", { name: "Send providers" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Transfer history" })).toBeNull();
 	});
 
 	it("shows nothing without a link or an ending to explain", () => {
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(screen.queryByRole("region")).toBeNull();
 		expect(screen.queryByRole("status")).toBeNull();
 	});
@@ -528,7 +529,7 @@ describe("RemoteBar", () => {
 		const l = link({ phase: "connected" });
 		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
 		control.state = { ...control.state, link: l };
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		const bar = screen.getByRole("region", { name: "Remote control" });
 		expect(bar).toHaveTextContent("Playing on Living Room");
 		expect(within(bar).getByTitle("Living Room").textContent).toBe("Playing on Living Room");
@@ -538,7 +539,7 @@ describe("RemoteBar", () => {
 	it("follows the other device's state and sends its controls there", async () => {
 		const l = link({ phase: "connected" });
 		control.state = { ...control.state, link: l };
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(screen.getByRole("region")).toHaveTextContent("Nothing playing");
 		expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
 		act(() => l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0));
@@ -563,7 +564,7 @@ describe("RemoteBar", () => {
 		const state = { ...snapshot, capabilities: { ...snapshot.capabilities, pause: false } };
 		l.destination.receive({ epoch: "e", version: 1, state }, 0);
 		control.state = { ...control.state, link: l };
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
 		expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
 	});
@@ -572,12 +573,12 @@ describe("RemoteBar", () => {
 		const l = link({ phase: "connected" });
 		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
 		control.state = { ...control.state, link: l };
-		render(<RemoteBar />);
-		for (const name of ["Pause", "Stop", "Return to independent playback"]) {
+		render(<RemoteBar />, { wrapper: MemoryRouter });
+		for (const name of ["Pause", "Stop", "More", "Return to independent playback"]) {
 			const button = screen.getByRole("button", { name });
 			expect(button).toHaveClass("pointer-coarse:min-h-11", "pointer-coarse:min-w-11");
 		}
-		for (const name of ["Pause", "Stop"]) {
+		for (const name of ["Pause", "Stop", "More"]) {
 			expect(screen.getByRole("button", { name })).toHaveClass(
 				"inline-flex",
 				"items-center",
@@ -586,18 +587,75 @@ describe("RemoteBar", () => {
 		}
 	});
 
-	it("wraps onto more lines where one is too narrow, so nothing covers Play and Stop", () => {
+	it("keeps to one row, with the actions in a menu on a phone and inline from sm up", () => {
 		const l = link({ phase: "connected" });
 		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
 		control.state = { ...control.state, link: l };
-		render(<RemoteBar />);
-		expect(screen.getByRole("region", { name: "Remote control" })).toHaveClass(
-			"flex",
-			"flex-wrap",
-			"items-center",
-			"gap-x-3",
-			"gap-y-2"
+		render(<RemoteBar />, { wrapper: MemoryRouter });
+		const bar = screen.getByRole("region", { name: "Remote control" });
+		expect(bar).toHaveClass("flex", "items-center");
+		expect(bar).not.toHaveClass("flex-wrap");
+		// Opaque, so the page under it doesn't show through.
+		expect(bar).toHaveClass("bg-card", "from-primary/10", "to-primary/10");
+		const inline = screen.getByRole("button", { name: "Return to independent playback" });
+		expect(inline.parentElement).toHaveClass("hidden", "sm:flex");
+		const more = screen.getByRole("button", { name: "More" });
+		expect(more.parentElement!.parentElement).toHaveClass("sm:hidden");
+		expect(more).toHaveAttribute("aria-haspopup", "menu");
+	});
+
+	it("offers the same actions in its menu", async () => {
+		const l = link({ phase: "connected" }, null, ["history", "providers"]);
+		control.state = { ...control.state, link: l };
+		render(<RemoteBar />, { wrapper: MemoryRouter });
+		fireEvent.click(screen.getByRole("button", { name: "More" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toStrictEqual([
+			"Transfer history",
+			"Send providers",
+			"Return to independent playback",
+		]);
+		fireEvent.click(screen.getByRole("menuitem", { name: "Return to independent playback" }));
+		expect(screen.queryByRole("menu")).toBeNull();
+		await waitFor(() => expect(control.leave).toHaveBeenCalled());
+	});
+
+	it("leaves Play, Stop and the inline actions to the player page there", async () => {
+		const l = link({ phase: "connected" }, null, ["history"]);
+		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
+		control.state = { ...control.state, link: l };
+		render(
+			<MemoryRouter initialEntries={["/player"]}>
+				<RemoteBar />
+			</MemoryRouter>
 		);
+		const bar = screen.getByRole("region", { name: "Remote control" });
+		expect(bar).toHaveTextContent("Playing on Living Room");
+		expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Transfer history" })).toBeNull();
+		const more = screen.getByRole("button", { name: "More" });
+		expect(more.parentElement).not.toHaveClass("sm:hidden");
+		fireEvent.click(more);
+		expect(screen.getByRole("menuitem", { name: "Transfer history" })).toBeInTheDocument();
+	});
+
+	it("opens the player from what plays there", () => {
+		const l = link({ phase: "connected" });
+		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
+		control.state = { ...control.state, link: l };
+		render(
+			<MemoryRouter>
+				<Routes>
+					<Route path="/" element={<RemoteBar />} />
+					<Route path="/player" element={<p>Player page</p>} />
+				</Routes>
+			</MemoryRouter>
+		);
+		const label = screen.getByRole("link", { name: /Playing on Living Room/ });
+		expect(label).toHaveTextContent("News at Ten");
+		expect(label).toHaveClass("pointer-coarse:min-h-11");
+		fireEvent.click(label);
+		expect(screen.getByText("Player page")).toBeInTheDocument();
 	});
 
 	it("shows a buffering item as playing", () => {
@@ -607,7 +665,7 @@ describe("RemoteBar", () => {
 			0
 		);
 		control.state = { ...control.state, link: l };
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
 	});
 
@@ -616,7 +674,7 @@ describe("RemoteBar", () => {
 		const l = link({ phase: "connected" });
 		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
 		control.state = { ...control.state, link: l };
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		fireEvent.click(screen.getByRole("button", { name: "Pause" }));
 		await act(async () => {});
 		expect(screen.getByRole("region")).toBeInTheDocument();
@@ -624,7 +682,7 @@ describe("RemoteBar", () => {
 
 	it("says it's reconnecting", () => {
 		control.state = { ...control.state, link: link({ phase: "reconnecting", attempt: 2 }) };
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(within(screen.getByRole("region")).getByTitle("Living Room").textContent).toBe(
 			"Reconnecting to Living Room…"
 		);
@@ -632,13 +690,13 @@ describe("RemoteBar", () => {
 
 	it("waits for consent before showing", () => {
 		control.state = { ...control.state, link: link({ phase: "pending", expiresInMs: 1 }) };
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(screen.queryByRole("region")).toBeNull();
 	});
 
 	it("returns to independent playback", () => {
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(screen.queryByRole("status")).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Return to independent playback" }));
 		expect(control.leave).toHaveBeenCalledTimes(1);
@@ -647,7 +705,7 @@ describe("RemoteBar", () => {
 	it("says when returning to independent playback didn't work, once the bar has gone", async () => {
 		control.leave.mockImplementationOnce(leavesThenFails);
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
-		const { rerender } = render(<RemoteBar />);
+		const { rerender } = render(<RemoteBar />, { wrapper: MemoryRouter });
 		fireEvent.click(screen.getByRole("button", { name: "Return to independent playback" }));
 		rerender(<RemoteBar />);
 		expect(screen.queryByRole("region"), "the link is gone here at once").toBeNull();
@@ -661,7 +719,7 @@ describe("RemoteBar", () => {
 	it("says it while the link is still there too", async () => {
 		control.leave.mockRejectedValueOnce("gone");
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		fireEvent.click(screen.getByRole("button", { name: "Return to independent playback" }));
 		expect(await screen.findByRole("status")).toHaveTextContent(LEAVE_FAILED);
 		// A second try that works says nothing.
@@ -675,7 +733,7 @@ describe("RemoteBar", () => {
 			...control.state,
 			ended: { name: "Living Room", reason: { target: "revoked" } },
 		};
-		const { rerender } = render(<RemoteBar />);
+		const { rerender } = render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(screen.getByRole("status")).toHaveTextContent(
 			"Living Room disconnected this device."
 		);
@@ -693,7 +751,7 @@ describe("RemoteBar", () => {
 
 	it("says nothing when this device left", () => {
 		control.state = { ...control.state, ended: { name: "Den", reason: "left" } };
-		render(<RemoteBar />);
+		render(<RemoteBar />, { wrapper: MemoryRouter });
 		expect(screen.queryByRole("status")).toBeNull();
 	});
 });

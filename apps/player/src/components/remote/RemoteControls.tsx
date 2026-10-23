@@ -4,8 +4,10 @@
 import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
-import { MonitorSmartphone, Pause, Play, Square, X } from "lucide-react";
+import { Link, useLocation } from "react-router";
+import { Ellipsis, MonitorSmartphone, Pause, Play, Square, X } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
+import { Menu, MenuItem } from "@/components/ui/menu";
 import { DevicePicker } from "@/components/remote/DevicePicker";
 import { SendProvidersDialog } from "@/components/remote/SendProvidersDialog";
 import { TransferHistoryDialog } from "@/components/remote/TransferHistoryDialog";
@@ -249,21 +251,19 @@ export const ConnectStatusDialog = () => {
 const useDestinationState = (destination: CinetteDestination) =>
 	useSyncExternalStore(destination.subscribe, destination.getState);
 
-const NowPlaying = ({ destination }: { destination: CinetteDestination }) => {
+/** Play or Pause, and Stop, for what plays there. */
+const PlayStop = ({ destination }: { destination: CinetteDestination }) => {
 	const state = useDestinationState(destination);
 	const playing = state.status === "playing" || state.status === "buffering";
-	const caps = destination.capabilities;
 	const run = (action: () => Promise<void>) => void action().catch(() => {});
+	if (!state.item) return null;
 	return (
-		<div className="flex items-center gap-2 min-w-0">
-			<span className="truncate text-xs text-muted-foreground">
-				{state.item ? state.item.title : "Nothing playing"}
-			</span>
-			{state.item && caps.pause && (
+		<>
+			{destination.capabilities.pause && (
 				<button
 					type="button"
 					aria-label={playing ? "Pause" : "Play"}
-					className={cn(ICON_BUTTON, "p-1 rounded hover:bg-accent")}
+					className={cn(ICON_BUTTON, "shrink-0 p-1 rounded hover:bg-accent")}
 					onClick={() => run(playing ? destination.pause : destination.play)}
 				>
 					{playing ? (
@@ -273,17 +273,25 @@ const NowPlaying = ({ destination }: { destination: CinetteDestination }) => {
 					)}
 				</button>
 			)}
-			{state.item && (
-				<button
-					type="button"
-					aria-label="Stop"
-					className={cn(ICON_BUTTON, "p-1 rounded hover:bg-accent")}
-					onClick={() => run(destination.stop)}
-				>
-					<Square className="h-4 w-4" aria-hidden />
-				</button>
-			)}
-		</div>
+			<button
+				type="button"
+				aria-label="Stop"
+				className={cn(ICON_BUTTON, "shrink-0 p-1 rounded hover:bg-accent")}
+				onClick={() => run(destination.stop)}
+			>
+				<Square className="h-4 w-4" aria-hidden />
+			</button>
+		</>
+	);
+};
+
+/** What plays there, under the device's name. */
+const Title = ({ destination }: { destination: CinetteDestination }) => {
+	const state = useDestinationState(destination);
+	return (
+		<span className="block truncate text-sm">
+			{state.item ? state.item.title : "Nothing playing"}
+		</span>
 	);
 };
 
@@ -342,6 +350,9 @@ export const RemoteBar = () => {
 	// on the next link.
 	const [sendingFor, setSendingFor] = useState<number | null>(null);
 	const [transferringFor, setTransferringFor] = useState<number | null>(null);
+	const [menuOpen, setMenuOpen] = useState(false);
+	// The player page has its own Play and Stop for the device.
+	const onPlayer = useLocation().pathname === "/player";
 	// Leaving clears the link here before the backend answers, so this
 	// shows whatever the bar shows by then.
 	const failed = leaveFailed && (
@@ -349,41 +360,94 @@ export const RemoteBar = () => {
 	);
 	if (link && (link.phase.phase === "connected" || link.phase.phase === "reconnecting")) {
 		const connected = link.phase.phase === "connected";
+		// Transfers need the session up, and a device that offers them.
+		const actions = [
+			connected &&
+				link.features.includes("history") && {
+					label: "Transfer history",
+					run: () => setTransferringFor(link.id),
+				},
+			connected &&
+				link.features.includes("providers") && {
+					label: "Send providers",
+					run: () => setSendingFor(link.id),
+				},
+			{
+				label: "Return to independent playback",
+				run: () => {
+					setLeaveFailed(false);
+					leave().catch(() => setLeaveFailed(true));
+				},
+			},
+		].filter((action) => action !== false);
 		return (
 			<div
 				role="region"
 				aria-label="Remote control"
-				// It wraps on a phone, where one row is too narrow: without
-				// that, the buttons that can't shrink cover Play and Stop.
-				className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 border-b border-border bg-primary/10 text-sm"
+				// One row at any width, like a music app's mini player: the
+				// actions go in a menu on a phone. Opaque, with the tint on
+				// top, so the page doesn't show through.
+				className="flex items-center gap-2 px-4 py-1.5 border-b border-border bg-card bg-linear-to-r from-primary/10 to-primary/10"
 			>
 				<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
-				<span className="font-medium min-w-0 truncate" title={link.name}>
-					{link.phase.phase === "reconnecting" ? "Reconnecting to " : "Playing on "}
-					<bdi>{link.name}</bdi>
-					{link.phase.phase === "reconnecting" ? "…" : ""}
-				</span>
-				<NowPlaying destination={link.destination} />
-				{/* Transfers need the session up, and a device that offers them. */}
-				<span className="ml-auto flex shrink-0 gap-1">
-					{connected && link.features.includes("history") && (
-						<button
-							type="button"
-							className={`${BUTTON} hover:bg-accent`}
-							onClick={() => setTransferringFor(link.id)}
-						>
-							Transfer history
-						</button>
+				<Link
+					to="/player"
+					className={cn(
+						"min-w-0 flex-1 rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+						TOUCH
 					)}
-					{connected && link.features.includes("providers") && (
-						<button
-							type="button"
-							className={`${BUTTON} hover:bg-accent`}
-							onClick={() => setSendingFor(link.id)}
-						>
-							Send providers
-						</button>
-					)}
+				>
+					<span
+						className="block truncate text-xs text-muted-foreground"
+						title={link.name}
+					>
+						{connected ? "Playing on " : "Reconnecting to "}
+						<bdi>{link.name}</bdi>
+						{connected ? "" : "…"}
+					</span>
+					<Title destination={link.destination} />
+				</Link>
+				{!onPlayer && <PlayStop destination={link.destination} />}
+				{!onPlayer && (
+					<span className="hidden sm:flex shrink-0 gap-1">
+						{actions.map((action) => (
+							<button
+								key={action.label}
+								type="button"
+								className={`${BUTTON} hover:bg-accent`}
+								onClick={action.run}
+							>
+								{action.label}
+							</button>
+						))}
+					</span>
+				)}
+				<span className={cn("shrink-0", !onPlayer && "sm:hidden")}>
+					<Menu
+						open={menuOpen}
+						onOpenChange={setMenuOpen}
+						trigger={(props) => (
+							<button
+								{...props}
+								type="button"
+								aria-label="More"
+								className={cn(ICON_BUTTON, "p-1 rounded hover:bg-accent")}
+							>
+								<Ellipsis className="h-4 w-4" aria-hidden />
+							</button>
+						)}
+						className="right-0 top-full mt-1 w-64 border border-border bg-card text-sm"
+					>
+						{actions.map((action) => (
+							<MenuItem
+								key={action.label}
+								onSelect={action.run}
+								className={cn("hover:bg-accent focus-visible:bg-accent", TOUCH)}
+							>
+								{action.label}
+							</MenuItem>
+						))}
+					</Menu>
 				</span>
 				{sendingFor === link.id && (
 					<SendProvidersDialog link={link} onClose={() => setSendingFor(null)} />
@@ -391,16 +455,6 @@ export const RemoteBar = () => {
 				{transferringFor === link.id && (
 					<TransferHistoryDialog link={link} onClose={() => setTransferringFor(null)} />
 				)}
-				<button
-					type="button"
-					className={`${BUTTON} shrink-0 hover:bg-accent`}
-					onClick={() => {
-						setLeaveFailed(false);
-						leave().catch(() => setLeaveFailed(true));
-					}}
-				>
-					Return to independent playback
-				</button>
 				{failed}
 			</div>
 		);
