@@ -283,6 +283,9 @@ pub fn hold_cast_receivers<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) {
 /// something on this computer just let go of the provider's stream, such as
 /// its own player. `subtitle`, which a live channel leaves out, is shown
 /// from the start.
+// The frontend names each argument, so they stay apart rather than in one
+// struct.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn cast_load<R: Runtime>(
     app: AppHandle<R>,
