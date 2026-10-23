@@ -24,6 +24,9 @@ import type * as Bridge from "@/lib/tauri";
 import type { useMpv } from "@/hooks/useMpv";
 import type { AirPlay } from "@/hooks/useAirPlay";
 import type { Cast } from "@/hooks/useCast";
+import type { Link } from "@/lib/remote-control";
+import { createCinetteDestination, type LinkPhase } from "@/lib/cinette-destination";
+import type { RemoteCommand } from "@/lib/remote-target";
 import type { CastDestination } from "@/lib/cast-destination";
 import type { PlaybackDestination, PlaybackState } from "@/lib/destination";
 import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
@@ -222,6 +225,16 @@ vi.mock("@/hooks/useDownloads", async (importOriginal) => {
 	};
 });
 
+/** The hooks' state is their destination's, so a test that sets one
+ *  sets both. */
+const mirror = vi.hoisted(
+	() =>
+		({ destination, state }: { destination: unknown; state: PlaybackState | null }) => {
+			const getState = (destination as { getState?: unknown } | null)?.getState;
+			if (state && vi.isMockFunction(getState)) getState.mockReturnValue(state);
+		}
+);
+
 /** Stands in for useAirPlay, which has tests of its own. */
 const fakeAirPlay = vi.hoisted(() => {
 	const initial = (): AirPlay => ({
@@ -250,6 +263,7 @@ const fakeAirPlay = vi.hoisted(() => {
 		},
 		set: (patch: Partial<AirPlay>) => {
 			current = { ...current, ...patch };
+			mirror(current);
 			listeners.forEach((listener) => listener());
 		},
 	};
@@ -303,6 +317,7 @@ const fakeCast = vi.hoisted(() => {
 		},
 		set: (patch: Partial<Cast>) => {
 			current = { ...current, ...patch };
+			mirror(current);
 			listeners.forEach((listener) => listener());
 		},
 	};
@@ -316,6 +331,35 @@ vi.mock("@/hooks/useCast", async () => {
 			fakeCast.report = report;
 			return useSyncExternalStore(fakeCast.subscribe, fakeCast.get);
 		},
+	};
+});
+
+/** Stands in for useRemoteControl, which has tests of its own: the link
+ *  to the other Cinette device this one controls, if any. */
+const fakeRemote = vi.hoisted(() => {
+	let link: Link | null = null;
+	const listeners = new Set<() => void>();
+	return {
+		get: () => link,
+		subscribe: (listener: () => void) => {
+			listeners.add(listener);
+			return () => {
+				listeners.delete(listener);
+			};
+		},
+		set: (next: Link | null) => {
+			link = next;
+			listeners.forEach((listener) => listener());
+		},
+	};
+});
+
+vi.mock("@/hooks/useRemoteControl", async () => {
+	const { useSyncExternalStore } = await import("react");
+	return {
+		useRemoteControl: () => ({
+			link: useSyncExternalStore(fakeRemote.subscribe, fakeRemote.get),
+		}),
 	};
 });
 
@@ -748,6 +792,7 @@ beforeEach(() => {
 	fakeMpv.reset();
 	fakeAirPlay.reset();
 	fakeCast.reset();
+	fakeRemote.set(null);
 	fakeAirPlay.enabled = [];
 	fakeAirPlay.macs = [];
 	env.channels = [];
@@ -3663,7 +3708,7 @@ describe("AirPlay", () => {
 		status: "playing",
 		item: { title: "The Lantern Keeper", contentType: "movie", ref: "mv1" },
 		position: 600,
-		positionAt: 0,
+		positionAt: performance.now(),
 		duration: 5400,
 		volume: 100,
 		subtitles: [{ id: "0", label: "English" }],
@@ -3703,8 +3748,9 @@ describe("AirPlay", () => {
 		selectSubtitle: vi.fn(async () => {}),
 		selectAudio: vi.fn(async () => {}),
 		stop: vi.fn(),
-		getState: vi.fn(() => tvState()),
-		subscribe: vi.fn(),
+		// One state until a test sets another, as a destination keeps it.
+		getState: vi.fn<() => PlaybackState>().mockReturnValue(tvState()),
+		subscribe: vi.fn(() => () => {}),
 		dispose: vi.fn(),
 	});
 
@@ -3874,7 +3920,7 @@ describe("AirPlay", () => {
 		const destination = tv();
 		act(() => fakeAirPlay.set({ available: true, destination, state: tvState() }));
 		const panel = screen.getByRole("region", { name: "AirPlay" });
-		expect(within(panel).getByText("Playing on Living Room TV")).toBeTruthy();
+		expect(panel).toHaveTextContent("Playing on Living Room TV");
 		expect(airplayButton()).toBeNull();
 		expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
 
@@ -3883,10 +3929,8 @@ describe("AirPlay", () => {
 		act(() => fakeAirPlay.set({ state: tvState({ status: "paused" }) }));
 		fireEvent.click(within(panel).getByRole("button", { name: "Play" }));
 		expect(destination.play).toHaveBeenCalled();
-		fireEvent.change(within(panel).getByRole("slider", { name: "Position" }), {
-			target: { value: "900" },
-		});
-		expect(destination.seek).toHaveBeenCalledWith(900);
+		fireEvent.keyDown(within(panel).getByRole("slider", { name: "Seek" }), { key: "End" });
+		expect(destination.seek).toHaveBeenCalledWith(5400);
 		fireEvent.change(within(panel).getByRole("combobox", { name: "Subtitles" }), {
 			target: { value: "0" },
 		});
@@ -4047,16 +4091,17 @@ describe("AirPlay", () => {
 
 		destination.seek.mockRejectedValueOnce(new Error("gone"));
 		const panel = screen.getByRole("region", { name: "AirPlay" });
-		fireEvent.change(within(panel).getByRole("slider", { name: "Position" }), {
-			target: { value: "900" },
-		});
+		fireEvent.keyDown(within(panel).getByRole("slider", { name: "Seek" }), { key: "End" });
 		await flush();
 		expect(screen.getByText("Couldn't move the stream on the TV.")).toBeTruthy();
 	});
 
 	it("plays a paused TV from the keyboard", async () => {
 		await openItem(lanternKeeper());
-		const destination = { ...tv(), getState: vi.fn(() => tvState({ status: "paused" })) };
+		const destination = {
+			...tv(),
+			getState: vi.fn<() => PlaybackState>().mockReturnValue(tvState({ status: "paused" })),
+		};
 		act(() => fakeAirPlay.set({ destination, state: tvState({ status: "paused" }) }));
 		await press(" ");
 		expect(destination.play).toHaveBeenCalled();
@@ -4188,7 +4233,8 @@ describe("Google Cast", () => {
 		selectSubtitle: vi.fn(),
 		selectAudio: vi.fn(),
 		stop: vi.fn(async () => {}),
-		getState: vi.fn(() => castState()),
+		// One state until a test sets another, as a destination keeps it.
+		getState: vi.fn<() => PlaybackState>().mockReturnValue(castState()),
 		subscribe: vi.fn(() => () => {}),
 		receive: vi.fn(),
 		closedReason: vi.fn(() => null),
@@ -4364,19 +4410,16 @@ describe("Google Cast", () => {
 			})
 		);
 		const panel = screen.getByRole("region", { name: "Google Cast" });
-		expect(within(panel).getByText("Casting to Hotel TV")).toBeTruthy();
+		expect(panel).toHaveTextContent("Playing on Hotel TV");
 		expect(screen.queryByRole("button", { name: "Cast" })).toBeNull();
 		fireEvent.click(within(panel).getByRole("button", { name: "Play" }));
 		expect(destination.play).toHaveBeenCalled();
-		const slider = within(panel).getByRole("slider", { name: "Position" });
-		fireEvent.change(slider, { target: { value: "900" } });
-		expect(destination.seek).not.toHaveBeenCalled();
-		fireEvent.pointerUp(slider);
-		expect(destination.seek).toHaveBeenCalledWith(900);
-		fireEvent.change(within(panel).getByRole("slider", { name: "Volume" }), {
-			target: { value: "70" },
-		});
-		expect(destination.setVolume).toHaveBeenCalledWith(70);
+		fireEvent.keyDown(within(panel).getByRole("slider", { name: "Seek" }), { key: "End" });
+		expect(destination.seek).toHaveBeenCalledWith(5400);
+		const volume = within(panel).getByRole("slider", { name: "Volume" });
+		expect(volume).toHaveAttribute("aria-valuemax", "100");
+		fireEvent.keyDown(volume, { key: "End" });
+		expect(destination.setVolume).toHaveBeenCalledWith(100);
 	});
 
 	it("says it stopped once the receiver let go and nothing else came", async () => {
@@ -4388,12 +4431,12 @@ describe("Google Cast", () => {
 			})
 		);
 		const panel = screen.getByRole("region", { name: "Google Cast" });
-		expect(within(panel).getByText("Stopped on Hotel TV")).toBeTruthy();
+		expect(panel).toHaveTextContent("Stopped on Hotel TV");
 		expect(within(panel).queryByRole("button", { name: "Play" })).toBeNull();
 		expect(within(panel).getByRole("button", { name: "Play here from 10:00" })).toBeTruthy();
 		// Idle with nothing loaded yet is still casting.
 		act(() => fakeCast.set({ state: castState({ status: "idle", item: null }) }));
-		expect(within(panel).getByText("Casting to Hotel TV")).toBeTruthy();
+		expect(panel).toHaveTextContent("Playing on Hotel TV");
 	});
 
 	it("plays here again from where the receiver was", async () => {
@@ -4486,9 +4529,7 @@ describe("Google Cast", () => {
 		// Once the connection is going, the cast says so itself.
 		destination.getState.mockReturnValue(castState({ connection: "reconnecting" }));
 		destination.seek.mockRejectedValueOnce("unreachable");
-		const slider = within(panel).getByRole("slider", { name: "Position" });
-		fireEvent.change(slider, { target: { value: "900" } });
-		fireEvent.pointerUp(slider);
+		fireEvent.keyDown(within(panel).getByRole("slider", { name: "Seek" }), { key: "End" });
 		await flush();
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
@@ -4581,10 +4622,11 @@ describe("Google Cast", () => {
 			// It asks before converting, since this cast doesn't yet.
 			expect(send.mock.calls[0][2].confirm).toBeDefined();
 			expect(fakeMpv.actions.load).not.toHaveBeenCalled();
-			// The player moves to the episode once it's going to the receiver.
-			expect(screen.queryByText("Show S01E02 Second")).toBeNull();
+			// The player moves to the episode once it's going to the receiver,
+			// the last, so there's no next one.
+			expect(screen.getByRole("button", { name: "Next episode" })).toBeInTheDocument();
 			await act(() => send.mock.calls[0][2].stopLocal());
-			expect(screen.getByText("Show S01E02 Second")).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Next episode" })).toBeNull();
 			expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
 			await press("p");
 			expect(send).toHaveBeenLastCalledWith(
@@ -4705,7 +4747,7 @@ describe("Google Cast", () => {
 			// With nothing to do once it's under way, it moves the player on.
 			await act(() => send.mock.calls[0][2].stopLocal());
 			await act(() => loaded);
-			expect(screen.getByText(harborLights().name)).toBeInTheDocument();
+			expect(getMountedPlayer()?.getState().item?.ref).toBe(harborLights().id);
 		});
 
 		it("puts away a note about the cast once the next item goes to the receiver", async () => {
@@ -4840,5 +4882,118 @@ describe("Google Cast", () => {
 			await flush();
 			expect(answers).toEqual([false, false]);
 		});
+	});
+});
+
+describe("another Cinette device", () => {
+	/** A link to the Mac called `name`, playing a live channel. */
+	const linkTo = (phase: LinkPhase = { phase: "connected" }, name = "Den Mac") => {
+		const send = vi.fn<(command: RemoteCommand) => Promise<unknown>>(async () => undefined);
+		const destination = createCinetteDestination("dev1", name, send);
+		destination.setPhase(phase);
+		destination.receive(
+			{
+				epoch: "e1",
+				version: 1,
+				state: {
+					status: "playing",
+					item: { id: "live-7", name: "News", contentType: "live", group: "UK" },
+					position: 30,
+					duration: 0,
+					volume: 55,
+					subtitles: [],
+					subtitleId: null,
+					audio: [],
+					audioId: null,
+					capabilities: {
+						pause: true,
+						seek: false,
+						volume: true,
+						subtitles: false,
+						audioTracks: false,
+						resumeAt: false,
+					},
+					error: null,
+				},
+			},
+			performance.now()
+		);
+		const link: Link = {
+			id: 1,
+			deviceId: "dev1",
+			name,
+			phase,
+			code: null,
+			features: [],
+			destination,
+		};
+		return { link, send };
+	};
+
+	const panel = () => screen.queryByRole("region", { name: "Cinette device" });
+
+	afterEach(() => {
+		delete window.__CINETTE_TV__;
+	});
+
+	it("drives what the other device plays with the player's own controls and keys", async () => {
+		renderPlayer(null);
+		await flush();
+		const { link, send } = linkTo();
+		act(() => fakeRemote.set(link));
+		expect(panel()).toHaveTextContent("Playing on Den Mac");
+		expect(panel()).toHaveTextContent("News");
+		fireEvent.click(within(panel()!).getByRole("button", { name: "Pause" }));
+		expect(send).toHaveBeenLastCalledWith({ action: "pause", itemId: "live-7" });
+		await press(" ");
+		expect(send).toHaveBeenCalledTimes(2);
+		// A rename there shows here.
+		act(() => fakeRemote.set(linkTo(undefined, "Study Mac").link));
+		expect(panel()).toHaveTextContent("Playing on Study Mac");
+	});
+
+	it("shows while the link reconnects, and not before it connects", async () => {
+		renderPlayer(null);
+		await flush();
+		act(() => fakeRemote.set(linkTo({ phase: "connecting" }).link));
+		expect(panel()).toBeNull();
+		act(() => fakeRemote.set(linkTo({ phase: "reconnecting", attempt: 1 }).link));
+		expect(panel()).not.toBeNull();
+	});
+
+	it("isn't there on a TV, which controls no one", async () => {
+		env.os = "android";
+		window.__CINETTE_TV__ = true;
+		renderPlayer(null);
+		await flush();
+		act(() => fakeRemote.set(linkTo().link));
+		expect(panel()).toBeNull();
+	});
+
+	it("stops it there and goes back to its catalog", async () => {
+		renderPlayer(null);
+		await flush();
+		const { link, send } = linkTo();
+		act(() => fakeRemote.set(link));
+		fireEvent.click(within(panel()!).getByRole("button", { name: "Stop" }));
+		await flush();
+		expect(send).toHaveBeenLastCalledWith({ action: "stop" });
+		expect(screen.getByText("Channel list")).toBeTruthy();
+	});
+
+	it("says when the other device can't be reached, and stays", async () => {
+		renderPlayer(null);
+		await flush();
+		const { link, send } = linkTo();
+		send.mockRejectedValue("unreachable");
+		act(() => fakeRemote.set(link));
+		fireEvent.click(within(panel()!).getByRole("button", { name: "Pause" }));
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		fireEvent.click(within(panel()!).getByRole("button", { name: "Stop" }));
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
+		expect(screen.queryByText("Channel list")).toBeNull();
 	});
 });

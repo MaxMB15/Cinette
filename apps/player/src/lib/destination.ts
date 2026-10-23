@@ -8,7 +8,7 @@
  */
 
 import type { PlayRoute, RouteDecision } from "@/lib/route";
-import type { Channel, PolledMpvState } from "@/lib/types";
+import type { Channel, PlayerState, PolledMpvState } from "@/lib/types";
 
 export type DestinationKind = "local" | "cast" | "airplay" | "cinette";
 
@@ -79,6 +79,68 @@ export const positionNow = (state: PlaybackState, now: number): number => {
 	if (state.status !== "playing") return state.position;
 	const moved = state.position + Math.max(0, now - state.positionAt) / 1000;
 	return state.duration > 0 ? Math.min(moved, state.duration) : moved;
+};
+
+/** What the player's controls show for a destination, and which of them
+ *  it has. */
+export interface DestinationControls {
+	/** The state the controls show, with the position as of `now`. */
+	player: PlayerState;
+	/** It stopped: lost, failed, at the end, or idle with its item. Only the
+	 *  ways out are left then. */
+	over: boolean;
+	pause: boolean;
+	/** A seek bar and skips: it can seek and the item has a length. */
+	seek: boolean;
+	volume: boolean;
+}
+
+/** Maps a destination's state and capabilities to the player's controls at
+ *  `now`. A control it can't carry out isn't offered. */
+export const destinationControls = (
+	state: PlaybackState,
+	capabilities: PlaybackCapabilities,
+	now: number
+): DestinationControls => {
+	const over =
+		state.connection === "lost" ||
+		state.error !== null ||
+		state.status === "ended" ||
+		(state.status === "idle" && state.item !== null);
+	const seek = !over && capabilities.seek && state.duration > 0;
+	return {
+		player: {
+			isPlaying: state.status === "playing" || state.status === "buffering",
+			isPaused: state.status === "paused",
+			currentUrl: state.item?.ref ?? null,
+			volume: state.volume,
+			position: positionNow(state, now),
+			// No length, no seek bar.
+			duration: seek ? state.duration : 0,
+		},
+		over,
+		pause: !over && capabilities.pause,
+		seek,
+		volume: !over && capabilities.volume === "absolute",
+	};
+};
+
+/** What a destination's view says about where playback stands, or null
+ *  while it plays. `failure` words an error's message where the destination
+ *  has its own words for it. */
+export const destinationStatus = (
+	state: PlaybackState,
+	name: string,
+	failure: (message: string) => string = (message) => message
+): string | null => {
+	if (state.connection === "lost") return `Lost the connection to ${name}.`;
+	if (state.error)
+		return state.error.message ? failure(state.error.message) : `It stopped on ${name}.`;
+	if (state.connection === "reconnecting") return "Reconnecting…";
+	if (state.status === "opening") return `Starting on ${name}…`;
+	if (state.status === "buffering") return "Buffering…";
+	if (state.status === "ended") return "Finished.";
+	return null;
 };
 
 /** A method a destination doesn't support rejects with this. */

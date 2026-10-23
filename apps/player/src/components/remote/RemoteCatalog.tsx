@@ -75,7 +75,14 @@ export const groupName = (group: string): string => group || "No group";
  * device, while it's the one that plays. Browsing never touches what plays
  * there; choosing an item plays it there.
  */
-export const RemoteCatalog = ({ link }: { link: Link }) => {
+export const RemoteCatalog = ({
+	link,
+	onPlayed = () => {},
+}: {
+	link: Link;
+	/** Called once the other device took an item to play. */
+	onPlayed?: () => void;
+}) => {
 	const [type, setType] = useState<ContentType>("live");
 	const [place, setPlace] = useState<Place>({ kind: "groups" });
 	const [typed, setTyped] = useState("");
@@ -150,7 +157,7 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 		setMessage(null);
 		link.destination
 			.load({ kind: "remote", itemId: item.id, title: item.name })
-			.catch(() => setMessage(`${link.name} couldn't play ${item.name}.`));
+			.then(onPlayed, () => setMessage(`${link.name} couldn't play ${item.name}.`));
 	};
 
 	const choose = (item: CatalogItem) => {

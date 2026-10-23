@@ -70,7 +70,8 @@ describe("RemoteCatalog", () => {
 				next: null,
 			},
 		});
-		render(<RemoteCatalog link={link()} />);
+		const onPlayed = vi.fn();
+		render(<RemoteCatalog link={link()} onPlayed={onPlayed} />);
 		expect(screen.getByText("Loading…")).toBeInTheDocument();
 		expect(screen.getByRole("heading")).toHaveTextContent("On Living Room");
 		fireEvent.click(await screen.findByRole("button", { name: "UK" }));
@@ -81,6 +82,8 @@ describe("RemoteCatalog", () => {
 		await waitFor(() =>
 			expect(send).toHaveBeenCalledWith({ action: "load", itemId: "live-1" })
 		);
+		// Once it took it, the player page shows its controls.
+		await waitFor(() => expect(onPlayed).toHaveBeenCalledOnce());
 		fireEvent.click(screen.getByRole("button", { name: "Back" }));
 		expect(await screen.findByRole("button", { name: "News" })).toBeInTheDocument();
 	});
@@ -348,12 +351,14 @@ describe("RemoteCatalog", () => {
 			[groups("live")]: { items: [item("UK", "UK")], next: null },
 			[groupItems("UK")]: { items: [item("live-1", "BBC One")], next: null },
 		});
-		render(<RemoteCatalog link={link()} />);
+		const onPlayed = vi.fn();
+		render(<RemoteCatalog link={link()} onPlayed={onPlayed} />);
 		fireEvent.click(await screen.findByRole("button", { name: "UK" }));
 		fireEvent.click(await screen.findByRole("button", { name: /BBC One/ }));
 		expect(await screen.findByRole("alert")).toHaveTextContent(
 			"Living Room couldn't play BBC One."
 		);
+		expect(onPlayed, "it stays on the catalog").not.toHaveBeenCalled();
 	});
 
 	it("shows a logo where there is one", async () => {

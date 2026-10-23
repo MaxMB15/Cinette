@@ -19,6 +19,7 @@ import { useMpv } from "@/hooks/useMpv";
 import { useLocalPlayback } from "@/hooks/useLocalPlayback";
 import { useAirPlay } from "@/hooks/useAirPlay";
 import { useCast } from "@/hooks/useCast";
+import { useRemoteControl } from "@/hooks/useRemoteControl";
 import {
 	airplayConvertWarning,
 	airplayBlockedMessage,
@@ -28,10 +29,9 @@ import {
 	airplayProgress,
 } from "@/lib/airplay";
 import { AirPlayButton } from "@/components/player/AirPlayButton";
-import { AirPlayPanel } from "@/components/player/AirPlayPanel";
 import { CastButton } from "@/components/player/CastButton";
-import { CastPanel } from "@/components/player/CastPanel";
-import { castControlMessage, showsCastButton } from "@/lib/cast";
+import { DestinationView } from "@/components/player/DestinationView";
+import { castControlMessage, castFailureMessage, showsCastButton } from "@/lib/cast";
 import { convertWarning } from "@/lib/device-picker";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -108,9 +108,9 @@ import { usePlatform } from "@/hooks/usePlatform";
 import { usePlayerPref } from "@/hooks/usePlayerPref";
 import { useSkipSegments } from "@/hooks/useSkipSegments";
 import { skipButtonShows, useSegmentSkipping } from "@/hooks/useSegmentSkipping";
-import { getPlatform, isMobilePlatform } from "@/lib/platform";
+import { controlsOthers, getPlatform, isMobilePlatform } from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
-import { ChevronLeft, X } from "lucide-react";
+import { Airplay, Cast, ChevronLeft, MonitorSmartphone, X } from "lucide-react";
 
 /** How long a note about AirPlay or Cast stays up. */
 const NOTICE_MS = 6000;
@@ -511,7 +511,8 @@ export const PlayerView = () => {
 		return () => clearTimeout(timer);
 	}, [notice]);
 	const castNotice = (text: string) => setNotice({ text, cast: true });
-	const airplayNotice = (text: string) => setNotice({ text, cast: false });
+	// AirPlay's, and another Cinette device's.
+	const deviceNotice = (text: string) => setNotice({ text, cast: false });
 	// Google Cast from a computer.
 	const cast = useCast(platform === "macos" || platform === "linux", castNotice);
 	const castRef = useLatestRef(cast);
@@ -633,7 +634,12 @@ export const PlayerView = () => {
 	const mac = platform === "macos";
 	const airplay = useAirPlay(platform === "ios" || mac, mac);
 	// The receiver the player's controls drive instead of mpv, while one plays.
-	const tv: PlaybackDestination | null = airplay.destination ?? cast.destination;
+	// Another Cinette device this one controls, where it can control others.
+	const { link } = useRemoteControl();
+	const linked = link?.phase.phase === "connected" || link?.phase.phase === "reconnecting";
+	const remoteLink = controlsOthers() && linked ? link : null;
+	const tv: PlaybackDestination | null =
+		airplay.destination ?? cast.destination ?? remoteLink?.destination ?? null;
 	const tvRef = useLatestRef(tv);
 	// Once a TV is in reach, the panel is asked ahead what a send would wait
 	// on, so the button opens the picker sooner.
@@ -663,7 +669,7 @@ export const PlayerView = () => {
 		if (!activeChannel) return;
 		await playback
 			.load({ kind: "local", channel: activeChannel }, { startAt: airplayFrom.current })
-			.catch(() => airplayNotice("Couldn't play it on this device."));
+			.catch(() => deviceNotice("Couldn't play it on this device."));
 	});
 	useEffect(() => {
 		if (airplay.notPicked) void playHereAgain.current();
@@ -1524,12 +1530,12 @@ export const PlayerView = () => {
 		});
 		if (result.sent || result.why === "cancelled") return null;
 		if (result.why === "blocked") {
-			airplayNotice(airplayBlockedMessage(result.decision));
+			deviceNotice(airplayBlockedMessage(result.decision));
 			return null;
 		}
 		console.warn("[VideoPlayer] AirPlay failed:", result.error);
 		const message = airplayFailureMessage(result.error);
-		airplayNotice(result.stopped ? `${message} Nothing is playing.` : message);
+		deviceNotice(result.stopped ? `${message} Nothing is playing.` : message);
 		return null;
 	};
 	/** Casts `channel` to `receiverId`, from where it plays here for a movie
@@ -1565,76 +1571,89 @@ export const PlayerView = () => {
 		if (!castTv || castTv.getState().connection !== "connected") return;
 		castNotice(castControlMessage(castTv.name, error));
 	};
-	const castPanel =
-		castTv && cast.state ? (
-			<CastPanel
-				name={castTv.name}
-				state={cast.state}
-				capabilities={castTv.capabilities}
-				onPlay={() => void castTv.play().catch(castControlFailed)}
-				onPause={() => void castTv.pause().catch(castControlFailed)}
-				onSeek={(position) => void castTv.seek(position).catch(castControlFailed)}
-				onVolume={(volume) => void castTv.setVolume(volume).catch(castControlFailed)}
-				onPrevEpisode={prevEpisode ? () => playEpisode(prevEpisode) : undefined}
-				onNextEpisode={nextEpisode ? () => playEpisode(nextEpisode) : undefined}
-				onPlayHere={async (position) => {
-					flushProgress();
-					// The receiver lets go of the stream before mpv opens it, since
-					// many accounts allow one connection at a time.
-					await cast.stop().catch(() => {});
-					// Stryker disable next-line ConditionalExpression: The panel only shows after a cast, which needs a channel, and nothing clears the channel while it shows.
-					if (!activeChannel) return;
-					await playback
-						.load(
-							{ kind: "local", channel: activeChannel },
-							{ startAt: position > 0 ? position : undefined }
-						)
-						.catch(() => castNotice("Couldn't play it on this device."));
-				}}
-				onStop={async () => {
-					flushProgress();
-					await cast.stop().catch(() => {});
-					handleStop();
-				}}
-			/>
-		) : null;
-
 	const airplayTv = airplay.destination;
-	const airplayPanel = airplayTv ? (
-		<AirPlayPanel
+	/** Plays the item here again after a TV let it go, from `position`. */
+	const playHereFrom = async (position: number, failed: (message: string) => void) => {
+		// Stryker disable next-line ConditionalExpression: The view only shows after a send, which needs a channel, and nothing clears the channel while it shows.
+		if (!activeChannel) return;
+		await playback
+			.load(
+				{ kind: "local", channel: activeChannel },
+				{ startAt: position > 0 ? position : undefined }
+			)
+			.catch(() => failed("Couldn't play it on this device."));
+	};
+	const shared = { touchLayout: touchDevice, skip };
+	const destinationView = airplayTv ? (
+		<DestinationView
+			{...shared}
+			destination={airplayTv}
 			name={airplayTv.name}
-			// The hook's state is set exactly when its destination is.
-			state={airplay.state ?? airplayTv.getState()}
-			capabilities={airplayTv.capabilities}
-			onPlay={() => void airplayTv.play()}
-			onPause={() => void airplayTv.pause()}
-			onSeek={(position) =>
-				airplayTv
-					.seek(position)
-					.catch((error: unknown) => airplayNotice(airplaySeekMessage(error)))
-			}
-			onSubtitle={(id) => void airplayTv.selectSubtitle(id)}
-			onAudio={(id) => void airplayTv.selectAudio(id)}
+			label="AirPlay"
+			icon={Airplay}
+			// Only a seek says why it didn't work; the rest shows on the TV.
+			onFailed={(error, seeking) => {
+				if (seeking) deviceNotice(airplaySeekMessage(error));
+			}}
 			onPlayHere={async (position, anchor) => {
 				flushProgress();
 				// AirPlay lets go of the stream before mpv opens it, since many
 				// accounts allow one connection at a time.
 				await airplay.returnHere(anchor);
-				// Stryker disable next-line ConditionalExpression: The panel only shows after a send, which needs a channel, and nothing clears the channel while it shows.
-				if (!activeChannel) return;
-				await playback
-					.load(
-						{ kind: "local", channel: activeChannel },
-						{ startAt: position > 0 ? position : undefined }
-					)
-					.catch(() => airplayNotice("Couldn't play it on this device."));
+				await playHereFrom(position, deviceNotice);
 			}}
+			// Play here opens the system picker on an iPhone. A Mac's sound never moves.
+			playHereNote={
+				mac
+					? undefined
+					: "Play here opens the AirPlay list. Choose this iPhone so the sound comes back too."
+			}
 			onStop={async () => {
 				flushProgress();
 				await airplay.stop();
 				handleStop();
 			}}
-			picksHere={!mac}
+		/>
+	) : castTv && cast.state ? (
+		<DestinationView
+			{...shared}
+			destination={castTv}
+			name={castTv.name}
+			label="Google Cast"
+			icon={Cast}
+			onFailed={castControlFailed}
+			failure={(message) => castFailureMessage(castTv.name, message)}
+			onPrevEpisode={prevEpisode ? () => playEpisode(prevEpisode) : undefined}
+			onNextEpisode={nextEpisode ? () => playEpisode(nextEpisode) : undefined}
+			onPlayHere={async (position) => {
+				flushProgress();
+				// The receiver lets go of the stream before mpv opens it, since
+				// many accounts allow one connection at a time.
+				await cast.stop().catch(() => {});
+				await playHereFrom(position, castNotice);
+			}}
+			onStop={async () => {
+				flushProgress();
+				await cast.stop().catch(() => {});
+				handleStop();
+			}}
+		/>
+	) : remoteLink ? (
+		<DestinationView
+			{...shared}
+			destination={remoteLink.destination}
+			// The link's, which follows a rename.
+			name={remoteLink.name}
+			label="Cinette device"
+			icon={MonitorSmartphone}
+			onFailed={() => deviceNotice(`Couldn't reach ${remoteLink.name}.`)}
+			// It stops there, and this page goes back to that device's catalog.
+			onStop={() =>
+				void remoteLink.destination.stop().then(
+					() => navigate("/"),
+					() => deviceNotice(`Couldn't reach ${remoteLink.name}.`)
+				)
+			}
 		/>
 	) : null;
 
@@ -1715,6 +1734,8 @@ export const PlayerView = () => {
 				/>
 			)}
 
+			{destinationView}
+
 			{(activeChannelName || showBack) && showControls && (
 				<div className="absolute top-0 left-0 right-0 flex items-center gap-1 bg-linear-to-b from-black/60 to-transparent p-4 pt-[calc(1rem+env(safe-area-inset-top))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))]">
 					{showBack && (
@@ -1730,7 +1751,7 @@ export const PlayerView = () => {
 							<ChevronLeft className="h-6 w-6" />
 						</button>
 					)}
-					{activeChannelName && (
+					{activeChannelName && !tv && (
 						<p className="min-w-0 truncate text-white text-sm font-medium">
 							{activeChannelName}
 						</p>
@@ -1757,8 +1778,6 @@ export const PlayerView = () => {
 				/>
 			)}
 
-			{airplayPanel}
-			{castPanel}
 			{castConfirm && (
 				<Dialog
 					onClose={() => {
