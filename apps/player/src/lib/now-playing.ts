@@ -18,6 +18,7 @@ import {
 	saveProgress,
 	type PlaybackProgress,
 } from "./playback";
+import { episodeNeighbors } from "./episodes";
 import type { RouteDecision } from "./route";
 import type { Channel } from "./types";
 
@@ -112,6 +113,18 @@ export interface NowPlaying {
 	flush(): Promise<void> | undefined;
 	/** Forgets why the last TV ended. */
 	dismiss(): void;
+	/** What the TV goes on to once it reaches the end of an episode. */
+	setUpNext(upNext: UpNext): void;
+}
+
+export interface UpNext {
+	/** The series' episodes, sorted, or none for anything else. */
+	episodes: Channel[];
+	/** Whether the next episode plays by itself. */
+	autoplay: boolean;
+	/** Plays an episode through the player page while it's open. With it
+	 *  closed, the store sends the episode to the TV itself. */
+	play: ((episode: Channel) => void) | null;
 }
 
 export const createNowPlaying = ({
@@ -126,21 +139,55 @@ export const createNowPlaying = ({
 	let progress: PlaybackProgress = EMPTY_PROGRESS;
 	let ends: SendOptions["ends"];
 	let unfollow = () => {};
+	// Stryker disable next-line BooleanLiteral, ArrayDeclaration: Until the page calls setUpNext, which replaces the whole object, nothing is up next: with no episodes there's no next one, and with autoplay off the list goes unused.
+	let upNext: UpNext = { episodes: [], autoplay: false, play: null };
 
 	const publish = (next: Partial<NowPlayingState>) => {
 		state = { ...state, ...next };
 		for (const listener of listeners) listener();
 	};
 
-	/** Ends a TV that's over, and keeps the resume point of `channel`, once
-	 *  it got to where it was started from. */
-	const follow = (channel: Channel) => (s: PlaybackState) => {
-		const why = ends?.(s) ?? null;
-		if (why !== null) {
-			void stop().catch(() => {});
-			publish({ ended: why });
-			return;
-		}
+	/** Plays the episode after `channel` on `destination`, where there's one
+	 *  and autoplay is on. */
+	const goOn = (destination: PlaybackDestination, channel: Channel) => {
+		const { episodes, autoplay, play } = upNext;
+		const { next } = episodeNeighbors(
+			episodes,
+			episodes.findIndex((e) => e.id === channel.id)
+		);
+		if (!autoplay || !next) return;
+		if (play) return play(next);
+		// Nothing plays here, and no one is there to answer a question, so a
+		// TV that would start converting only now doesn't.
+		void send(destination, next, {
+			stopLocal: async () => {},
+			// Stryker disable next-line ArrowFunction: An answer of undefined declines as false does.
+			confirm: destination.converted?.() ? undefined : async () => false,
+		});
+	};
+
+	/** Ends a TV that's over, keeps where `channel` got to, and goes on to
+	 *  the next episode once at its end. */
+	const follow = (destination: PlaybackDestination, channel: Channel) => {
+		let wentOn = false;
+		return (s: PlaybackState) => {
+			const why = ends?.(s) ?? null;
+			if (why !== null) {
+				void stop().catch(() => {});
+				publish({ ended: why });
+				return;
+			}
+			keep(channel, s);
+			if (s.status === "ended" && s.item?.ref === channel.id && !wentOn) {
+				wentOn = true;
+				goOn(destination, channel);
+			}
+		};
+	};
+
+	/** Keeps the resume point of `channel` from `s`, once it got to where it
+	 *  was started from. */
+	const keep = (channel: Channel, s: PlaybackState) => {
 		const p = progress;
 		if (!p.key || s.item?.ref !== channel.id) return;
 		// Stryker disable next-line ConditionalExpression: With no start to wait for, null - 5 is below any position, so the check passes either way.
@@ -160,7 +207,7 @@ export const createNowPlaying = ({
 		progress = progressFor(channel, opts.startAt);
 		ends = opts.ends ?? (state.destination === destination ? ends : undefined);
 		publish({ destination, channel, ended: null });
-		unfollow = destination.subscribe(follow(channel));
+		unfollow = destination.subscribe(follow(destination, channel));
 	};
 
 	const stop = async () => {
@@ -264,6 +311,9 @@ export const createNowPlaying = ({
 		stop,
 		flush: () => saveProgress(progress),
 		dismiss: () => publish({ ended: null }),
+		setUpNext: (next) => {
+			upNext = next;
+		},
 	};
 };
 

@@ -3,12 +3,19 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlaybackDestination, PlaybackState } from "./destination";
-import { createNowPlaying, RELEASE_RETRY_MS, sentMessage, type SendOptions } from "./now-playing";
+import {
+	createNowPlaying,
+	RELEASE_RETRY_MS,
+	sentMessage,
+	type SendOptions,
+	type UpNext,
+} from "./now-playing";
 import * as tauri from "./tauri";
 import type { RouteDecision } from "./route";
 import { deferred } from "@/test/deferred";
 import { fakeDestination, playbackState } from "@/test/destination-fixtures";
-import { makeMovie } from "@/test/detail-fixtures";
+import { makeEpisode, makeMovie } from "@/test/detail-fixtures";
+import type { Channel } from "./types";
 
 const direct: RouteDecision = { ok: true, route: { via: "direct", format: 0 } };
 const converted: RouteDecision = {
@@ -549,6 +556,105 @@ describe("createNowPlaying", () => {
 			const { store, changes } = setUp();
 			await store.stop();
 			expect(changes).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("the next episode", () => {
+		const ep1 = makeEpisode(1, 1, "Pilot");
+		const ep2 = makeEpisode(1, 2, "Second");
+		/** The TV's state at the end of `ep`. */
+		const ended = (ep: Channel) =>
+			playbackState({
+				status: "ended",
+				item: { title: ep.name, contentType: "series", ref: ep.id },
+			});
+		const upNext = (more: Partial<UpNext> = {}): UpNext => ({
+			episodes: [ep1, ep2],
+			autoplay: true,
+			play: null,
+			...more,
+		});
+		/** Lets a send the store started run as far as it can. */
+		const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+		it("plays through the player page while it's open, once", async () => {
+			const { store } = setUp();
+			const target = tv();
+			const play = vi.fn();
+			store.setUpNext(upNext({ play }));
+			await store.send(target, ep1, opts());
+			// Still playing it, or at an end that names no item, isn't its end.
+			target.set(playbackState({ item: ended(ep1).item }));
+			target.set(playbackState({ status: "ended", item: null }));
+			expect(play).not.toHaveBeenCalled();
+			target.set(ended(ep1));
+			target.set(ended(ep1));
+			expect(play).toHaveBeenCalledTimes(1);
+			expect(play).toHaveBeenCalledWith(ep2);
+			expect(target.load).toHaveBeenCalledTimes(1);
+		});
+
+		it("goes to the TV by itself with the page closed", async () => {
+			const { store } = setUp();
+			const target = tv();
+			store.setUpNext(upNext());
+			await store.send(target, ep1, opts());
+			target.set(ended(ep1));
+			await vi.waitFor(() => expect(target.load).toHaveBeenCalledTimes(2));
+			expect(target.load).toHaveBeenLastCalledWith(
+				{ kind: "local", channel: ep2 },
+				expect.objectContaining({ startAt: undefined })
+			);
+			expect(store.getState()).toMatchObject({ destination: target, channel: ep2 });
+		});
+
+		it("doesn't start converting with no one there to ask", async () => {
+			const { store } = setUp();
+			const target = tv("Hotel TV", converted);
+			store.setUpNext(upNext());
+			await store.send(target, ep1, opts({ decision: direct }));
+			target.set(ended(ep1));
+			await settle();
+			expect(target.route).toHaveBeenCalledTimes(1);
+			expect(target.load).toHaveBeenCalledTimes(1);
+			expect(store.getState().channel).toBe(ep1);
+		});
+
+		it("goes on converting on a TV that already converts", async () => {
+			const { store } = setUp();
+			const target = { ...tv("Hotel TV", converted), converted: () => true };
+			store.setUpNext(upNext());
+			await store.send(target, ep1, opts({ decision: converted }));
+			target.set(ended(ep1));
+			await vi.waitFor(() => expect(target.load).toHaveBeenCalledTimes(2));
+			expect(store.getState().channel).toBe(ep2);
+		});
+
+		it("does nothing at the end before the page said what's up next", async () => {
+			const { store } = setUp();
+			const target = tv();
+			await store.send(target, ep1, opts());
+			expect(() => target.set(ended(ep1))).not.toThrow();
+			await settle();
+			expect(target.load).toHaveBeenCalledTimes(1);
+			expect(store.getState().channel).toBe(ep1);
+		});
+
+		it("does nothing with autoplay off, after the last episode, or at another item's end", async () => {
+			const { store } = setUp();
+			const target = tv();
+			const play = vi.fn();
+			store.setUpNext(upNext({ autoplay: false, play }));
+			await store.send(target, ep1, opts());
+			target.set(ended(ep1));
+			store.setUpNext(upNext({ play }));
+			await store.send(target, ep2, opts());
+			target.set(ended(ep2));
+			await store.send(target, ep1, opts());
+			target.set(ended(ep2));
+			await settle();
+			expect(play).not.toHaveBeenCalled();
+			expect(target.load).toHaveBeenCalledTimes(3);
 		});
 	});
 

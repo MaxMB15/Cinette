@@ -1,8 +1,26 @@
 name: Install Linux build dependencies
 description: >-
-  Install the apt packages the desktop app needs to build on Linux. The runner's
-  Ubuntu mirror sometimes serves the ~160 MB download at ~100 kB/s, which added
-  15-25 minutes to some builds, so the .deb files are cached between runs.
+  Install apt packages, by default the ones the desktop app needs to build on
+  Linux. The runner's Ubuntu mirror sometimes serves the ~160 MB download at
+  30-100 kB/s, which added from 15 minutes to over an hour to some jobs, so the
+  .deb files are cached between runs.
+
+inputs:
+  packages:
+    description: The apt packages to install, separated by spaces.
+    default: >-
+      libgtk-3-dev libwebkit2gtk-4.1-dev
+      libjavascriptcoregtk-4.1-dev libsoup-3.0-dev
+      libayatana-appindicator3-dev
+      libegl-dev libssl-dev pkg-config librsvg2-dev
+      patchelf rpm
+      meson ninja-build
+      libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev
+      libswresample-dev
+      libass-dev libpulse-dev libasound2-dev
+      libplacebo-dev libluajit-5.1-dev
+      libx11-dev libxss-dev libxext-dev libxpresent-dev libxrandr-dev
+      libwayland-dev
 
 runs:
   using: composite
@@ -10,31 +28,24 @@ runs:
     - name: Resolve apt packages
       id: apt
       shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
       run: |
         set -euo pipefail
-        packages=(
-          libgtk-3-dev libwebkit2gtk-4.1-dev
-          libjavascriptcoregtk-4.1-dev libsoup-3.0-dev
-          libayatana-appindicator3-dev
-          libegl-dev libssl-dev pkg-config librsvg2-dev
-          patchelf rpm
-          meson ninja-build
-          libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev
-          libswresample-dev
-          libass-dev libpulse-dev libasound2-dev
-          libplacebo-dev libluajit-5.1-dev
-          libx11-dev libxss-dev libxext-dev libxpresent-dev libxrandr-dev
-          libwayland-dev
-        )
+        read -ra packages <<< "$PACKAGES"
         sudo apt-get update
         # The cache key is the list of .debs this install would download, so it
-        # changes whenever Ubuntu publishes a new version of any of them.
+        # changes whenever Ubuntu publishes a new version of any of them. Each
+        # list of packages has its own prefix, so a miss restores the same
+        # list's older .debs first, and only then another list's.
         sudo apt-get install --print-uris -qq "${packages[@]}" | cut -d' ' -f2 | sort > "$RUNNER_TEMP/apt-debs.txt"
         echo "Downloads needed: $(wc -l < "$RUNNER_TEMP/apt-debs.txt") packages"
+        list=$(printf '%s\n' "${packages[@]}" | sort | sha256sum | cut -c1-8)
         {
           echo "packages=${packages[*]}"
-          echo "prefix=apt-$ImageOS-"
-          echo "key=apt-$ImageOS-$(sha256sum "$RUNNER_TEMP/apt-debs.txt" | cut -c1-16)"
+          echo "any=apt-$ImageOS-"
+          echo "prefix=apt-$ImageOS-$list-"
+          echo "key=apt-$ImageOS-$list-$(sha256sum "$RUNNER_TEMP/apt-debs.txt" | cut -c1-16)"
         } >> "$GITHUB_OUTPUT"
 
     - name: Restore cached .deb files
@@ -43,7 +54,9 @@ runs:
       with:
         path: ~/apt-archives
         key: ${{ steps.apt.outputs.key }}
-        restore-keys: ${{ steps.apt.outputs.prefix }}
+        restore-keys: |
+          ${{ steps.apt.outputs.prefix }}
+          ${{ steps.apt.outputs.any }}
 
     - name: Install apt packages
       shell: bash
