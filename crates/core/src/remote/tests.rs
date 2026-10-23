@@ -17,7 +17,7 @@ use super::message::{
 };
 use super::sessions::RESUME_GRACE;
 use super::settings::{ControlMode, RemoteSettings};
-use super::target::{Action, ConsentPrompt, SessionInfo, Target, IDLE_TIMEOUT};
+use super::target::{Action, BlockedDevice, ConsentPrompt, SessionInfo, Target, IDLE_TIMEOUT};
 use super::ConnId;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -619,21 +619,86 @@ fn a_controller_that_hangs_up_takes_its_dialog_away() {
     assert_eq!(net.prompt(), None);
 }
 
+fn blocked_list(net: &Net) -> Option<&Vec<BlockedDevice>> {
+    net.log.iter().rev().find_map(|a| match a {
+        Action::BlockedChanged(list) => Some(list),
+        _ => None,
+    })
+}
+
 #[test]
-fn a_denied_device_is_refused_without_a_dialog_for_a_minute() {
+fn a_denied_device_is_blocked_until_the_user_unblocks_it() {
     let mut net = Net::new(RemoteSettings::default());
     let key = DeviceKey::generate();
     net.connect_with(key.clone(), "Neighbor", None);
     net.answer(Answer::Deny);
+    let blocked = vec![BlockedDevice {
+        device_id: key.device_id(),
+        name: "Neighbor".into(),
+    }];
+    assert_eq!(blocked_list(&net), Some(&blocked));
+    assert_eq!(net.target.blocked(), blocked);
+    // After a denial's minute, and under Always allow too.
+    net.advance(DENIAL_COOLDOWN);
+    net.set_mode(ControlMode::Always);
     let again = net.connect_with(key.clone(), "Neighbor", None);
     assert_eq!(
         net.clients[again].closed_reason(),
         Some(CloseReason::Denied)
     );
     assert_eq!(net.prompt(), None);
-    net.advance(DENIAL_COOLDOWN);
+
+    // Unblocking something not blocked changes nothing.
+    assert!(net
+        .target
+        .unblock(&DeviceKey::generate().device_id())
+        .is_empty());
+    let actions = net.target.unblock(&key.device_id());
+    assert_eq!(actions, [Action::BlockedChanged(Vec::new())]);
+    assert!(net.target.blocked().is_empty());
+    net.set_mode(ControlMode::Ask);
     net.connect_with(key, "Neighbor", None);
     assert!(net.prompt().is_some());
+}
+
+#[test]
+fn unblocking_lets_a_device_ask_within_its_denials_minute() {
+    let mut net = Net::new(RemoteSettings::default());
+    let key = DeviceKey::generate();
+    net.connect_with(key.clone(), "Neighbor", None);
+    net.answer(Answer::Deny);
+    net.advance(super::consent::DENIAL_BACKOFF);
+    let actions = net.target.unblock(&key.device_id());
+    net.handle(actions);
+    net.connect_with(key, "Neighbor", None);
+    assert_eq!(net.prompt().unwrap().name, "Neighbor");
+}
+
+#[test]
+fn a_blocked_list_saved_earlier_refuses_at_once() {
+    let mut net = Net::new(RemoteSettings::default());
+    let key = DeviceKey::generate();
+    net.target.block(vec![BlockedDevice {
+        device_id: key.device_id(),
+        name: "Neighbor".into(),
+    }]);
+    let phone = net.connect_with(key, "Neighbor", None);
+    assert_eq!(
+        net.clients[phone].closed_reason(),
+        Some(CloseReason::Denied)
+    );
+    assert_eq!(net.prompt(), None);
+}
+
+#[test]
+fn a_dismissed_dialog_refuses_only_that_request() {
+    let mut net = Net::new(RemoteSettings::default());
+    let key = DeviceKey::generate();
+    net.connect_with(key.clone(), "Phone", None);
+    net.answer(Answer::Dismiss);
+    assert_eq!(blocked_list(&net), None);
+    net.connect_with(key, "Phone", None);
+    assert_eq!(net.prompt().unwrap().name, "Phone");
 }
 
 #[test]

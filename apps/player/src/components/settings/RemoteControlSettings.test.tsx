@@ -13,6 +13,7 @@ vi.mock("@/lib/tauri", () => ({
 	remoteDisconnect: vi.fn(() => Promise.resolve()),
 	remoteOpen: vi.fn(() => Promise.resolve()),
 	remoteLocalNetworkDenied: vi.fn(() => Promise.resolve(false)),
+	remoteUnblock: vi.fn(() => Promise.resolve()),
 }));
 
 const limit = vi.hoisted(() => ({ text: null as string | null }));
@@ -21,8 +22,11 @@ vi.mock("@/lib/remote-devices", async (importOriginal) => ({
 	discoveryLimit: () => limit.text,
 }));
 
-const sessions = vi.hoisted(() => ({ list: [] as unknown[] }));
-vi.mock("@/hooks/useRemoteTarget", () => ({ useRemoteSessions: () => sessions.list }));
+const sessions = vi.hoisted(() => ({ list: [] as unknown[], blocked: [] as unknown[] }));
+vi.mock("@/hooks/useRemoteTarget", () => ({
+	useRemoteSessions: () => sessions.list,
+	useRemoteBlocked: () => sessions.blocked,
+}));
 
 import {
 	remoteDisconnect,
@@ -31,6 +35,7 @@ import {
 	remoteOpen,
 	remoteResetIdentity,
 	remoteSetSettings,
+	remoteUnblock,
 } from "@/lib/tauri";
 import { LOCAL_NETWORK_DENIED } from "@/lib/remote-devices";
 import {
@@ -58,6 +63,7 @@ const shown = async (settings: RemoteSettings = defaults) => {
 beforeEach(() => {
 	vi.clearAllMocks();
 	sessions.list = [];
+	sessions.blocked = [];
 	limit.text = null;
 	vi.mocked(remoteSetSettings).mockImplementation(async (s) => ({
 		...defaults,
@@ -508,6 +514,37 @@ describe("RemoteControlSettings", () => {
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Disconnect Laptop" }));
 		expect(remoteDisconnect).toHaveBeenCalledWith("s2");
+	});
+
+	it("says how a device gets blocked while none is", async () => {
+		await shown();
+		expect(screen.getByText(/No device is blocked/)).toHaveTextContent(
+			"No device is blocked. Denying a request to control this device blocks the device that asked."
+		);
+	});
+
+	it("lists the blocked devices by name and id, each with Unblock", async () => {
+		sessions.blocked = [
+			{ deviceId: "d1abcdefgh", name: "Neighbor" },
+			{ deviceId: "d2abcdefgh", name: "Phone" },
+		];
+		await shown();
+		expect(screen.queryByText(/No device is blocked/)).toBeNull();
+		expect(screen.getByText("Neighbor").tagName, "the name is set apart").toBe("BDI");
+		expect(screen.getByText("Neighbor").closest("li")?.textContent).toBe(
+			"Neighbor · ID d1abcdUnblock"
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Unblock Phone · ID d2abcd" }));
+		expect(remoteUnblock).toHaveBeenCalledWith("d2abcdefgh");
+	});
+
+	it("keeps going when unblocking fails", async () => {
+		vi.mocked(remoteUnblock).mockRejectedValueOnce("gone");
+		sessions.blocked = [{ deviceId: "d1abcdefgh", name: "Neighbor" }];
+		await shown();
+		fireEvent.click(screen.getByRole("button", { name: "Unblock Neighbor · ID d1abcd" }));
+		await act(async () => {});
+		expect(screen.getByText("Neighbor")).toBeInTheDocument();
 	});
 
 	it("tells two devices with one name apart", async () => {

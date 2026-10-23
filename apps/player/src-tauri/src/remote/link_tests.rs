@@ -107,6 +107,7 @@ async fn target_keyed(mode: ControlMode, key: DeviceKey) -> Target {
         key.clone(),
         DeviceType::FireTv,
         settings,
+        Vec::new(),
         player.clone(),
         target::Limits {
             load_gap: Duration::ZERO,

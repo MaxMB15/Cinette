@@ -8,7 +8,8 @@
 //! grants anything: a denial, a dismissed dialog, a request that ran out or
 //! one the controller withdrew all refuse. After a denial, the same device
 //! is refused without a dialog for [`DENIAL_COOLDOWN`], so it can't keep a
-//! dialog on screen.
+//! dialog on screen. The target also blocks a device denied control until
+//! the user unblocks it; a dismissed dialog refuses only that request.
 //!
 //! A device can make up a new id for each request, so a denial, or a
 //! request that ran out, also turns away every new request for a while,
@@ -49,7 +50,8 @@ pub struct ConsentRequest {
 }
 
 /// What the user did with the dialog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Answer {
     Allow,
     Deny,
@@ -187,6 +189,11 @@ impl ConsentQueue {
             .min(DENIAL_COOLDOWN);
         self.denials = self.denials.saturating_add(1);
         self.quiet_until = Some(now + wait);
+    }
+
+    /// Forgets a denial of `device`, so it can ask again at once.
+    pub fn forgive(&mut self, device: &DeviceId) {
+        self.denied_until.remove(device);
     }
 
     /// The controller on `conn` stopped asking or hung up.

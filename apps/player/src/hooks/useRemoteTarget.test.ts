@@ -22,6 +22,7 @@ vi.mock("@/lib/tauri", () => ({
 	remoteFinishCommand: vi.fn(() => Promise.resolve()),
 	remoteProgressSaved: vi.fn(() => Promise.resolve()),
 	remoteSessions: vi.fn(() => Promise.resolve([])),
+	remoteBlocked: vi.fn(() => Promise.resolve([])),
 	remoteSetState: vi.fn(() => Promise.resolve()),
 }));
 
@@ -35,12 +36,18 @@ import { listen } from "@tauri-apps/api/event";
 import {
 	mpvStop,
 	remoteFinishCommand,
+	remoteBlocked,
 	remoteProgressSaved,
 	remoteSessions,
 	remoteSetState,
 } from "@/lib/tauri";
 import { setProgressSaver } from "@/lib/player-progress";
-import { usePublishRemoteState, useRemoteSessions, useRemoteTarget } from "./useRemoteTarget";
+import {
+	usePublishRemoteState,
+	useRemoteBlocked,
+	useRemoteSessions,
+	useRemoteTarget,
+} from "./useRemoteTarget";
 import { getMountedPlayer, IDLE_REMOTE_STATE, setMountedPlayer } from "@/lib/remote-target";
 import { localCapabilities, type PlaybackDestination, type PlaybackState } from "@/lib/destination";
 import type { Channel } from "@/lib/types";
@@ -295,6 +302,20 @@ describe("useRemoteSessions", () => {
 		const { result, unmount } = renderHook(() => useRemoteSessions());
 		unmount();
 		await act(async () => resolve([session(true)]));
+		expect(result.current).toEqual([]);
+	});
+});
+
+describe("useRemoteBlocked", () => {
+	it("starts from the backend's list and follows its own event", async () => {
+		const den = { deviceId: "d1", name: "Den" };
+		vi.mocked(remoteBlocked).mockResolvedValueOnce([den]);
+		const { result } = renderHook(() => useRemoteBlocked());
+		await waitFor(() => expect(result.current).toEqual([den]));
+		await waitFor(() => expect(handlers.has("remote://blocked")).toBe(true));
+		emit("remote://sessions", [session(true)]);
+		expect(result.current).toEqual([den]);
+		emit("remote://blocked", []);
 		expect(result.current).toEqual([]);
 	});
 });

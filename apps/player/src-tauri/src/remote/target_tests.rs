@@ -122,6 +122,7 @@ impl Harness {
             key.clone(),
             DeviceType::LinuxPc,
             settings,
+            Vec::new(),
             host.clone(),
             limits,
         )
@@ -198,6 +199,7 @@ async fn advertises_the_cores_record_under_the_device_id() {
         key.clone(),
         DeviceType::LinuxPc,
         RemoteSettings::default(),
+        Vec::new(),
         host,
         Limits::STANDARD,
     )

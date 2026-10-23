@@ -764,11 +764,13 @@ describe("backend commands", () => {
 		["remoteResetIdentity", () => tauri.remoteResetIdentity(), "remote_reset_identity"],
 		[
 			"remoteAnswerConsent",
-			() => tauri.remoteAnswerConsent(3, true),
+			() => tauri.remoteAnswerConsent(3, "dismiss"),
 			"remote_answer_consent",
-			{ request: 3, allow: true },
+			{ request: 3, answer: "dismiss" },
 		],
 		["remoteSessions", () => tauri.remoteSessions(), "remote_sessions"],
+		["remoteBlocked", () => tauri.remoteBlocked(), "remote_blocked"],
+		["remoteUnblock", () => tauri.remoteUnblock("d1"), "remote_unblock", { deviceId: "d1" }],
 		["remotePendingConsent", () => tauri.remotePendingConsent(), "remote_pending_consent"],
 		[
 			"remoteDisconnect",

@@ -347,6 +347,8 @@ fn a_denied_transfer_leaves_control_alone_and_cools_down() {
     assert!(net.clients[phone].connected());
     assert_eq!(net.prompt(), None);
     assert_eq!(export_needed(&net, phone), None);
+    // Denying a transfer doesn't block the device from control.
+    assert!(net.target.blocked().is_empty());
 
     // Asking again at once gets no dialog.
     net.clients[phone].events.clear();

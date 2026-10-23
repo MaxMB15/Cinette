@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
-import { useRemoteSessions } from "@/hooks/useRemoteTarget";
+import { useRemoteBlocked, useRemoteSessions } from "@/hooks/useRemoteTarget";
 import { shortId } from "@/lib/device-picker";
 import { getPlatform } from "@/lib/platform";
 import { deviceTypeName, discoveryLimit, fitName, localNetworkDenied } from "@/lib/remote-devices";
@@ -18,6 +18,7 @@ import {
 	remoteOpen,
 	remoteResetIdentity,
 	remoteSetSettings,
+	remoteUnblock,
 	type RemoteControlMode,
 	type RemoteSettings,
 } from "@/lib/tauri";
@@ -76,6 +77,7 @@ export const RemoteControlSettings = () => {
 	// device can find this one whatever the toggle says.
 	const [denied, setDenied] = useState(false);
 	const sessions = useRemoteSessions();
+	const blocked = useRemoteBlocked();
 	// What the device runs, as its last answer said. Each save builds on
 	// it when its turn comes, so a change that failed isn't sent again.
 	const confirmedRef = useRef<RemoteSettings | null>(null);
@@ -314,6 +316,47 @@ export const RemoteControlSettings = () => {
 											}
 										>
 											Disconnect
+										</Button>
+									</li>
+								);
+							})}
+						</ul>
+					)}
+				</div>
+
+				<div>
+					<p className="text-sm font-medium mb-2">Blocked devices</p>
+					{blocked.length === 0 ? (
+						<p className="text-xs text-muted-foreground">
+							No device is blocked. Denying a request to control this device blocks
+							the device that asked.
+						</p>
+					) : (
+						<ul className="space-y-2">
+							{blocked.map((b) => {
+								// The id tells it from a device that only took its name.
+								const tag = ` · ${shortId(b.deviceId)}`;
+								return (
+									<li
+										key={b.deviceId}
+										className="flex items-center justify-between gap-3"
+									>
+										<span className="text-sm min-w-0 break-words">
+											<bdi className="font-medium">{b.name}</bdi>
+											<span className="text-xs text-muted-foreground">
+												{tag}
+											</span>
+										</span>
+										<Button
+											variant="secondary"
+											size="sm"
+											className="shrink-0"
+											aria-label={`Unblock ${b.name}${tag}`}
+											onClick={() =>
+												void remoteUnblock(b.deviceId).catch(() => {})
+											}
+										>
+											Unblock
 										</Button>
 									</li>
 								);

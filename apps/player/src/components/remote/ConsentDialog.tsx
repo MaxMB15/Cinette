@@ -8,6 +8,7 @@ import { useConsentRequest, type ConsentRequest } from "@/hooks/useRemoteTarget"
 import { cn } from "@/lib/utils";
 import { deviceTypeName, formatCode, secondsLeft } from "@/lib/remote-devices";
 import { consentBody, consentTitle } from "@/lib/remote-transfer";
+import type { ConsentAnswer } from "@/lib/tauri";
 
 /** How long Allow waits after a request shows, or the window gains focus,
  *  before it works, so a click or key meant for something else can't
@@ -24,8 +25,9 @@ const BUTTON = cn(
  * history or add providers, which always asks. It shows the device's name
  * and type and the code the other screen shows, so the user can tell their
  * own request from a neighbor's.
- * Closing it, Escape or a click outside denies. It goes away by itself when
- * the request runs out or is withdrawn.
+ * Deny on a request for control blocks that device until it's unblocked in
+ * Settings. Closing it, Escape or a click outside refuses only this
+ * request. It goes away by itself when the request runs out or is withdrawn.
  */
 export const ConsentDialog = () => {
 	const { request, answer } = useConsentRequest();
@@ -34,7 +36,7 @@ export const ConsentDialog = () => {
 		<ConsentPrompt
 			key={request.request}
 			request={request}
-			answer={(allow) => answer(request, allow)}
+			answer={(given) => answer(request, given)}
 		/>
 	) : null;
 };
@@ -44,7 +46,7 @@ const ConsentPrompt = ({
 	answer,
 }: {
 	request: ConsentRequest;
-	answer: (allow: boolean) => void;
+	answer: (given: ConsentAnswer) => void;
 }) => {
 	const titleId = useId();
 	const [now, setNow] = useState(() => performance.now());
@@ -77,11 +79,11 @@ const ConsentPrompt = ({
 		// Past its time, the button is disabled.
 		if (performance.now() < armedAt) return;
 		if (fromPointer && !pressedHere.current) return;
-		answer(true);
+		answer("allow");
 	};
 	return createPortal(
 		<Dialog
-			onClose={() => answer(false)}
+			onClose={() => answer("dismiss")}
 			labelledBy={titleId}
 			// Above the full screen player, which sits at z-9999.
 			overlayClassName="z-10000"
@@ -118,7 +120,7 @@ const ConsentPrompt = ({
 				<button
 					type="button"
 					className={`${BUTTON} hover:bg-accent`}
-					onClick={() => answer(false)}
+					onClick={() => answer("deny")}
 				>
 					Deny
 				</button>

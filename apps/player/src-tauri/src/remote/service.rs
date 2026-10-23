@@ -11,7 +11,7 @@ use super::link::{self, LinkConfig, LinkHandle, LinkHost, Phase};
 use super::target::{
     self, CatalogPage, Exported, Imported, SavedProviders, TargetHandle, TargetHost, TransferEvent,
 };
-use super::{identity, SETTINGS_KEY, SETTINGS_STORE_FILE};
+use super::{identity, BLOCKED_KEY, SETTINGS_KEY, SETTINGS_STORE_FILE};
 use crate::commands::AppState;
 use crate::discovery::{self, Advertisement, Registration};
 use mvp_core::models::channel::Channel;
@@ -25,7 +25,7 @@ use mvp_core::remote::message::{
 };
 use mvp_core::remote::sessions::RESUME_GRACE;
 use mvp_core::remote::settings::RemoteSettings;
-use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
+use mvp_core::remote::target::{BlockedDevice, ConsentPrompt, SessionInfo};
 use mvp_core::remote::transfer::flow::{
     Asked, ControllerEvent as TransferUpdate, Direction, Progress, ProviderName, ProviderOutcome,
     ProviderSettings,
@@ -262,7 +262,7 @@ impl RemoteService {
         let mut state = lock(&self.state);
         state.settings = settings.clone();
         self.handle.update_settings(settings.clone());
-        save_settings(app, &settings)
+        save(app, SETTINGS_KEY, &settings)
     }
 
     /// Asks the device link `link` controls to take the providers with
@@ -792,6 +792,13 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
         });
         let list: Vec<SessionEvent> = sessions.iter().map(SessionEvent::from).collect();
         let _ = self.app.emit("remote://sessions", list);
+    }
+
+    fn blocked_changed(&self, blocked: &[BlockedDevice]) {
+        if let Err(e) = save(&self.app, BLOCKED_KEY, &blocked) {
+            tracing::warn!("[remote] the blocked devices: {e}");
+        }
+        let _ = self.app.emit("remote://blocked", blocked);
     }
 
     fn apply(&self, token: u64, command: &Command) {
@@ -1391,34 +1398,32 @@ fn follow_discovery<R: Runtime>(
     });
 }
 
-/// Writes `settings` to the settings file. When that fails, the store keeps
-/// what it had, so a later write of the file doesn't save them after all.
-fn save_settings<R: Runtime>(app: &AppHandle<R>, settings: &RemoteSettings) -> Result<(), String> {
+/// Writes `value` under `key` in the settings file. When that fails, the
+/// store keeps what it had, so a later write of the file doesn't save it
+/// after all.
+fn save<R: Runtime, T: Serialize>(app: &AppHandle<R>, key: &str, value: &T) -> Result<(), String> {
     let couldnt = |e: &dyn std::fmt::Display| {
         format!("This works until Cinette quits, but it couldn't be saved: {e}")
     };
     let store = app.store(SETTINGS_STORE_FILE).map_err(|e| couldnt(&e))?;
-    let before = store.get(SETTINGS_KEY);
-    store.set(
-        SETTINGS_KEY,
-        serde_json::to_value(settings).map_err(|e| couldnt(&e))?,
-    );
+    let before = store.get(key);
+    store.set(key, serde_json::to_value(value).map_err(|e| couldnt(&e))?);
     store.save().map_err(|e| {
         match before {
-            Some(value) => store.set(SETTINGS_KEY, value),
+            Some(value) => store.set(key, value),
             None => {
-                store.delete(SETTINGS_KEY);
+                store.delete(key);
             }
         }
         couldnt(&e)
     })
 }
 
-/// The saved settings, or the defaults.
-fn load_settings<R: Runtime>(app: &AppHandle<R>) -> RemoteSettings {
+/// What's saved under `key` in the settings file, or the default.
+fn load<R: Runtime, T: serde::de::DeserializeOwned + Default>(app: &AppHandle<R>, key: &str) -> T {
     app.store(SETTINGS_STORE_FILE)
         .ok()
-        .and_then(|store| store.get(SETTINGS_KEY))
+        .and_then(|store| store.get(key))
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default()
 }
@@ -1575,7 +1580,7 @@ fn start_on<R: Runtime>(
     let transfers = Arc::new(transfers);
     let key = identity::load_or_create(&key_dir)
         .map_err(|e| format!("couldn't load the device key: {e}"))?;
-    let settings = load_settings(app);
+    let settings: RemoteSettings = load(app, SETTINGS_KEY);
     let prompt = Arc::new(Mutex::new(None));
     let progress: ProgressWaiter = Arc::new(Mutex::new(None));
     let history: SendingHistory = Arc::new(Mutex::new(None));
@@ -1597,6 +1602,7 @@ fn start_on<R: Runtime>(
         key.clone(),
         device_type(),
         settings.clone(),
+        load(app, BLOCKED_KEY),
         host,
         limits,
     )
