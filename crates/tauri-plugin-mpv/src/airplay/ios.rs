@@ -5,7 +5,7 @@
 //! callbacks it makes. Swift runs everything on the main thread and queues
 //! the calls there, so none of these wait.
 
-use super::{handle_report, Route, EVENT_AVAILABLE, EVENT_PICKER_CLOSED, EVENT_ROUTE};
+use super::{handle_report, Route, EVENT_PICKER_CLOSED, EVENT_ROUTE};
 use crate::lock::lock_or_recover;
 use std::ffi::{c_char, CStr, CString};
 use std::sync::{Mutex, OnceLock};
@@ -58,9 +58,7 @@ pub fn ensure() -> Result<(), String> {
 pub fn install<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     let sink: Sink = Box::new(move |callback| match callback {
-        Callback::Available(available) => {
-            let _ = app.emit(EVENT_AVAILABLE, available);
-        }
+        Callback::Available(available) => super::detected(&app, available),
         Callback::Route(route) => {
             *lock_or_recover(&ROUTE) = route.clone();
             let _ = app.emit(EVENT_ROUTE, route);
