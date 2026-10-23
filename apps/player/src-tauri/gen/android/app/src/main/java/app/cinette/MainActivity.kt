@@ -1,6 +1,7 @@
 package app.cinette
 
 import android.os.Bundle
+import android.system.Os
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
@@ -10,8 +11,22 @@ class MainActivity : TauriActivity() {
   override val handleBackNavigation: Boolean = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    useCacheForTemporaryFiles()
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+  }
+
+  /**
+   * Android sets no TMPDIR, so Rust's `std::env::temp_dir()`, and every
+   * crate that uses it, gets /data/local/tmp, which apps can't write. This
+   * points it at the app's cache folder. It runs before `super.onCreate`
+   * loads the Rust library and starts its threads, and only sets the
+   * variable when it differs, so a later activity never writes it while
+   * Rust may be reading it.
+   */
+  private fun useCacheForTemporaryFiles() {
+    val dir = cacheDir.absolutePath
+    if (Os.getenv("TMPDIR") != dir) Os.setenv("TMPDIR", dir, true)
   }
 
   /**

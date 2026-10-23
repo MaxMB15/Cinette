@@ -4260,6 +4260,31 @@ describe("Google Cast", () => {
 		expect(castButton()).not.toBeNull();
 	});
 
+	it("shows the AirPlay and Cast buttons together once both have found a receiver", async () => {
+		await openItem(lanternKeeper());
+		const airplayButton = () => screen.queryByRole("button", { name: "AirPlay" });
+		act(() => fakeAirPlay.set({ available: true }));
+		expect(airplayButton()).not.toBeNull();
+		// Only AirPlay until Cast finds a receiver.
+		expect(castButton()).toBeNull();
+		act(() => fakeCast.set({ receivers: [receiver("cast:tv", "Hotel TV")] }));
+		expect(airplayButton()).not.toBeNull();
+		expect(castButton()).not.toBeNull();
+		// And only Cast once the AirPlay TV is out of reach.
+		act(() => fakeAirPlay.set({ available: false }));
+		expect(airplayButton()).toBeNull();
+		expect(castButton()).not.toBeNull();
+	});
+
+	it("shows neither button for a stream with no channel to send", async () => {
+		fakeAirPlay.set({ available: true });
+		fakeCast.set({ receivers: [receiver("cast:tv", "Hotel TV")] });
+		renderPlayer({ url: MOVIE_URL, channelName: "A stream" });
+		await flush();
+		expect(screen.queryByRole("button", { name: "AirPlay" })).toBeNull();
+		expect(castButton()).toBeNull();
+	});
+
 	it("lists the receivers with how this item gets there, and casts from where it is", async () => {
 		fakeCast.set({
 			receivers: [receiver("cast:tv", "Hotel TV"), receiver("cast:den", "Den", false)],

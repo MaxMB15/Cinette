@@ -93,3 +93,27 @@ fn wifi_is_not_required() {
         r#"<uses-feature android:name="android.hardware.wifi" android:required="false" />"#
     ));
 }
+
+/// Rust's temporary folder comes from TMPDIR, which Android doesn't set, so
+/// the activity sets it before `super.onCreate` loads the Rust library.
+#[test]
+fn the_activity_sets_tmpdir_before_rust_loads() {
+    let activity = include_str!("../gen/android/app/src/main/java/app/cinette/MainActivity.kt");
+    let on_create = activity.find("override fun onCreate").unwrap();
+    let set = activity[on_create..].find("useCacheForTemporaryFiles()").unwrap();
+    let load = activity[on_create..].find("super.onCreate(").unwrap();
+    assert!(set < load, "TMPDIR has to be set before super.onCreate");
+    assert!(activity.contains(r#"Os.setenv("TMPDIR", dir, true)"#));
+}
+
+/// Fire TV's launcher shows a sideloaded app's activity icon, not its
+/// banner, so the Amazon build makes that icon the banner.
+#[test]
+fn the_amazon_launcher_icon_is_the_banner() {
+    let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+    assert!(manifest.contains(r#"android:icon="${launcherIcon}""#));
+    let gradle = include_str!("../gen/android/app/build.gradle.kts");
+    assert!(gradle.contains(
+        r#"if (store == "amazon") "@drawable/banner" else "@mipmap/ic_launcher""#
+    ));
+}
