@@ -4,7 +4,7 @@
 //! Starts the target when the app starts, and connects it to Tauri: events
 //! for the webview, the cache for catalog answers, and DNS-SD.
 
-use super::device::device_type;
+use super::device::{default_name, device_type};
 use super::running::Transfers;
 use super::devices::{Devices, RemoteDevice};
 use super::link::{self, LinkConfig, LinkHandle, LinkHost, Phase};
@@ -179,7 +179,7 @@ impl RemoteService {
         let key = saved.key.clone();
         let hello = Hello {
             id: key.device_id(),
-            name: saved.settings.name(device_type()),
+            name: saved.settings.name(default_name()),
             device_type: device_type(),
             versions: vec![PROTOCOL_VERSION],
             features: vec![
@@ -263,8 +263,8 @@ impl RemoteService {
         settings: RemoteSettings,
     ) -> Result<(), String> {
         let mut state = lock(&self.state);
-        let name = settings.name(device_type());
-        if name != state.settings.name(device_type())
+        let name = settings.name(default_name());
+        if name != state.settings.name(default_name())
             && let Some(link) = lock(&self.link).as_ref()
         {
             link.rename(name);

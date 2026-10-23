@@ -44,7 +44,7 @@ use super::message::{
     PlaybackSnapshot, PlaybackStatus, RequestKind, VersionedState, PROTOCOL_VERSION,
 };
 use super::sessions::{Session, Sessions};
-use super::settings::{ControlMode, Decision, RemoteSettings};
+use super::settings::{self, ControlMode, Decision, RemoteSettings};
 use super::transfer::flow::{Asked, Progress, ProviderResult, ProviderSettings, Step, TargetFlow};
 use super::transfer::merge::Report;
 use super::transfer::refs::Salt;
@@ -247,6 +247,8 @@ pub struct Target {
     evicted: Vec<(ConnId, Instant)>,
     /// What this device's hello offers.
     features: Vec<Feature>,
+    /// This device's name when the user gave it none.
+    default_name: String,
 }
 
 impl Target {
@@ -267,9 +269,24 @@ impl Target {
             nonces: TokenBucket::new(NONCES_PER_SECOND, f64::from(NONCE_BURST)),
             evicted: Vec::new(),
             features: Vec::new(),
+            default_name: settings::default_name(device_type).to_owned(),
         };
         target.offer(false, false);
         target
+    }
+
+    /// Names the device `name` when the user gave it none, such as the name
+    /// the system has for it, in place of its type. Nothing changes for a
+    /// name with nothing left once cleaned.
+    pub fn name_by_default(&mut self, name: &str) {
+        if let Some(name) = settings::clean_name(name) {
+            self.default_name = name;
+        }
+    }
+
+    /// The name to show and advertise.
+    fn name(&self) -> String {
+        self.settings.name(&self.default_name)
     }
 
     /// Offers history transfers or receiving providers too, once the
@@ -298,7 +315,7 @@ impl Target {
         if !self.settings.advertise() {
             return None;
         }
-        let name = self.settings.name(self.device_type);
+        let name = self.name();
         Some(DiscoveryRecord {
             instance: name.clone(),
             txt: vec![
@@ -317,7 +334,7 @@ impl Target {
     fn hello(&self) -> Hello {
         Hello {
             id: self.device_id(),
-            name: self.settings.name(self.device_type),
+            name: self.name(),
             device_type: self.device_type,
             versions: vec![PROTOCOL_VERSION],
             features: self.features.clone(),
@@ -876,7 +893,7 @@ impl Target {
     pub fn update_settings(&mut self, settings: RemoteSettings, _now: Instant) -> Vec<Action> {
         let mut actions = Vec::new();
         let before = self.discovery_record();
-        let old_name = self.settings.name(self.device_type);
+        let old_name = self.name();
         let was_never = self.settings.remote_control == ControlMode::Never;
         let was_discoverable = self.settings.discoverable;
         self.settings = settings;
@@ -914,7 +931,7 @@ impl Target {
             }
         }
         self.sync_prompt(&mut actions);
-        let name = self.settings.name(self.device_type);
+        let name = self.name();
         if name != old_name {
             self.send_rename(name, &mut actions);
         }

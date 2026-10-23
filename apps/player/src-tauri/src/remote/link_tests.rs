@@ -395,7 +395,7 @@ async fn connects_and_attaches_to_what_plays() {
     link.until_phase(Phase::Connected).await;
     let phases = link.phases();
     assert_eq!(phases[0], Phase::Connecting);
-    let own_name = RemoteSettings::default().name(DeviceType::FireTv);
+    let own_name = crate::remote::device::default_name();
     assert!(
         matches!(phases[1], Phase::Verifying { ref code, ref name, .. } if code.len() == 6 && *name == own_name),
         "{phases:?}"
