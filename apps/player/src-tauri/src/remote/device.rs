@@ -79,10 +79,15 @@ pub fn default_name() -> &'static str {
     })
 }
 
-/// The name the system's settings give this device, where it has one.
+/// The name the system's settings give this device, where it has one. On
+/// iOS, Apple only gives the user's name for the device with an entitlement
+/// it grants on request, so an iPhone or iPad keeps its type until then
+/// (docs/ios.md, "The device's name").
 fn system_name() -> Option<String> {
     #[cfg(target_os = "macos")]
     return computer_name();
+    #[cfg(target_os = "android")]
+    return crate::android_device::device_name();
     #[cfg(target_os = "linux")]
     return linux_name(
         std::fs::read_to_string("/etc/machine-info").ok().as_deref(),
@@ -90,7 +95,7 @@ fn system_name() -> Option<String> {
             .ok()
             .as_deref(),
     );
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
     None
 }
 

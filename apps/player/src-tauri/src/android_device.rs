@@ -2,9 +2,9 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! What the app needs to know from Android: whether this is a TV, told to
-//! the page before any page script runs, the device type remote control
-//! advertises, and the store the build is for. Also the Wi-Fi multicast lock
-//! that DNS-SD needs.
+//! the page before any page script runs, the device type and name remote
+//! control advertises, and the store the build is for. Also the Wi-Fi
+//! multicast lock that DNS-SD needs.
 
 use crate::remote::device::{AndroidFacts, TV_FEATURES};
 use crate::remote::held::Held;
@@ -144,6 +144,44 @@ fn read_store() -> jni::errors::Result<String> {
 /// The type remote control advertises.
 pub fn device_type() -> DeviceType {
     facts().device_type()
+}
+
+/// `Settings.Global`'s `device_name`: the name the user gave the device, as
+/// a Fire TV's Settings, My Fire TV, About shows it. Null where none was set.
+fn read_device_name() -> jni::errors::Result<Option<String>> {
+    with_context(|env, context| {
+        let resolver = env
+            .call_method(
+                context,
+                jni_str!("getContentResolver"),
+                jni_sig!(() -> android.content.ContentResolver),
+                &[],
+            )?
+            .l()?;
+        let key = env.new_string("device_name")?;
+        let value = env
+            .call_static_method(
+                jni_str!("android/provider/Settings$Global"),
+                jni_str!("getString"),
+                jni_sig!((android.content.ContentResolver, java.lang.String) -> java.lang.String),
+                &[JValue::from(&resolver), JValue::from(&key)],
+            )?
+            .l()?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        env.cast_local::<JString>(value)?
+            .try_to_string(env)
+            .map(Some)
+    })
+}
+
+/// The name the user gave the device in Android's settings, if any.
+pub fn device_name() -> Option<String> {
+    read_device_name().unwrap_or_else(|e| {
+        tracing::warn!("Couldn't read the device's name: {e}");
+        None
+    })
 }
 
 /// The multicast lock while it's held. Held as `None` on a device with no

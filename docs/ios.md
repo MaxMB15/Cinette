@@ -223,6 +223,28 @@ all loads, so leaving the key out would turn App Transport Security off on iOS t
 and App Review asks for a reason when an app does that. HTTP logos load in the
 simulator but haven't been checked on a device yet.
 
+### The device's name
+
+Remote control advertises a device by its name until the user gives it another one in
+Settings. On macOS, Linux and Android that's the name the system's settings give the
+device. Since iOS 16, `UIDevice.current.name` returns only the model, such as
+"iPhone", unless the app has the
+`com.apple.developer.device-information.user-assigned-device-name` entitlement, which
+Apple grants on request. Until it does, an iPhone or iPad keeps "iPhone" or "iPad",
+from its type. Once Apple has granted it:
+
+1. Add the entitlement to the app ID in the developer account, and regenerate the
+   provisioning profiles CI signs with.
+2. Add it to `project.yml`, under the target's `entitlements` as a `properties` key set
+   to `true`, and to `max-video-player_iOS/max-video-player_iOS.entitlements`, which
+   `project.yml` writes. Don't add it before Apple grants it: a build signed without it
+   fails.
+3. Read `UIDevice.current.name` on the main thread in `system_name()` in
+   `apps/player/src-tauri/src/remote/device.rs`. `default_name()` cleans it and falls
+   back to the type, as on the other platforms.
+
+The name goes out on the local network, so the privacy policy should say it does.
+
 ## Logs
 
 On iOS the Rust logs go to the system log under the subsystem
