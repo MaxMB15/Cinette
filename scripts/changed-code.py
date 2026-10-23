@@ -23,16 +23,18 @@ reason.
 Subcommands:
 
   plan       Says which checks have changed lines to look at, for the
-             workflow. With --shards, it also counts the Rust mutants in the
-             changed lines with `cargo mutants --list` and splits each crate
-             into shards. It warns about each exclusion entry that leaves out
+             workflow, and splits the files Stryker mutates into shards.
+             With --shards, it also counts the Rust mutants in the changed
+             lines with `cargo mutants --list` and splits each crate into
+             shards. It warns about each exclusion entry that leaves out
              more than the base commit's copy of the file does, about the
              changed lines a function entry leaves out, about each setting
              the change adds to, removes from or changes in
              .cargo/mutants.toml, and about each #[mutants::skip] it adds or
              changes.
   stryker    The lines for Stryker to mutate and to check, as the frontend
-             mutation job takes them.
+             mutation job takes them, and their shards. With --all in place
+             of --base, the shards of all of src/lib, for the weekly run.
   rust-diff  The diff that cargo-mutants reads with --in-diff.
   coverage   Changed-line coverage from lcov files. Fails when the covered
              share of the counted lines is under 80%, for the frontend or for
@@ -84,10 +86,16 @@ THRESHOLD = 80.0
 FRONTEND = "apps/player/"
 FRONTEND_SRC = FRONTEND + "src/"
 
-# The Stryker and Vitest setup. A change to it, or to the versions of the
-# tools that run the tests, can change the result for any mutant, so it gets a
-# run of all of src/lib.
-STRYKER_SETUP = re.compile(r"apps/player/(?:(?:stryker|vitest)\.[^/]*|src/test/.*)")
+# The Stryker and Vitest config files, and the two files Vitest loads before
+# every test, the setupFiles in vitest.config.ts. A change to them, or to the
+# versions of the tools that run the tests, can change the result for any
+# mutant, so it gets a run of all of src/lib. The other files in src/test are
+# helpers that only some tests import. A change to one is a change to test
+# code, like one to a *.test.ts file, so it mutates nothing. A test checks
+# that the two names match setupFiles.
+STRYKER_SETUP = re.compile(
+    r"apps/player/(?:(?:stryker|vitest)\.[^/]*|src/test/(?:polyfills|setup)\.ts)"
+)
 STRYKER_TOOLS = re.compile(
     r'^[-+][ \t]*"(?:vitest|vite|jsdom|@vitest/[^"]+|@vitejs/[^"]+'
     r'|@testing-library/[^"]+|@stryker-mutator/[^"]+)":',
@@ -115,6 +123,11 @@ STRYKER_BREAKS = re.compile(rb"\xe2\x80[\xa8\xa9]|\r(?!\n)")
 # 16 test threads, so a shard takes about 15 minutes plus its setup.
 MUTANTS_PER_SHARD = {"mvp-core": 60, "tauri-plugin-mpv": 55, "max-video-player": 30}
 MAX_SHARDS = 8
+
+# Lines per Stryker shard, in at most MAX_SHARDS shards. The weekly run of all
+# of src/lib went through about 80 lines a minute, testing 4 mutants at once
+# on a 4-core runner, so a shard takes about 20 minutes plus its setup.
+LINES_PER_STRYKER_SHARD = 1500
 
 GENRES = ("FnValue", "BinaryOperator", "UnaryOperator", "MatchArm", "MatchArmGuard", "StructField")
 SKIP = re.compile(r"[ \t]*// mutants: skip ([A-Za-z]+(?:, ?[A-Za-z]+)*):(.*)")
@@ -1141,6 +1154,89 @@ def counted(change: Change, exclusions: list[Exclusion]) -> Counted:
 # plan
 
 
+# Files for Stryker's --mutate, by their names in apps/player, with the
+# ranges of lines to mutate in each, or None for the whole file.
+Spans = dict[str, list[tuple[int, int]] | None]
+
+
+def stryker_name_error(path: str) -> str | None:
+    """An error when Stryker can't take `path` in --mutate, or None."""
+    if STRYKER_BAD_NAME.search(path) or "\udc80" <= max(path) <= "\udcff":
+        return annotation(
+            "error",
+            "Not checked",
+            f"Stryker can't take the name {path} in --mutate. Rename the file so"
+            " the check can run on it.",
+        )
+    return None
+
+
+def stryker_library() -> tuple[list[str], list[str]]:
+    """The files in src/lib that the mutate globs in stryker.config.mjs give,
+    and an error for each one Stryker can't take in --mutate. A test checks
+    that the two lists agree."""
+    names: list[str] = []
+    errors: list[str] = []
+    for path in sorted((ROOT / FRONTEND_SRC / "lib").rglob("*")):
+        name = path.relative_to(ROOT / FRONTEND).as_posix()
+        if not path.is_file() or not frontend_file(FRONTEND + name) or name == "src/lib/types.ts":
+            continue
+        error = stryker_name_error(FRONTEND + name)
+        if error:
+            errors.append(error)
+        else:
+            names.append(name)
+    return names, errors
+
+
+def mutate_text(files: Spans) -> str:
+    """`files` as Stryker's --mutate takes them, like src/lib/a.ts:3-5,src/lib/b.ts."""
+    return ",".join(
+        part
+        for name, spans in files.items()
+        for part in ([name] if spans is None else [f"{name}:{a}-{b}" for a, b in spans])
+    )
+
+
+def stryker_shards(files: Spans) -> list[tuple[list[str], int]]:
+    """Splits `files` into shards of about LINES_PER_STRYKER_SHARD lines, and
+    gives the names in each shard with its number of lines. A file stays in
+    one shard, so its mutants are in one report. The largest file goes first,
+    and each one goes to the shard with the fewest lines so far."""
+    weights = {
+        name: line_count(FRONTEND + name) if spans is None else sum(b - a + 1 for a, b in spans)
+        for name, spans in files.items()
+    }
+    count = -(-sum(weights.values()) // LINES_PER_STRYKER_SHARD)
+    count = max(1, min(MAX_SHARDS, len(files), count))
+    shards: list[list[str]] = [[] for _ in range(count)]
+    loads = [0] * count
+    for name in sorted(weights, key=lambda name: (-weights[name], name)):
+        k = loads.index(min(loads))
+        shards[k].append(name)
+        loads[k] += weights[name]
+    return [(sorted(names), load) for names, load in zip(shards, loads)]
+
+
+def stryker_matrix(mutate: Spans, lines: Spans) -> str:
+    """The matrix of Stryker shards, as JSON for the workflow. Each shard has
+    the files it mutates and the changed lines in them, which its job checks.
+    It prints the size of each shard for the log."""
+    shards = stryker_shards(mutate)
+    include = []
+    for k, (names, weight) in enumerate(shards):
+        print(f"Stryker shard {k} of {len(shards)}: {weight} lines in {len(names)} files")
+        include.append(
+            {
+                "shard": k,
+                "shards": len(shards),
+                "mutate": mutate_text({name: mutate[name] for name in names}),
+                "lines": mutate_text({name: lines[name] for name in names if name in lines}),
+            }
+        )
+    return json.dumps({"include": include}, separators=(",", ":"))
+
+
 def stryker_plan(change: Change, exclusions: list[Exclusion]) -> tuple[dict[str, str], list[str]]:
     """The outputs for the frontend mutation job, and the errors that stop it."""
     added = change.added(FRONTEND_SRC)
@@ -1149,15 +1245,9 @@ def stryker_plan(change: Change, exclusions: list[Exclusion]) -> tuple[dict[str,
     for path, lines in sorted(added.items()):
         if not frontend_file(path) or file_exclusion(exclusions, path) is not None:
             continue
-        if STRYKER_BAD_NAME.search(path) or "\udc80" <= max(path) <= "\udcff":
-            errors.append(
-                annotation(
-                    "error",
-                    "Not checked",
-                    f"Stryker can't take the name {path} in --mutate. Rename the file so"
-                    " the check can run on it.",
-                )
-            )
+        error = stryker_name_error(path)
+        if error:
+            errors.append(error)
             continue
         names[path[len(FRONTEND) :]] = lines
     # Git counts lines by LF alone, but Stryker's parser also ends a line at a
@@ -1182,11 +1272,11 @@ def stryker_plan(change: Change, exclusions: list[Exclusion]) -> tuple[dict[str,
         *DIFF, "--text", "-U0", *change.revs(), "--", FRONTEND + "package.json"
     ).decode("utf-8", "replace")
     setup = any(STRYKER_SETUP.fullmatch(n) for n in changed) or bool(STRYKER_TOOLS.search(versions))
-    lines = ",".join(
-        f"{name}:{a}-{b}" for name, found in names.items() for a, b in ranges(found)
-    )
+    lines: Spans = {name: ranges(found) for name, found in names.items()}
     if not lines and (setup or STRYKER_CANARY_TRIGGERS.intersection(changed)):
-        if not (ROOT / FRONTEND / STRYKER_CANARY).is_file():
+        if (ROOT / FRONTEND / STRYKER_CANARY).is_file():
+            lines = {STRYKER_CANARY: None}
+        else:
             errors.append(
                 annotation(
                     "error",
@@ -1194,31 +1284,22 @@ def stryker_plan(change: Change, exclusions: list[Exclusion]) -> tuple[dict[str,
                     f"{STRYKER_CANARY} is gone. Pick another file for the check to run on.",
                 )
             )
-        lines = STRYKER_CANARY
-    out = {"run": "true" if lines or errors else "false", "lines": lines, "full": str(setup).lower()}
+    mutate = lines
     if setup:
-        # Every file in src/lib, and the ranges in other files. A file that
-        # --mutate names whole is mutated whole.
-        library = sorted(
-            path.relative_to(ROOT / FRONTEND).as_posix()
-            for path in (ROOT / FRONTEND_SRC / "lib").rglob("*")
-            if path.suffix in (".ts", ".tsx")
-            and frontend_file(path.relative_to(ROOT).as_posix())
-            and path.name != "types.ts"
-        )
-        for name in library:
-            if STRYKER_BAD_NAME.search(name):
-                errors.append(
-                    annotation(
-                        "error",
-                        "Not checked",
-                        f"Stryker can't take the name {FRONTEND}{name} in --mutate. Rename it.",
-                    )
-                )
-        others = [part for part in lines.split(",") if part and not part.startswith("src/lib/")]
-        out["mutate"] = ",".join(library + others)
-    else:
-        out["mutate"] = lines
+        # Every file in src/lib, and the changed lines in other files, such as
+        # a component or src/lib/types.ts. A file that --mutate names whole is
+        # mutated whole.
+        library, library_errors = stryker_library()
+        errors += [error for error in library_errors if error not in errors]
+        mutate = dict.fromkeys(library) | {n: s for n, s in lines.items() if n not in library}
+    run = bool(lines or errors)
+    out = {
+        "run": str(run).lower(),
+        "lines": mutate_text(lines),
+        "full": str(setup).lower(),
+        "mutate": mutate_text(mutate),
+        "matrix": stryker_matrix(mutate, lines) if run else "",
+    }
     return out, errors
 
 
@@ -1299,6 +1380,7 @@ def plan(args: argparse.Namespace) -> int:
         "frontend": str(bool(found.frontend)).lower(),
         "rust": str(bool(found.rust)).lower(),
         "stryker": stryker["run"],
+        "stryker-matrix": stryker["matrix"],
     }
     if args.shards:
         diff = Path(args.shards)
@@ -1334,7 +1416,12 @@ def plan(args: argparse.Namespace) -> int:
 
 
 def stryker(args: argparse.Namespace) -> int:
-    outputs, errors = stryker_plan(Change(args.base, args.head), load_exclusions())
+    if args.all:
+        library, errors = stryker_library()
+        files = dict.fromkeys(library)
+        outputs = {"mutate": mutate_text(files), "matrix": stryker_matrix(files, {})}
+    else:
+        outputs, errors = stryker_plan(Change(args.base, args.head), load_exclusions())
     for error in errors:
         print(error)
     write_outputs(args.output, outputs)
@@ -1715,9 +1802,14 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Check the code a change adds.")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    def with_diff(name: str, help: str) -> argparse.ArgumentParser:
+    def with_diff(name: str, help: str, all_help: str | None = None) -> argparse.ArgumentParser:
         sub = commands.add_parser(name, help=help)
-        sub.add_argument("--base", required=True, help="the commit to compare with")
+        base = sub
+        if all_help:
+            # --all stands in for --base.
+            base = sub.add_mutually_exclusive_group(required=True)
+            base.add_argument("--all", action="store_true", help=all_help)
+        base.add_argument("--base", required=not all_help, help="the commit to compare with")
         sub.add_argument(
             "--head", help="the commit with the changes, or the working tree when left out"
         )
@@ -1731,7 +1823,11 @@ def main(argv: list[str]) -> int:
     )
     sub.set_defaults(run=plan)
 
-    sub = with_diff("stryker", "the lines for Stryker")
+    sub = with_diff(
+        "stryker",
+        "the lines for Stryker and their shards",
+        all_help="the shards of all of src/lib, with no diff",
+    )
     sub.add_argument("--output", help="append key=value lines here, as for $GITHUB_OUTPUT")
     sub.set_defaults(run=stryker)
 

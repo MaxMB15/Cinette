@@ -4,8 +4,9 @@
 
 """
 Tests for changed-code.py. Each test builds a small git repo with a made-up
-workspace in a temp folder and points the script at it, so nothing here reads
-the real repo or reaches the network.
+workspace in a temp folder and points the script at it, so nothing here
+reaches the network. Only StrykerConfigTest reads the real repo, to check that
+the script agrees with the Stryker and Vitest config files.
 
   python3 -I scripts/changed-code-test.py
 """
@@ -16,11 +17,12 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent / "changed-code.py"
@@ -732,7 +734,12 @@ class PlanShardsTest(RepoTest):
             status, out = self.plan()
         self.assertEqual(status, 0)
         self.assertIn("mvp-core: no changed .rs lines", out)
-        self.assertIn("matrix: \n", out)
+        self.assertIn("\nmatrix: \n", out)
+        self.assertIn(
+            'stryker-matrix: {"include":[{"shard":0,"shards":1,"mutate":"src/lib/b.ts:1-1",'
+            '"lines":"src/lib/b.ts:1-1"}]}\n',
+            out,
+        )
 
     def test_a_rust_change_needs_cargo_mutants(self) -> None:
         self.write({"crates/core/src/lib.rs": "pub fn one() -> u8 {\n    2\n}\n"})
@@ -751,7 +758,7 @@ class PlanShardsTest(RepoTest):
         ):
             status, out = self.plan()
         self.assertEqual(status, 0)
-        matrix = json.loads(out.split("matrix: ", 1)[1].split("\n", 1)[0])
+        matrix = json.loads(out.split("\nmatrix: ", 1)[1].split("\n", 1)[0])
         self.assertEqual(
             matrix["include"],
             [
@@ -760,6 +767,231 @@ class PlanShardsTest(RepoTest):
             ],
         )
         self.assertIn(b"+    2", (self.root / "rust.diff").read_bytes())
+
+
+def outputs(text: str) -> dict[str, str]:
+    """The key=value lines the script prints with no --output."""
+    return dict(line.split("=", 1) for line in text.splitlines() if re.match(r"[a-z-]+=", line))
+
+
+def spans(**weights: int) -> dict[str, list[tuple[int, int]]]:
+    """Files in src/lib with one range each, of the given number of lines."""
+    return {f"src/lib/{name}.ts": [(1, lines)] for name, lines in weights.items()}
+
+
+def package_json(react: str = "19.0.0", vitest: str = "5.0.0") -> str:
+    return json.dumps({"devDependencies": {"react": react, "vitest": vitest}}, indent="\t") + "\n"
+
+
+class StrykerShardsTest(unittest.TestCase):
+    def shards(self, files: dict) -> list[tuple[list[str], int]]:
+        return cc.stryker_shards(files)
+
+    def test_a_small_change_is_one_shard(self) -> None:
+        self.assertEqual(self.shards(spans(a=3, b=2)), [(["src/lib/a.ts", "src/lib/b.ts"], 5)])
+
+    def test_the_count_rounds_up(self) -> None:
+        self.assertEqual(len(self.shards(spans(a=1000, b=500))), 1)
+        self.assertEqual(len(self.shards(spans(a=1000, b=501))), 2)
+
+    def test_the_count_stops_at_max_shards(self) -> None:
+        files = spans(**{f"f{i}": 1000 for i in range(20)})
+        self.assertEqual(len(self.shards(files)), cc.MAX_SHARDS)
+
+    def test_never_more_shards_than_files(self) -> None:
+        self.assertEqual(self.shards(spans(a=5000)), [(["src/lib/a.ts"], 5000)])
+
+    def test_the_largest_file_goes_first_to_the_lightest_shard(self) -> None:
+        self.assertEqual(
+            self.shards(spans(a=1000, b=900, c=800, d=700, e=600)),
+            [
+                (["src/lib/a.ts"], 1000),
+                (["src/lib/b.ts", "src/lib/e.ts"], 1500),
+                (["src/lib/c.ts", "src/lib/d.ts"], 1500),
+            ],
+        )
+
+    def test_a_file_stays_in_one_shard(self) -> None:
+        files = {
+            "src/lib/a.ts": [(1, 900), (1001, 1600)],
+            "src/lib/b.ts": [(1, 1000)],
+            "src/lib/c.ts": [(1, 100)],
+        }
+        with contextlib.redirect_stdout(io.StringIO()):
+            matrix = json.loads(cc.stryker_matrix(files, files))
+        self.assertEqual(
+            [(e["shard"], e["shards"], e["mutate"]) for e in matrix["include"]],
+            [
+                (0, 2, "src/lib/a.ts:1-900,src/lib/a.ts:1001-1600"),
+                (1, 2, "src/lib/b.ts:1-1000,src/lib/c.ts:1-100"),
+            ],
+        )
+
+
+class StrykerPlanTest(RepoTest):
+    def setUp(self) -> None:
+        super().setUp()
+        self.write(
+            {
+                "apps/player/src/lib/date.ts": "export const day = 1;\n",
+                "apps/player/src/lib/types.ts": "export type A = 1;\n",
+                "apps/player/src/test/setup.ts": "// setup\n",
+                "apps/player/src/test/polyfills.ts": "// polyfills\n",
+                "apps/player/src/test/fixtures.ts": "export const one = 1;\n",
+                "apps/player/vitest.config.ts": "export default {};\n",
+                "apps/player/stryker.config.mjs": "export default {};\n",
+                "apps/player/package.json": package_json(),
+            }
+        )
+        self.commit("stryker setup")
+
+    def plan(self, files: dict[str, str]) -> dict[str, str]:
+        self.write(files)
+        self.commit("change")
+        with contextlib.redirect_stdout(io.StringIO()):
+            out, errors = cc.stryker_plan(cc.Change("HEAD^1", "HEAD"), [])
+        self.assertEqual(errors, [])
+        return out
+
+    def test_a_new_test_helper_mutates_nothing(self) -> None:
+        out = self.plan({"apps/player/src/test/destination-fixtures.ts": "export const two = 2;\n"})
+        self.assertEqual((out["run"], out["full"], out["matrix"]), ("false", "false", ""))
+
+    def test_a_changed_test_helper_mutates_nothing(self) -> None:
+        out = self.plan({"apps/player/src/test/fixtures.ts": "export const one = 2;\n"})
+        self.assertEqual((out["run"], out["full"]), ("false", "false"))
+
+    def test_another_package_bump_mutates_nothing(self) -> None:
+        out = self.plan({"apps/player/package.json": package_json(react="19.1.0")})
+        self.assertEqual((out["run"], out["full"]), ("false", "false"))
+
+    def test_the_global_test_setup_mutates_all_of_src_lib(self) -> None:
+        changes = {
+            "apps/player/src/test/setup.ts": "// setup, changed\n",
+            "apps/player/src/test/polyfills.ts": "// polyfills, changed\n",
+            "apps/player/vitest.config.ts": "export default { test: {} };\n",
+            "apps/player/stryker.config.mjs": "export default { mutate: [] };\n",
+            "apps/player/package.json": package_json(vitest="5.1.0"),
+        }
+        for name, text in changes.items():
+            with self.subTest(name):
+                out = self.plan({name: text})
+                self.assertEqual((out["run"], out["full"]), ("true", "true"))
+                self.assertEqual(out["mutate"], "src/lib/a.ts,src/lib/b.ts,src/lib/date.ts")
+                # With no changed lines of its own, the run checks the canary.
+                self.assertEqual(out["lines"], cc.STRYKER_CANARY)
+
+    def test_a_change_is_one_shard_with_its_own_lines(self) -> None:
+        out = self.plan({"apps/player/src/lib/b.ts": "export const b = 3;\nexport const c = 4;\n"})
+        self.assertEqual(out["full"], "false")
+        self.assertEqual(out["mutate"], "src/lib/b.ts:1-2")
+        (entry,) = json.loads(out["matrix"])["include"]
+        self.assertEqual(
+            entry, {"shard": 0, "shards": 1, "mutate": "src/lib/b.ts:1-2", "lines": "src/lib/b.ts:1-2"}
+        )
+
+    def test_a_full_run_gives_each_shard_the_lines_in_its_files(self) -> None:
+        with mock.patch.object(cc, "LINES_PER_STRYKER_SHARD", 2):
+            out = self.plan(
+                {
+                    "apps/player/src/test/setup.ts": "// setup, changed\n",
+                    "apps/player/src/lib/a.ts": "export const a = 2;\nexport const z = 0;\n",
+                    "apps/player/src/lib/types.ts": "export type A = 2;\n",
+                    "apps/player/src/components/c.tsx": "export const c = 1;\n",
+                }
+            )
+        self.assertEqual(out["full"], "true")
+        # types.ts is left out of src/lib, so only its changed lines are mutated.
+        self.assertEqual(
+            out["mutate"],
+            "src/lib/a.ts,src/lib/b.ts,src/lib/date.ts,src/components/c.tsx:1-1,src/lib/types.ts:1-1",
+        )
+        self.assertEqual(
+            out["lines"], "src/components/c.tsx:1-1,src/lib/a.ts:1-2,src/lib/types.ts:1-1"
+        )
+        shards = json.loads(out["matrix"])["include"]
+        self.assertEqual([e["shards"] for e in shards], [3, 3, 3])
+        mutated = [part for e in shards for part in e["mutate"].split(",")]
+        self.assertEqual(sorted(mutated), sorted(out["mutate"].split(",")))
+        checked = [part for e in shards for part in e["lines"].split(",") if part]
+        self.assertEqual(sorted(checked), sorted(out["lines"].split(",")))
+        for entry in shards:
+            files = {part.split(":")[0] for part in entry["mutate"].split(",")}
+            for part in filter(None, entry["lines"].split(",")):
+                self.assertIn(part.split(":")[0], files)
+
+    def test_a_whole_file_weighs_its_lines(self) -> None:
+        self.write({"apps/player/src/lib/big.ts": "1;\n2;\n3"})
+        self.assertEqual(cc.stryker_shards({"src/lib/big.ts": None}), [(["src/lib/big.ts"], 3)])
+
+
+class StrykerAllTest(RepoTest):
+    def test_splits_the_files_the_stryker_globs_give(self) -> None:
+        self.write(
+            {
+                "apps/player/src/lib/c.tsx": "export const c = 1;\n",
+                "apps/player/src/lib/types.ts": "export type A = 1;\n",
+                "apps/player/src/lib/a.test.ts": "a;\n",
+            }
+        )
+        status, out = self.run_script("stryker", "--all")
+        self.assertEqual(status, 0)
+        found = outputs(out)
+        self.assertEqual(found["mutate"], "src/lib/a.ts,src/lib/b.ts,src/lib/c.tsx")
+        (entry,) = json.loads(found["matrix"])["include"]
+        self.assertEqual(
+            entry, {"shard": 0, "shards": 1, "mutate": found["mutate"], "lines": ""}
+        )
+        self.assertIn("Stryker shard 0 of 1: 3 lines in 3 files", out)
+
+    def test_fails_for_a_name_stryker_cannot_take(self) -> None:
+        self.write({"apps/player/src/lib/a,b.ts": "export const c = 1;\n"})
+        status, out = self.run_script("stryker", "--all")
+        self.assertEqual(status, 1)
+        self.assertIn("title=Not checked::Stryker can't take the name apps/player/src/lib/a,b.ts", out)
+        self.assertEqual(outputs(out)["mutate"], "src/lib/a.ts,src/lib/b.ts")
+
+
+class StrykerConfigTest(unittest.TestCase):
+    """Checks that the script agrees with the real Stryker and Vitest config."""
+
+    def strings(self, path: str, key: str) -> list[str]:
+        """The strings in the array after `key:` in a config file, with comments left out."""
+        text = re.sub(r"//.*", "", (cc.ROOT / path).read_text(encoding="utf-8"))
+        found = re.search(rf"\b{key}:\s*\[([^\]]*)\]", text)
+        self.assertIsNotNone(found, f"{path} has no {key} array")
+        return re.findall(r'"([^"]*)"', found[1])
+
+    def test_the_setup_names_are_vitest_setup_files(self) -> None:
+        setup = {
+            cc.FRONTEND + PurePosixPath(name).as_posix()
+            for name in self.strings(cc.FRONTEND + "vitest.config.ts", "setupFiles")
+        }
+        self.assertTrue(setup)
+        folder = cc.ROOT / cc.FRONTEND_SRC / "test"
+        names = {p.relative_to(cc.ROOT).as_posix() for p in folder.rglob("*") if p.is_file()}
+        for name in sorted(names | setup):
+            with self.subTest(name):
+                self.assertEqual(bool(cc.STRYKER_SETUP.fullmatch(name)), name in setup)
+
+    def test_the_library_is_what_the_stryker_mutate_globs_give(self) -> None:
+        include, exclude = [], []
+        for glob in self.strings(cc.FRONTEND + "stryker.config.mjs", "mutate"):
+            patterns = exclude if glob.startswith("!") else include
+            glob = glob.removeprefix("!")
+            # Each glob has at most one {a,b}.
+            braces = re.fullmatch(r"([^{]*)\{([^}]*)\}(.*)", glob)
+            globs = [braces[1] + one + braces[3] for one in braces[2].split(",")] if braces else [glob]
+            patterns += [cc.glob_regex(one) for one in globs]
+        self.assertTrue(include)
+        app = cc.ROOT / cc.FRONTEND
+        names = [p.relative_to(app).as_posix() for p in (app / "src").rglob("*") if p.is_file()]
+        files = sorted(
+            name
+            for name in names
+            if any(p.fullmatch(name) for p in include) and not any(p.fullmatch(name) for p in exclude)
+        )
+        self.assertEqual(cc.stryker_library(), (files, []))
 
 
 if __name__ == "__main__":
