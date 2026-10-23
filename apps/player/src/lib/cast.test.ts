@@ -137,11 +137,12 @@ describe("castPickerNotice and showsCastButton", () => {
 		expect(castPickerNotice(lookout({ receivers: [] }))).toBeNull();
 	});
 
-	it("shows the button for a receiver, or for a reason none was found", () => {
+	it("shows the button only for a receiver, whatever hid the rest", () => {
 		expect(showsCastButton(lookout())).toBe(true);
+		expect(showsCastButton(lookout({ vpnActive: true, localNetworkDenied: true }))).toBe(true);
 		expect(showsCastButton(lookout({ receivers: [] }))).toBe(false);
-		expect(showsCastButton(lookout({ receivers: [], vpnActive: true }))).toBe(true);
-		expect(showsCastButton(lookout({ receivers: [], localNetworkDenied: true }))).toBe(true);
+		expect(showsCastButton(lookout({ receivers: [], vpnActive: true }))).toBe(false);
+		expect(showsCastButton(lookout({ receivers: [], localNetworkDenied: true }))).toBe(false);
 	});
 });
 
