@@ -96,6 +96,19 @@ describe("applyUpdate", () => {
 		});
 	});
 
+	it("says it connects again after a drop, keeping what plays, until it's ready", () => {
+		const playing = snap({
+			phase: "ready",
+			item: { title: "A", contentType: "movie", ref: "m" },
+			media: media(),
+		});
+		const reconnecting = applyUpdate(playing, { kind: "reconnecting" }, 1);
+		expect(reconnecting).toEqual({ ...playing, phase: "connecting" });
+		expect(castPlaybackState(reconnecting).connection).toBe("reconnecting");
+		const ready = applyUpdate(reconnecting, { kind: "ready" }, 2);
+		expect(castPlaybackState(ready).connection).toBe("connected");
+	});
+
 	it("keeps the volume and whether the TV fixes it", () => {
 		const next = applyUpdate(
 			idleSnapshot,

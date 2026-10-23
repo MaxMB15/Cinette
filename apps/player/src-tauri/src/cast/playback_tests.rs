@@ -1804,6 +1804,7 @@ async fn a_session_that_cant_connect_again_says_the_cast_was_lost() {
     let app = TestApp::new();
     let (events, _got, first) = quiet_cast(&app, Duration::from_secs(1), |_| true).await;
     first.go_quiet();
+    next_update(&events, "reconnecting");
     // The receiver can't be reached any more, as when it was turned off.
     let gone = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -1825,8 +1826,9 @@ async fn a_session_that_drops_on_the_same_network_picks_its_app_up_again() {
     let app = TestApp::new();
     let (events, mut got, first) = quiet_cast(&app, Duration::from_secs(5), |_| true).await;
     // The connection drops, as while this computer sleeps, and the receiver
-    // app plays on.
+    // app plays on. The frontend hears that the cast connects again.
     first.go_quiet();
+    next_update(&events, "reconnecting");
     // The session connects again and asks the app what it plays.
     let again = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(message) = got.recv().await {

@@ -697,6 +697,9 @@ export type CastUpdate =
 	 *  channel's connection ended, `moved` when this computer's address on
 	 *  the way to the receiver changed. */
 	| { kind: "conversionStopped"; why: "dropped" | "moved" }
+	/** The connection dropped and the cast connects again. A `ready` or a
+	 *  `closed` follows. */
+	| { kind: "reconnecting" }
 	| {
 			kind: "closed";
 			reason:

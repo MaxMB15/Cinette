@@ -419,23 +419,25 @@ where
                         reason: "timeout" | "connectionLost"
                     }
                 );
-                if dropped {
-                    // The connection dropped, as while the computer slept or
-                    // after it moved to another network, and the receiver
-                    // app may play on. It's taken up again below, and the
-                    // frontend hears of it only if that fails.
+                // The connection dropped, as while the computer slept or
+                // after it moved to another network, and the receiver app may
+                // play on. It's taken up again below, so the frontend hears
+                // that it reconnects, and of the end only if that fails.
+                let update = if dropped {
                     lost = Some(update);
+                    CastUpdate::Reconnecting
                 } else {
-                    // Under the lock `begin` replaces a session under, so a
-                    // session a newer one replaced says nothing more, even
-                    // about what it read just before. No Rust code listens
-                    // to the update event; one that did must not call back
-                    // into `CastPlayback` from its handler, or it would wait
-                    // on this lock forever.
-                    let active = lock(&state.active);
-                    if !replaced(active.as_ref(), &id, generation) {
-                        emit(&app, &id, update);
-                    }
+                    update
+                };
+                // Under the lock `begin` replaces a session under, so a
+                // session a newer one replaced says nothing more, even about
+                // what it read just before. No Rust code listens to the
+                // update event; one that did must not call back into
+                // `CastPlayback` from its handler, or it would wait on this
+                // lock forever.
+                let active = lock(&state.active);
+                if !replaced(active.as_ref(), &id, generation) {
+                    emit(&app, &id, update);
                 }
             })
             .await;
@@ -473,8 +475,9 @@ where
     drop(active);
     match old {
         // The same receiver on a new connection, as after the old one
-        // dropped or this computer's address changed. The old one goes without a word, so the receiver
-        // keeps its app and the frontend sees no end.
+        // dropped or this computer's address changed. The old one goes
+        // without a word, so the receiver keeps its app and the frontend sees
+        // no end.
         Some(old) if old.receiver_id == receiver_id => {
             #[cfg(test)]
             if state
@@ -520,9 +523,10 @@ fn replaced(active: Option<&Active>, receiver_id: &str, generation: u64) -> bool
 }
 
 /// Connects to `receiver_id` again after session `generation` lost its
-/// connection, trying for a while, as while Wi-Fi comes back. Says whether the cast goes on: on the new
-/// connection, on one a load opened meanwhile, or not at all because it
-/// ended or went to another receiver meanwhile, which says so itself.
+/// connection, trying for a while, as while Wi-Fi comes back. Says whether
+/// the cast goes on: on the new connection, on one a load opened meanwhile,
+/// or not at all because it ended or went to another receiver meanwhile,
+/// which says so itself.
 async fn reconnect<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,

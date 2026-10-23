@@ -88,6 +88,9 @@ export const applyUpdate = (
 	switch (update.kind) {
 		case "ready":
 			return { ...snapshot, phase: "ready" };
+		// The media stays, as the receiver may play on meanwhile.
+		case "reconnecting":
+			return { ...snapshot, phase: "connecting" };
 		case "volume":
 			return { ...snapshot, volume: update.level, volumeFixed: update.fixed };
 		case "media": {
