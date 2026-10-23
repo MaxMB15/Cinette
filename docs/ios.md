@@ -150,6 +150,13 @@ bump sets the same version in `project.yml` and `Info.plist`, so neither a build
 XcodeGen changes it. A build with `--build-number` or a `bundle.iOS.bundleVersion`
 override writes that number into `Info.plist`. Don't commit it.
 
+A build also sets each key of `src-tauri/Info.plist`, which the macOS app uses, and
+then each key of `src-tauri/Info.ios.plist` on `Info.plist`, a whole value at a time.
+So when iOS needs its own value for a key the macOS file sets, such as App Transport
+Security or the local network text, `Info.ios.plist` sets it too, with the value in
+`project.yml`. `ios_project_tests.rs` checks that a build leaves the checked-in
+`Info.plist` as it is.
+
 ### App icon
 
 Every app icon, for the desktop, iOS and Android, is made from
@@ -204,10 +211,12 @@ upload, add the category it names.
 
 ### App Transport Security
 
-App Transport Security only covers URLSession and the web view. mpv and `reqwest`
+App Transport Security covers URLSession, AVPlayer and the web view. mpv and `reqwest`
 open their own connections, so streams and API calls over plain HTTP aren't affected.
-`apps/player/src-tauri/Info.ios.plist` turns on `NSAllowsArbitraryLoadsInWebContent`,
-so channel logos served over HTTP still load, and `NSAllowsLocalNetworking`, which
+`apps/player/src-tauri/Info.ios.plist` turns on `NSAllowsArbitraryLoadsForMedia`,
+since AirPlay hands AVPlayer the provider's stream, which is usually plain HTTP. It
+also turns on `NSAllowsArbitraryLoadsInWebContent`, so channel logos served over HTTP
+still load, and `NSAllowsLocalNetworking`, which
 lets the web view reach local addresses. It sets `NSAllowsArbitraryLoads` to `false`
 on purpose. The Tauri CLI merges this file over the macOS `Info.plist`, which allows
 all loads, so leaving the key out would turn App Transport Security off on iOS too,
