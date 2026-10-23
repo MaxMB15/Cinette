@@ -46,6 +46,8 @@ rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
 tokio = { workspace = true, features = ["test-util"] }
 # Self-signed certificates for the fake Cast receivers in tests.
 rcgen = { version = "0.14", default-features = false, features = ["ring", "crypto"] }
+# Reads the iOS Info.plist files, to check what a build makes of them.
+plist = { version = "1", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The D-Bus library tauri-plugin-single-instance uses. Its address parser
