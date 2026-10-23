@@ -114,6 +114,11 @@ describe("tvFailureMessage", () => {
 			"Couldn't convert the stream on this device."
 		);
 		expect(tvFailureMessage("TV", new Error("x"))).toBe("Couldn't play it on TV.");
+		expect(tvFailureMessage("TV", "stale", "No answer.")).toBe("No answer.");
+		// A known code keeps its words whatever the fallback.
+		expect(tvFailureMessage("TV", "noRoute", "No answer.")).toBe(
+			"This device has no network address TV can reach."
+		);
 	});
 });
 

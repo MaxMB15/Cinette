@@ -136,8 +136,13 @@ export const REFUSED_MESSAGE =
 	"The provider refused the stream. The login may have expired, or another device may be using it.";
 
 /** What to say when `name` didn't start playing, from the code its load or
- *  route rejected with. Cast and AirPlay answer the same codes. */
-export const tvFailureMessage = (name: string, error: unknown): string => {
+ *  route rejected with. Cast and AirPlay answer the same codes. Anything
+ *  else gets `fallback`. */
+export const tvFailureMessage = (
+	name: string,
+	error: unknown,
+	fallback = `Couldn't play it on ${name}.`
+): string => {
 	switch (String(error)) {
 		case "unreachable":
 		case "notFound":
@@ -155,7 +160,7 @@ export const tvFailureMessage = (name: string, error: unknown): string => {
 		case "converterFailed":
 			return "Couldn't convert the stream on this device.";
 		default:
-			return `Couldn't play it on ${name}.`;
+			return fallback;
 	}
 };
 

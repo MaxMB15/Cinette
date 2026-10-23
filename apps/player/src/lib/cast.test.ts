@@ -159,6 +159,7 @@ describe("castControlMessage", () => {
 			"converterFailed",
 		])
 			expect(castControlMessage("TV", code)).toBe(tvFailureMessage("TV", code));
-		expect(castControlMessage("TV", "notConnected")).toBe("TV didn't respond.");
+		for (const error of ["notConnected", "stale", "superseded", "", new Error("x"), undefined])
+			expect(castControlMessage("TV", error)).toBe("TV didn't respond.");
 	});
 });

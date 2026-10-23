@@ -87,19 +87,4 @@ export const showsCastButton = (cast: CastLookout): boolean =>
 /** What to say when a control for the receiver failed. Play after a long
  *  pause converts again, so it fails as a cast that didn't start does. */
 export const castControlMessage = (name: string, error: unknown): string =>
-	LOAD_FAILURES.includes(String(error))
-		? tvFailureMessage(name, error)
-		: `${name} didn't respond.`;
-
-/** What a load rejects with, which `tvFailureMessage` explains. */
-const LOAD_FAILURES = [
-	"unreachable",
-	"notFound",
-	"streamUnreachable",
-	"refused",
-	"noConverter",
-	"noEncoder",
-	"unsupported",
-	"noRoute",
-	"converterFailed",
-];
+	tvFailureMessage(name, error, `${name} didn't respond.`);

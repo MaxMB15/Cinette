@@ -130,9 +130,7 @@ export const SUPERSEDED = "superseded";
 
 /** What the player says when a seek on the TV failed. */
 export const airplaySeekMessage = (error: unknown): string =>
-	typeof error === "string" && error !== ""
-		? tvFailureMessage("the TV", error)
-		: "Couldn't move the stream on the TV.";
+	tvFailureMessage("the TV", error, "Couldn't move the stream on the TV.");
 
 const NAMES: Record<string, string> = {
 	mkv: "MKV files",

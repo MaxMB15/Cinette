@@ -1051,8 +1051,8 @@ describe("airplaySeekMessage", () => {
 		expect(airplaySeekMessage("noRoute")).toBe(
 			"This device has no network address the TV can reach."
 		);
-		expect(airplaySeekMessage("")).toBe("Couldn't move the stream on the TV.");
-		expect(airplaySeekMessage(new Error("x"))).toBe("Couldn't move the stream on the TV.");
+		for (const error of ["stale", SUPERSEDED, "something new", "", new Error("x"), undefined])
+			expect(airplaySeekMessage(error)).toBe("Couldn't move the stream on the TV.");
 		expect(SUPERSEDED).toBe("superseded");
 	});
 });
