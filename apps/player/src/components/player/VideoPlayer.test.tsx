@@ -4507,19 +4507,22 @@ describe("Google Cast", () => {
 		vi.useRealTimers();
 	});
 
-	it("shows its button with no receivers when it knows why, and says why", async () => {
+	it("shows no button with nothing to cast to, and says a VPN may block one it found", async () => {
 		await openItem(lanternKeeper());
-		act(() => fakeCast.set({ vpnActive: true }));
+		// A VPN that's always on, or no local network access, shows nothing.
+		act(() => fakeCast.set({ vpnActive: true, localNetworkDenied: true }));
+		expect(castButton()).toBeNull();
+		act(() =>
+			fakeCast.set({
+				localNetworkDenied: false,
+				receivers: [receiver("cast:tv", "Hotel TV", false)],
+			})
+		);
 		fireEvent.click(castButton()!);
 		await flush();
 		expect(screen.getByRole("dialog", { name: "Play on" }).textContent).toContain(
 			"A VPN is on."
 		);
-		fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
-		act(() => fakeCast.set({ vpnActive: false, localNetworkDenied: true }));
-		expect(castButton()).not.toBeNull();
-		act(() => fakeCast.set({ localNetworkDenied: false }));
-		expect(castButton()).toBeNull();
 	});
 
 	it("says why a control failed while the cast is still connected", async () => {
