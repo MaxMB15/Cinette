@@ -187,7 +187,8 @@ export const castCapabilities = (s: CastSnapshot): PlaybackCapabilities => ({
 	pause: s.media?.canPause ?? false,
 	volume: s.volumeFixed ? "none" : "absolute",
 	subtitles: "none",
-	externalSubtitles: false,
+	// The receiver shows the player's own, except over a live channel.
+	externalSubtitles: s.item !== null && s.item.contentType !== "live",
 	audioTracks: false,
 	resumeAt: true,
 	catalog: false,
@@ -540,6 +541,7 @@ export const createCastDestination = (
 		},
 		setVolume: (volume) => control({ action: "volume", level: volume / 100 }),
 		setExternalSubtitle: (next) => {
+			if (next === subtitle) return;
 			cancelSettle();
 			subtitle = next;
 			// The next load takes it along.

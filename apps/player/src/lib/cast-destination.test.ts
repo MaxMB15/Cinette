@@ -262,6 +262,13 @@ describe("castCapabilities", () => {
 		expect(castCapabilities(snap({})).pause).toBe(false);
 		expect(castCapabilities(snap({})).volume).toBe("absolute");
 		expect(castCapabilities(snap({ volumeFixed: true })).volume).toBe("none");
+		const item = (contentType: Channel["contentType"]) => ({
+			title: "A",
+			contentType,
+			ref: "a",
+		});
+		expect(castCapabilities(snap({ item: item("movie") })).externalSubtitles).toBe(true);
+		expect(castCapabilities(snap({ item: item("live") })).externalSubtitles).toBe(false);
 		expect(castCapabilities(snap({}))).toMatchObject({
 			subtitles: "none",
 			externalSubtitles: false,
@@ -1325,6 +1332,9 @@ describe("createCastDestination", () => {
 		it("hides and shows the subtitle the load took without loading again", async () => {
 			const { fake, cast } = setUp();
 			await cast.load(filmItem, { subtitle: english });
+			// The one it shows already.
+			cast.setExternalSubtitle?.(english);
+			expect(fake.castControl).not.toHaveBeenCalled();
 			cast.setExternalSubtitle?.(null);
 			expect(fake.castControl).toHaveBeenLastCalledWith("cast:tv", {
 				action: "tracks",

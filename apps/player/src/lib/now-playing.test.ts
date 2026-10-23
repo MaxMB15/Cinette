@@ -116,6 +116,17 @@ describe("createNowPlaying", () => {
 		expect(changes).toHaveBeenCalled();
 	});
 
+	it("loads it with the subtitle it was given", async () => {
+		const { store } = setUp();
+		const target = tv();
+		const subtitle = { cues: [], delay: 0, name: "English", language: "en" };
+		await store.send(target, film, opts({ subtitle }));
+		expect(target.load).toHaveBeenCalledWith(
+			{ kind: "local", channel: film },
+			expect.objectContaining({ subtitle })
+		);
+	});
+
 	it("takes the route the picker worked out", async () => {
 		const { store } = setUp();
 		const target = tv();

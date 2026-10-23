@@ -420,7 +420,12 @@ vi.mock("./SubtitlePicker", () => ({
 					props.onSubtitleSelected?.(
 						101,
 						[{ start: 1, end: 4, text: "Mind the lantern" }],
-						{ fileId: 101, languageCode: "en", format: "srt" },
+						{
+							fileId: 101,
+							languageCode: "en",
+							format: "srt",
+							releaseName: "Lantern.Keeper.2024",
+						},
 						1
 					);
 				}}
@@ -4195,6 +4200,14 @@ describe("AirPlay", () => {
 });
 
 describe("Google Cast", () => {
+	/** What a cast gets for "Pick English". */
+	const english = {
+		cues: [{ start: 1, end: 4, text: "Mind the lantern" }],
+		delay: 0,
+		name: "Lantern.Keeper.2024",
+		language: "en",
+	};
+
 	const castState = (patch: Partial<PlaybackState> = {}) =>
 		playbackState({
 			item: { title: "The Lantern Keeper", contentType: "movie", ref: "mv1" },
@@ -4412,6 +4425,90 @@ describe("Google Cast", () => {
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Hotel TV.");
 	});
 
+	it("casts the subtitles it shows, and the receiver follows each change", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		fakeCast.set({
+			receivers: [receiver("cast:tv", "Hotel TV")],
+			statuses: new Map([["cast:tv", { via: "direct" as const }]]),
+		});
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		fireEvent.click(castButton()!);
+		await flush();
+		const picker = screen.getByRole("dialog", { name: "Play on" });
+		fireEvent.click(within(picker).getByRole("button", { name: /Hotel TV/ }));
+		await flush();
+		expect(fakeCast.get().send).toHaveBeenCalledWith(
+			"cast:tv",
+			expect.objectContaining({ id: "mv1" }),
+			expect.objectContaining({ subtitle: english })
+		);
+		const destination = {
+			...fakeDestination(
+				"cast",
+				"Hotel TV",
+				castState(),
+				playbackCapabilities({ externalSubtitles: true })
+			),
+			receive: vi.fn(),
+			closedReason: vi.fn(() => null),
+			setExternalSubtitle: vi.fn(),
+		};
+		act(() =>
+			fakeCast.set({
+				destination: destination as unknown as CastDestination,
+				state: castState(),
+			})
+		);
+		// The cast already has it.
+		expect(destination.setExternalSubtitle).not.toHaveBeenCalled();
+		const panel = screen.getByRole("region", { name: "Google Cast" });
+		const button = within(panel).getByRole("button", { name: "Subtitles" });
+		expect(button).toHaveClass("text-blue-400");
+		fireEvent.click(button);
+		fireEvent.click(screen.getByRole("button", { name: "Delay subtitles" }));
+		expect(destination.setExternalSubtitle).toHaveBeenLastCalledWith({
+			...english,
+			delay: 1.5,
+		});
+		fireEvent.click(screen.getByRole("button", { name: "Pick none" }));
+		expect(destination.setExternalSubtitle).toHaveBeenLastCalledWith(null);
+		expect(within(panel).getByRole("button", { name: "Subtitles" })).not.toHaveClass(
+			"text-blue-400"
+		);
+	});
+
+	it("has no subtitles button for a receiver that can't show them, or an item without any", async () => {
+		await openItem(lanternKeeper());
+		act(() =>
+			fakeCast.set({
+				destination: {
+					...fakeDestination(
+						"cast",
+						"Hotel TV",
+						castState(),
+						playbackCapabilities({ externalSubtitles: true })
+					),
+					receive: vi.fn(),
+					closedReason: vi.fn(() => null),
+				} as unknown as CastDestination,
+				state: castState(),
+			})
+		);
+		// No details, so no subtitles to look up.
+		const panel = screen.getByRole("region", { name: "Google Cast" });
+		expect(within(panel).queryByRole("button", { name: "Subtitles" })).toBeNull();
+		act(() =>
+			fakeCast.set({ destination: tv() as unknown as CastDestination, state: castState() })
+		);
+		expect(
+			within(screen.getByRole("region", { name: "Google Cast" })).queryByRole("button", {
+				name: "Subtitles",
+			})
+		).toBeNull();
+	});
+
 	it("covers the player with the receiver's controls while it casts", async () => {
 		await openItem(lanternKeeper());
 		const destination = tv();
@@ -4601,6 +4698,28 @@ describe("Google Cast", () => {
 			);
 			return destination;
 		};
+
+		it("sends the subtitles with the same item again, and none with another", async () => {
+			tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+			await openItem(lanternKeeper());
+			pickEnglishSubtitles();
+			casting();
+			const send = vi.mocked(nowPlaying.send);
+			// The same film from another of its sources.
+			await goTo({ url: `${MOVIE_URL}?alt`, channel: lanternKeeper() });
+			expect(send).toHaveBeenLastCalledWith(
+				expect.objectContaining({ id: "cast:tv" }),
+				expect.objectContaining({ id: "mv1" }),
+				expect.objectContaining({ subtitle: english })
+			);
+			const news = makeNewsChannel();
+			await goTo({ url: news.url, channel: news });
+			expect(send).toHaveBeenLastCalledWith(
+				expect.objectContaining({ id: "cast:tv" }),
+				expect.objectContaining({ id: news.id }),
+				expect.objectContaining({ subtitle: null })
+			);
+		});
 
 		it("sends the next episode to the receiver, from the panel or the keys", async () => {
 			await openItem(ep1, { episodes: [ep1, ep2] });

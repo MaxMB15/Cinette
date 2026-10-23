@@ -13,7 +13,7 @@ import {
 	type CastDestination,
 } from "@/lib/cast-destination";
 import { castEndedMessage, castStatus, newerList } from "@/lib/cast";
-import type { PlaybackState } from "@/lib/destination";
+import type { ExternalSubtitle, PlaybackState } from "@/lib/destination";
 import type { DestinationStatus } from "@/lib/device-picker";
 import { nowPlaying, ofKind, sentMessage } from "@/lib/now-playing";
 import type { RouteDecision } from "@/lib/route";
@@ -114,6 +114,7 @@ export interface Cast {
 		channel: Channel,
 		opts: {
 			startAt?: number;
+			subtitle?: ExternalSubtitle | null;
 			stopLocal: () => Promise<void>;
 			confirm?: (keep: "on" | "onScreen") => Promise<boolean>;
 		}

@@ -73,7 +73,8 @@ export interface PlaybackCapabilities {
 	volume: "absolute" | "none";
 	/** Picking one of the destination's own subtitle tracks. */
 	subtitles: "select" | "none";
-	/** Subtitle files this device downloads and draws, local only. */
+	/** Subtitle files this device downloads, which it draws or, as a Cast
+	 *  receiver does, takes with `setExternalSubtitle`. */
 	externalSubtitles: boolean;
 	audioTracks: boolean;
 	/** Loading at a start position. */
