@@ -137,6 +137,12 @@ pub fn clean_name(name: &str) -> Option<String> {
     (!cleaned.is_empty()).then_some(cleaned)
 }
 
+/// What to show for a name another device gave: [`clean_name`], or the
+/// default for its type when nothing is left.
+pub fn shown_name(name: &str, device_type: DeviceType) -> String {
+    clean_name(name).unwrap_or_else(|| default_name(device_type).to_owned())
+}
+
 /// Whether `c` is a Unicode format character (category Cf), such as a
 /// bidi control, a zero-width space or joiner, or a tag character.
 pub(crate) fn is_format(c: char) -> bool {

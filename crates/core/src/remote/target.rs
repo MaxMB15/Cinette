@@ -267,7 +267,7 @@ pub struct Target {
 
 impl Target {
     pub fn new(key: DeviceKey, device_type: DeviceType, settings: RemoteSettings) -> Self {
-        Self {
+        let mut target = Self {
             key,
             device_type,
             settings,
@@ -282,9 +282,11 @@ impl Target {
             sessions: Sessions::new(),
             nonces: TokenBucket::new(NONCES_PER_SECOND, f64::from(NONCE_BURST)),
             evicted: Vec::new(),
-            features: vec![Feature::Control, Feature::Catalog],
+            features: Vec::new(),
             blocked: Vec::new(),
-        }
+        };
+        target.offer(false, false);
+        target
     }
 
     /// Takes the blocked devices saved from [`Action::BlockedChanged`].
@@ -312,10 +314,10 @@ impl Target {
     }
 
     /// Offers history transfers or receiving providers too, once the
-    /// platform layer carries out their actions. Control and the catalog
-    /// are always offered. Connections from now on see the change.
+    /// platform layer carries out their actions. Control, the catalog and
+    /// renames are always offered. Connections from now on see the change.
     pub fn offer(&mut self, history: bool, providers: bool) {
-        self.features = vec![Feature::Control, Feature::Catalog];
+        self.features = vec![Feature::Control, Feature::Catalog, Feature::Rename];
         if history {
             self.features.push(Feature::History);
         }
@@ -679,6 +681,15 @@ impl Target {
                         self.set_stage(conn, Stage::InSession(auth));
                         self.cancel_asking(conn, &mut actions);
                     }
+                    Message::Renamed { name } => {
+                        let renamed = auth.peer.rename(&name).then(|| auth.peer.name.clone());
+                        self.set_stage(conn, Stage::InSession(auth));
+                        if let Some(name) = renamed
+                            && self.sessions.rename(conn, name)
+                        {
+                            actions.push(self.sessions_changed());
+                        }
+                    }
                     step if is_transfer_step(&step) => {
                         self.set_stage(conn, Stage::InSession(auth));
                         self.transfer_step(conn, step, now, &mut actions);
@@ -726,7 +737,7 @@ impl Target {
         // but Never allow ended every session already.
         if !blocked
             && let Some(id) = resume
-            && let Ok(old) = self.sessions.resume(&id, &auth.peer.id, conn, now)
+            && let Ok(old) = self.sessions.resume(&id, &auth.peer, conn, now)
         {
             if let Some(old) = old {
                 self.close(old, Some(CloseReason::Cancelled), actions);
@@ -931,6 +942,7 @@ impl Target {
     pub fn update_settings(&mut self, settings: RemoteSettings, _now: Instant) -> Vec<Action> {
         let mut actions = Vec::new();
         let before = self.discovery_record();
+        let old_name = self.settings.name(self.device_type);
         let was_never = self.settings.remote_control == ControlMode::Never;
         let was_discoverable = self.settings.discoverable;
         self.settings = settings;
@@ -968,6 +980,10 @@ impl Target {
             }
         }
         self.sync_prompt(&mut actions);
+        let name = self.settings.name(self.device_type);
+        if name != old_name {
+            self.send_rename(name, &mut actions);
+        }
         let after = self.discovery_record();
         if after != before {
             actions.push(Action::Advertise(after));
@@ -1436,7 +1452,22 @@ impl Target {
         }
     }
 
-    /// The name the device on `conn` gave in its handshake.
+    /// Tells every controller past the handshake whose hello offers
+    /// [`Feature::Rename`] that this device is called `name` now. One still
+    /// asking hears it too, since the user may rename while a dialog shows.
+    fn send_rename(&mut self, name: String, actions: &mut Vec<Action>) {
+        let message = Message::Renamed { name };
+        for (&conn, c) in &mut self.conns {
+            if let Stage::Ready(auth) | Stage::Waiting(auth, _) | Stage::InSession(auth) =
+                &mut c.stage
+                && auth.peer.features.contains(&Feature::Rename)
+            {
+                send(auth, conn, &message, actions);
+            }
+        }
+    }
+
+    /// The name the device on `conn` gave in its handshake, or since.
     fn peer_name(&self, conn: ConnId) -> String {
         match self.conns.get(&conn) {
             Some(Conn {

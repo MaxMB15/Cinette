@@ -344,6 +344,9 @@ describe("Controls source menu", () => {
 		expect(second).not.toHaveTextContent("(default)");
 		expect(second).toHaveTextContent("backup.example.com · TS");
 		expect(second).toHaveAttribute("aria-checked", "true");
+		// The check mark is on the one playing only.
+		expect(first.querySelector(".lucide-check")).toBeNull();
+		expect(second.querySelector(".lucide-check")).not.toBeNull();
 	});
 
 	it("never shows the login an address carries", () => {

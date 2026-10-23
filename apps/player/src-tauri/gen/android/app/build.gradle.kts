@@ -54,6 +54,13 @@ android {
         manifestPlaceholders["usesCleartextTraffic"] = "true"
         // android_device.rs reads it from the manifest's app.cinette.STORE.
         manifestPlaceholders["store"] = store
+        // The launcher activity's icon. Fire TV's launcher shows a sideloaded
+        // app's square icon centered in a 16:9 tile, with grey on both sides,
+        // and ignores android:banner, so the Amazon build gives it the wide
+        // banner. Android TV and Google TV show the banner, and Google TV's
+        // apps row the square icon.
+        manifestPlaceholders["launcherIcon"] =
+            if (store == "amazon") "@drawable/banner" else "@mipmap/ic_launcher"
         applicationId = "app.cinette"
         minSdk = 28
         targetSdk = 37

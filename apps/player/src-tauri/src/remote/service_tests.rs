@@ -34,7 +34,7 @@ struct Running {
     kept: Arc<Mutex<Vec<bool>>>,
 }
 
-const EVENTS: [&str; 13] = [
+const EVENTS: [&str; 14] = [
     "remote://save-progress",
     "remote://history-imported",
     "remote://consent",
@@ -47,6 +47,7 @@ const EVENTS: [&str; 13] = [
     "remote://transfer",
     "remote://transfer-target",
     "remote://providers-added",
+    "remote://renamed",
     "remote://blocked",
 ];
 
@@ -862,6 +863,68 @@ async fn one_instance_controls_another() {
         ),
         Err(json!("link_not_connected"))
     );
+}
+
+/// Waits for `running`'s controllers list to name `name`.
+async fn session_named(running: &mut Running, name: &str) {
+    loop {
+        let sessions = running.event("remote://sessions").await;
+        if sessions[0]["name"] == json!(name) {
+            return;
+        }
+    }
+}
+
+fn rename(running: &Running, mode: &str, name: &str) {
+    running
+        .invoke(
+            "remote_set_settings",
+            json!({ "settings": { "discoverable": true, "remoteControl": mode, "deviceName": name } }),
+        )
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_name_reaches_an_open_session_both_ways() {
+    let (mut mac, mut tv) = pair("always").await;
+    let tv_id = tv.device_id().to_string();
+    mac.event("remote://devices").await;
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
+        .unwrap();
+    phase(&mut mac, "connected").await;
+    session_named(&mut tv, default_name(device_type())).await;
+
+    rename(&mac, "ask", "Kitchen");
+    session_named(&mut tv, "Kitchen").await;
+
+    rename(&tv, "always", "Den");
+    assert_eq!(
+        mac.event("remote://renamed").await,
+        json!({ "deviceId": tv_id, "link": 1, "name": "Den" })
+    );
+    // The same name again sends nothing.
+    rename(&tv, "ask", "Den");
+    rename(&tv, "ask", "Attic");
+    assert_eq!(mac.event("remote://renamed").await["name"], json!("Attic"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_name_changed_while_asking_reaches_the_session() {
+    let (mut mac, mut tv) = pair("ask").await;
+    let tv_id = tv.device_id().to_string();
+    mac.event("remote://devices").await;
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
+        .unwrap();
+    let consent = tv.event("remote://consent").await;
+    phase(&mut mac, "pending").await;
+    rename(&mac, "ask", "Kitchen");
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "answer": "allow" }),
+    )
+    .unwrap();
+    phase(&mut mac, "connected").await;
+    session_named(&mut tv, "Kitchen").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

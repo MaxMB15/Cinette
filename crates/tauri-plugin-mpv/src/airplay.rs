@@ -158,6 +158,10 @@ pub struct PlaybackError {
     /// one, or with this Mac.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub not_picked: bool,
+    /// This device's converter stopped by itself, so starting the
+    /// conversion again might work.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub conversion_stopped: bool,
 }
 
 /// What the frontend shows, in the terms of `PlaybackState`. The frontend
@@ -357,6 +361,7 @@ impl Tracker {
             code,
             unsupported: error.is_some_and(is_unsupported),
             not_picked: false,
+            conversion_stopped: false,
         }
     }
 
@@ -478,12 +483,14 @@ impl AirPlay {
         Some(state)
     }
 
-    /// Stops tracking, with the item in error as `code`.
+    /// Stops tracking, with the item in error as `code`, after this
+    /// device's converter stopped by itself.
     pub fn fail(&self, code: &'static str) -> AirPlayState {
         self.fail_with(PlaybackError {
             code,
             unsupported: false,
             not_picked: false,
+            conversion_stopped: true,
         })
     }
 
@@ -497,6 +504,7 @@ impl AirPlay {
             code: "openFailed",
             unsupported: false,
             not_picked: true,
+            conversion_stopped: false,
         }))
     }
 
