@@ -270,7 +270,8 @@ pub fn hold_cast_receivers<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) {
 /// `restart` when it starts the cast's stream again by itself, which
 /// rejects with `notConnected` once that cast has ended. `freed` when
 /// something on this computer just let go of the provider's stream, such as
-/// its own player.
+/// its own player. `subtitle`, which a live channel leaves out, is shown
+/// from the start.
 #[tauri::command]
 pub async fn cast_load<R: Runtime>(
     app: AppHandle<R>,
@@ -280,29 +281,41 @@ pub async fn cast_load<R: Runtime>(
     start_at: Option<f64>,
     restart: bool,
     freed: bool,
+    subtitle: Option<serde_json::Value>,
 ) -> Result<(), String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let route = serde_json::from_value(route).map_err(|e| e.to_string())?;
-        playback::load(
-            &app,
-            &receiver_id,
-            &channel,
+        let subtitle = subtitle
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        let options = playback::LoadOptions {
+            start_at,
+            restart,
+            freed,
+            subtitle,
+        };
+        playback::load(&app, &receiver_id, &channel, route, options).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (
+            app,
+            receiver_id,
+            channel,
             route,
             start_at,
             restart,
             freed,
-        )
-        .await
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = (app, receiver_id, channel, route, start_at, restart, freed);
+            subtitle,
+        );
         Err(UNSUPPORTED.into())
     }
 }
 
-/// Play, pause, seek or set the volume on the receiver being cast to.
+/// Play, pause, seek, set the volume, or show or hide the subtitle on the
+/// receiver being cast to.
 #[tauri::command]
 pub fn cast_control<R: Runtime>(
     app: AppHandle<R>,

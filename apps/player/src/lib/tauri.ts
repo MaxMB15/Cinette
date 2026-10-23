@@ -669,7 +669,16 @@ export type CastAction =
 	| { action: "play" }
 	| { action: "pause" }
 	| { action: "seek"; to: number }
-	| { action: "volume"; level: number };
+	| { action: "volume"; level: number }
+	/** Shows the subtitle the load gave, or hides it. */
+	| { action: "tracks"; on: boolean };
+
+/** A subtitle for a Cast receiver to show, written as WebVTT. */
+export interface CastSubtitle {
+	vtt: string;
+	name: string;
+	language: string | null;
+}
 
 /** What a Cast receiver reports, as `cast://update` carries it. */
 export type CastUpdate =
@@ -712,8 +721,9 @@ export type CastUpdate =
 export const CAST_UPDATE_EVENT = "cast://update";
 
 /**
- * Play `channel` on a Cast receiver, connecting first when needed. Rejects
- * with `notFound`, `unreachable`, `refused`, `noConverter`,
+ * Play `channel` on a Cast receiver, connecting first when needed, with
+ * `subtitle` shown from the start unless it's a live channel. Rejects
+ * with `subtitleTooLarge`, `notFound`, `unreachable`, `refused`, `noConverter`,
  * `noEncoder`, `unsupported`, `noRoute`, `converterFailed`, `stale` or
  * `superseded`, or, for a direct HLS route, `notPlaylist` or `cors`.
  * `restart` when the cast starts its stream again by itself: it never
@@ -725,8 +735,10 @@ export const castLoad = (
 	route: CastRoute,
 	startAt: number | undefined,
 	restart: boolean,
-	freed: boolean
-): Promise<void> => invoke("cast_load", { receiverId, channel, route, startAt, restart, freed });
+	freed: boolean,
+	subtitle?: CastSubtitle
+): Promise<void> =>
+	invoke("cast_load", { receiverId, channel, route, startAt, restart, freed, subtitle });
 
 /** Rejects with `notConnected` when nothing is cast to that receiver. */
 export const castControl = (receiverId: string, action: CastAction): Promise<void> =>

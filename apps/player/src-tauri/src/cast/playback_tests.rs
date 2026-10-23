@@ -89,8 +89,20 @@ fn load(
     app: &TestApp,
     receiver: &str,
     channel: &Channel,
+    route: Value,
+    start_at: Option<f64>,
+) -> Result<Value, Value> {
+    load_with(app, receiver, channel, route, start_at, Value::Null)
+}
+
+/// [`load`] with `subtitle`, or none for `null`.
+fn load_with(
+    app: &TestApp,
+    receiver: &str,
+    channel: &Channel,
     mut route: Value,
     start_at: Option<f64>,
+    subtitle: Value,
 ) -> Result<Value, Value> {
     let handle = app.handle();
     let streams = handle.state::<crate::streams::StreamsState>();
@@ -100,7 +112,8 @@ fn load(
     }
     app.invoke(
         "cast_load",
-        json!({ "receiverId": receiver, "channel": channel, "route": route, "startAt": start_at, "restart": false, "freed": false }),
+        json!({ "receiverId": receiver, "channel": channel, "route": route, "startAt": start_at,
+                "restart": false, "freed": false, "subtitle": subtitle }),
     )
 }
 
@@ -2201,4 +2214,141 @@ async fn a_reconnect_finds_an_app_that_ended_meanwhile_and_says_so() {
     })
     .await;
     assert!(opened.is_err());
+}
+
+const VTT: &str = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n";
+
+fn english(vtt: &str) -> Value {
+    json!({ "vtt": vtt, "name": "English", "language": "en" })
+}
+
+/// Asks for `url` as the receiver would, and gives its status, content
+/// type and body.
+async fn fetch(url: &str) -> (u16, String, String) {
+    let response = tokio::time::timeout(
+        Duration::from_secs(10),
+        mvp_core::http::test_server::client().get(url).send(),
+    )
+    .await
+    .expect("an answer within 10 s")
+    .unwrap();
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    (status, content_type, response.text().await.unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_direct_cast_serves_its_subtitle_from_this_computer() {
+    let app = TestApp::new();
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let movie = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    add_channel(&app, &movie);
+    load_with(&app, "cast:tv", &movie, direct("mp4"), None, english(VTT)).unwrap();
+    let loaded = next_of(&mut got, "LOAD").await;
+    assert_eq!(loaded.body["activeTrackIds"], json!([1]));
+    let track = &loaded.body["media"]["tracks"][0];
+    assert_eq!(track["trackId"], 1);
+    assert_eq!(track["type"], "TEXT");
+    assert_eq!(track["trackContentType"], "text/vtt");
+    assert_eq!(track["name"], "English");
+    assert_eq!(track["language"], "en");
+    let url = track["trackContentId"].as_str().unwrap();
+    assert!(url.starts_with("http://127.0.0.1:"), "{url}");
+    assert!(url.ends_with("/subtitles.vtt"), "{url}");
+    // The cast keeps the server while it plays.
+    assert_eq!(fetch(url).await, (200, "text/vtt".into(), VTT.into()));
+    // A load without one takes it away.
+    load(&app, "cast:tv", &movie, direct("mp4"), None).unwrap();
+    let loaded = next_of(&mut got, "LOAD").await;
+    assert_eq!(loaded.body["activeTrackIds"], json!([]));
+    assert_eq!(loaded.body["media"].get("tracks"), None);
+    assert!(tokio::time::timeout(
+        Duration::from_secs(2),
+        mvp_core::http::test_server::client().get(url).send()
+    )
+    .await
+    .is_ok_and(|r| r.is_err()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_live_channel_is_cast_without_its_subtitle() {
+    let app = TestApp::new();
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let live = channel("l-1", "http://192.0.2.1/1.ts", "live");
+    add_channel(&app, &live);
+    load_with(&app, "cast:tv", &live, direct("ts"), None, english(VTT)).unwrap();
+    let loaded = next_of(&mut got, "LOAD").await;
+    assert_eq!(loaded.body["activeTrackIds"], json!([]));
+    assert_eq!(loaded.body["media"].get("tracks"), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_subtitle_over_the_limit_is_turned_away() {
+    let app = TestApp::new();
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let movie = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    add_channel(&app, &movie);
+    let limit = super::playback::SUBTITLE_LIMIT;
+    let over = "a".repeat(limit + 1);
+    assert_eq!(
+        load_with(&app, "cast:tv", &movie, direct("mp4"), None, english(&over)),
+        Err(json!("subtitleTooLarge"))
+    );
+    // Up to the limit goes.
+    let full = "a".repeat(limit);
+    load_with(&app, "cast:tv", &movie, direct("mp4"), None, english(&full)).unwrap();
+    let loaded = next_of(&mut got, "LOAD").await;
+    assert_eq!(loaded.body["activeTrackIds"], json!([1]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_subtitle_shows_and_hides() {
+    let app = TestApp::new();
+    let events = updates(&app);
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let movie = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    add_channel(&app, &movie);
+    load_with(&app, "cast:tv", &movie, direct("mp4"), None, english(VTT)).unwrap();
+    next_of(&mut got, "LOAD").await;
+    // Once the receiver says what it plays.
+    while next_update(&events, "media")["update"]["media"].is_null() {}
+    control(&app, "cast:tv", json!({ "action": "tracks", "on": false })).unwrap();
+    let hidden = next_of(&mut got, "EDIT_TRACKS_INFO").await;
+    assert_eq!(hidden.body["activeTrackIds"], json!([]));
+    control(&app, "cast:tv", json!({ "action": "tracks", "on": true })).unwrap();
+    let shown = next_of(&mut got, "EDIT_TRACKS_INFO").await;
+    assert_eq!(shown.body["activeTrackIds"], json!([1]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_converted_cast_serves_its_subtitle_beside_the_stream() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16_lasting(24))]);
+    let movie = channel("m-1", &format!("{source}/movie/1.wav"), "movie");
+    add_channel(&app, &movie);
+    let route = json!({ "via": "converted", "source": 0, "container": "mkv", "video": "copy", "audio": "aac" });
+    load_with(&app, "cast:tv", &movie, route, None, english(VTT)).unwrap();
+    let loaded = next_of(&mut got, "LOAD").await;
+    let stream = loaded.body["media"]["contentId"].as_str().unwrap();
+    let base = stream.strip_suffix("stream.mkv").unwrap();
+    let track = &loaded.body["media"]["tracks"][0];
+    assert_eq!(track["trackContentId"], format!("{base}subtitles.vtt"));
+    let url = track["trackContentId"].as_str().unwrap();
+    assert_eq!(fetch(url).await, (200, "text/vtt".into(), VTT.into()));
+    app.invoke("cast_release", json!({ "receiverId": "cast:tv" }))
+        .unwrap();
 }
