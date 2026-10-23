@@ -131,7 +131,7 @@ describe("ConsentDialog", () => {
 		armed();
 		expect(allow).not.toHaveAttribute("aria-disabled");
 		fireEvent.click(allow);
-		expect(remoteAnswerConsent).toHaveBeenCalledWith(7, true);
+		expect(remoteAnswerConsent).toHaveBeenCalledWith(7, "allow");
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
@@ -146,7 +146,7 @@ describe("ConsentDialog", () => {
 		expect(remoteAnswerConsent).not.toHaveBeenCalled();
 		armed();
 		fireEvent.click(allow);
-		expect(remoteAnswerConsent).toHaveBeenCalledWith(7, true);
+		expect(remoteAnswerConsent).toHaveBeenCalledWith(7, "allow");
 	});
 
 	it("works exactly a moment after it shows", async () => {
@@ -178,22 +178,22 @@ describe("ConsentDialog", () => {
 		expect(remoteAnswerConsent).not.toHaveBeenCalled();
 		fireEvent.pointerDown(allow);
 		fireEvent.click(allow, { detail: 1 });
-		expect(remoteAnswerConsent).toHaveBeenCalledWith(7, true);
+		expect(remoteAnswerConsent).toHaveBeenCalledWith(7, "allow");
 	});
 
-	it("denies with the button, Escape or a click outside", async () => {
+	it("denies with the button, and Escape or a click outside only dismisses", async () => {
 		await shown();
 		ask(1);
 		fireEvent.click(screen.getByRole("button", { name: "Deny" }));
-		expect(remoteAnswerConsent).toHaveBeenLastCalledWith(1, false);
+		expect(remoteAnswerConsent).toHaveBeenLastCalledWith(1, "deny");
 
 		ask(2);
 		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-		expect(remoteAnswerConsent).toHaveBeenLastCalledWith(2, false);
+		expect(remoteAnswerConsent).toHaveBeenLastCalledWith(2, "dismiss");
 
 		ask(3);
 		fireEvent.click(screen.getByRole("dialog").parentElement!);
-		expect(remoteAnswerConsent).toHaveBeenLastCalledWith(3, false);
+		expect(remoteAnswerConsent).toHaveBeenLastCalledWith(3, "dismiss");
 		expect(remoteAnswerConsent).toHaveBeenCalledTimes(3);
 	});
 
@@ -255,7 +255,7 @@ describe("ConsentDialog", () => {
 			})
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Deny" }));
-		expect(remoteAnswerConsent).toHaveBeenCalledWith(5, false);
+		expect(remoteAnswerConsent).toHaveBeenCalledWith(5, "deny");
 	});
 
 	it("ignores a hidden request when none is shown", async () => {
@@ -296,7 +296,7 @@ describe("ConsentDialog", () => {
 		).not.toHaveBeenCalled();
 		armed();
 		fireEvent.click(screen.getByRole("button", { name: "Allow" }));
-		expect(remoteAnswerConsent).toHaveBeenCalledWith(2, true);
+		expect(remoteAnswerConsent).toHaveBeenCalledWith(2, "allow");
 	});
 
 	it("counts down and says when it ran out", async () => {

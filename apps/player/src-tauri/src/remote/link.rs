@@ -137,6 +137,8 @@ pub trait LinkHost: Send + Sync + 'static {
     fn state(&self, link: u64, device: &DeviceId, state: &VersionedState);
     /// Something about a transfer this device asked for.
     fn transfer(&self, _link: u64, _device: &DeviceId, _event: &ControllerEvent) {}
+    /// The other device has a new name.
+    fn renamed(&self, _link: u64, _device: &DeviceId, _name: &str) {}
 }
 
 /// Where to reach the target. Asked again before each attempt, since its
@@ -178,6 +180,7 @@ enum Input {
     SendExport(String, Box<Result<Export, ErrorCode>>),
     StartImport(String),
     Imported(String, Box<Result<Report, ErrorCode>>),
+    Rename(String),
     Leave(oneshot::Sender<()>),
 }
 
@@ -270,6 +273,12 @@ impl LinkHandle {
         let _ = self.inbox.send(Input::Imported(transfer, Box::new(result)));
     }
 
+    /// This device is called `name` now. The target hears it in the
+    /// session, or with the next connection.
+    pub fn rename(&self, name: String) {
+        let _ = self.inbox.send(Input::Rename(name));
+    }
+
     /// Stops asking, or ends the session. The target keeps playing.
     pub async fn leave(&self) {
         let (tx, rx) = oneshot::channel();
@@ -339,7 +348,11 @@ async fn run(
 ) {
     let device = config.target.clone();
     let link = config.generation;
-    let mut session: Option<String> = None;
+    let mut carried = Carried {
+        hello: config.hello.clone(),
+        shown: None,
+        session: None,
+    };
     let mut dropped_at: Option<Instant> = None;
     let mut attempt: u32 = 0;
     loop {
@@ -361,15 +374,15 @@ async fn run(
         let mut from = 0;
         let mut why_not: Option<Ended> = None;
         let outcome = loop {
-            break match connect_any(&addresses[from..], &mut inbox).await {
+            break match connect_any(&addresses[from..], &mut carried.hello, &mut inbox).await {
                 Reached::Left => Outcome::Ended(Ended::Left),
                 Reached::Stream(stream, at) => {
                     let mut session_back = false;
                     let result = connection(
                         &config,
                         &host,
+                        &mut carried,
                         stream,
-                        &mut session,
                         &mut session_back,
                         &mut inbox,
                     )
@@ -387,14 +400,14 @@ async fn run(
                     result
                 }
                 // During a resume, discovery may find the right address yet.
-                Reached::Nowhere if session.is_some() => Outcome::Dropped,
+                Reached::Nowhere if carried.session.is_some() => Outcome::Dropped,
                 Reached::Nowhere => Outcome::Ended(why_not.unwrap_or(Ended::Unreachable)),
             };
         };
         let ended = match outcome {
             Outcome::Ended(ended) => Some(ended),
             Outcome::NotThere(_) => unreachable!("the loop above tries the next address"),
-            Outcome::Dropped if session.is_none() => Some(Ended::Lost),
+            Outcome::Dropped if carried.session.is_none() => Some(Ended::Lost),
             Outcome::Dropped => {
                 let since = *dropped_at.get_or_insert_with(|| (config.clock)());
                 let left = (since + config.grace).saturating_duration_since((config.clock)());
@@ -404,7 +417,7 @@ async fn run(
                     // The last try comes as the grace runs out.
                     let wait = (config.limits.backoff)(attempt).min(left);
                     attempt += 1;
-                    match wait_or_leave(wait, &mut inbox).await {
+                    match wait_or_leave(wait, &mut carried.hello, &mut inbox).await {
                         true => Some(Ended::Left),
                         false => None,
                     }
@@ -434,7 +447,11 @@ fn more_telling(old: Option<Ended>, new: Ended) -> Ended {
 
 /// Waits before the next attempt, answering what comes in meanwhile. True
 /// when this device left.
-async fn wait_or_leave(wait: Duration, inbox: &mut mpsc::UnboundedReceiver<Input>) -> bool {
+async fn wait_or_leave(
+    wait: Duration,
+    hello: &mut Hello,
+    inbox: &mut mpsc::UnboundedReceiver<Input>,
+) -> bool {
     let until = tokio::time::Instant::now() + wait;
     loop {
         tokio::select! {
@@ -444,6 +461,7 @@ async fn wait_or_leave(wait: Duration, inbox: &mut mpsc::UnboundedReceiver<Input
                     let _ = done.send(());
                     return true;
                 }
+                Some(Input::Rename(name)) => hello.name = name,
                 // Dropping a request answers it with NotConnected.
                 Some(_) => {}
             },
@@ -462,7 +480,11 @@ enum Reached {
 }
 
 /// The first of `addrs` that takes a connection. Leaving stops it at once.
-async fn connect_any(addrs: &[SocketAddr], inbox: &mut mpsc::UnboundedReceiver<Input>) -> Reached {
+async fn connect_any(
+    addrs: &[SocketAddr],
+    hello: &mut Hello,
+    inbox: &mut mpsc::UnboundedReceiver<Input>,
+) -> Reached {
     for (at, addr) in addrs.iter().enumerate() {
         let attempt = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr));
         tokio::pin!(attempt);
@@ -480,6 +502,7 @@ async fn connect_any(addrs: &[SocketAddr], inbox: &mut mpsc::UnboundedReceiver<I
                         let _ = done.send(());
                         return Reached::Left;
                     }
+                    Some(Input::Rename(name)) => hello.name = name,
                     // Dropping a request answers it with NotConnected.
                     Some(_) => {}
                 },
@@ -507,20 +530,37 @@ impl Waiting {
     }
 }
 
+/// What a link keeps from one connection to the next.
+struct Carried {
+    /// This device's hello. Its name follows this device's.
+    hello: Hello,
+    /// The other device's name as the webview last heard it.
+    shown: Option<String>,
+    /// The session to resume, once there is one.
+    session: Option<String>,
+}
+
 /// One connection, from the handshake until it ends.
 async fn connection(
     config: &LinkConfig,
     host: &Arc<dyn LinkHost>,
+    carried: &mut Carried,
     stream: TcpStream,
-    session: &mut Option<String>,
     session_back: &mut bool,
     inbox: &mut mpsc::UnboundedReceiver<Input>,
 ) -> Outcome {
     let device = &config.target;
     let link = config.generation;
+    let Carried {
+        hello,
+        shown,
+        session,
+    } = carried;
+    // The name the target hears in the handshake.
+    let said = hello.name.clone();
     let (mut controller, first) = match Controller::connect(
         &config.key,
-        config.hello.clone(),
+        hello.clone(),
         config.target.clone(),
         session.clone(),
         (config.clock)(),
@@ -575,6 +615,9 @@ async fn connection(
                     match event {
                         Event::Verified { code, peer } => {
                             verified = true;
+                            if !resuming {
+                                *shown = Some(peer.name.clone());
+                            }
                             let verifying = Phase::Verifying {
                                 code: code.to_string(),
                                 name: peer.name,
@@ -588,6 +631,9 @@ async fn connection(
                         }
                         Event::Pending { expires_in } => {
                             if let Some(verifying) = code_for_a_new_request.take() {
+                                if let Phase::Verifying { name, .. } = &verifying {
+                                    *shown = Some(name.clone());
+                                }
                                 host.phase(link, device, &verifying);
                             }
                             host.phase(
@@ -597,8 +643,19 @@ async fn connection(
                             );
                         }
                         Event::Connected { session_id, state } => {
+                            // Renamed while asking: the handshake had the old name.
+                            if hello.name != said
+                                && let Some(bytes) = controller.rename(&hello.name)
+                            {
+                                let _ = writer.send(bytes);
+                                last_sent = (config.clock)();
+                            }
                             *session = Some(session_id);
                             *session_back = true;
+                            // Renamed while the link was down: a resume shows no code.
+                            if let Some(peer) = controller.peer() {
+                                show_name(host, link, device, shown, &peer.name);
+                            }
                             host.phase(link, device, &Phase::Connected);
                             host.state(link, device, &state);
                         }
@@ -618,6 +675,7 @@ async fn connection(
                             tracing::debug!("[remote] {device} reported {code:?}");
                         }
                         Event::Transfer(event) => host.transfer(link, device, &event),
+                        Event::Renamed(name) => show_name(host, link, device, shown, &name),
                         Event::Closed(reason) if !verified => {
                             // Another device is at this address, which it
                             // may have taken over, or claims the target's id
@@ -701,6 +759,13 @@ async fn connection(
                     let out = controller.cancel_transfer();
                     pass_on(out, &writer, &mut last_sent, config, host, link, device);
                 }
+                Some(Input::Rename(name)) => {
+                    if let Some(bytes) = controller.rename(&name) {
+                        let _ = writer.send(bytes);
+                        last_sent = (config.clock)();
+                    }
+                    hello.name = name;
+                }
                 Some(Input::Catalog(query, reply)) => match controller.catalog(query) {
                     Ok((id, bytes)) => {
                         let _ = writer.send(bytes);
@@ -763,6 +828,20 @@ async fn connection(
             let _ = writer.send(bytes);
             last_sent = now;
         }
+    }
+}
+
+/// Tells the host the other device's name, unless it has that one already.
+fn show_name(
+    host: &Arc<dyn LinkHost>,
+    link: u64,
+    device: &DeviceId,
+    shown: &mut Option<String>,
+    name: &str,
+) {
+    if shown.as_deref() != Some(name) {
+        *shown = Some(name.to_owned());
+        host.renamed(link, device, name);
     }
 }
 

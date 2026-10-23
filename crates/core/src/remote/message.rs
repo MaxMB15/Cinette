@@ -90,6 +90,8 @@ pub enum Feature {
     History,
     /// Sending providers to the target, answer 4 to spec 5.
     Providers,
+    /// Reading [`Message::Renamed`], so a new name reaches an open session.
+    Rename,
     /// A feature from a newer version of Cinette, which this one ignores.
     #[serde(other)]
     Unknown,
@@ -449,6 +451,11 @@ pub enum Message {
         grant: String,
         results: Vec<ProviderResult>,
     },
+    /// The sender's name changed. Either side sends it in a session, and
+    /// only to a device whose hello offers [`Feature::Rename`].
+    Renamed {
+        name: String,
+    },
 }
 
 impl Message {
@@ -492,6 +499,7 @@ pub(crate) const KNOWN_TYPES: &[&str] = &[
     "transferCancel",
     "providersSend",
     "providersAdded",
+    "renamed",
 ];
 
 /// Why a message couldn't be read.

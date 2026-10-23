@@ -19,6 +19,9 @@ import {
 import {
 	mpvStop,
 	remoteAnswerConsent,
+	remoteBlocked,
+	type BlockedDevice,
+	type ConsentAnswer,
 	remotePendingConsent,
 	remoteFinishCommand,
 	remoteSessions,
@@ -92,29 +95,37 @@ export const useRemoteTarget = (): void => {
 	});
 };
 
-/** The devices controlling this one, kept up to date. Empty where remote
- *  control doesn't run. */
-export const useRemoteSessions = (): RemoteSession[] => {
-	const [sessions, setSessions] = useState<RemoteSession[]>([]);
-	useTauriEvent<RemoteSession[]>("remote://sessions", setSessions);
+/** A list the backend keeps: `load` once, then each `event` in its place.
+ *  Empty where remote control doesn't run. */
+const useBackendList = <T>(event: string, load: () => Promise<T[]>): T[] => {
+	const [list, setList] = useState<T[]>([]);
+	useTauriEvent<T[]>(event, setList);
 	useEffect(
 		() => {
 			let current = true;
-			remoteSessions()
-				.then((list) => {
+			load()
+				.then((got) => {
 					// Anything but a list, as from a backend without remote control, is none.
-					if (current) setSessions(Array.isArray(list) ? list : []);
+					if (current) setList(Array.isArray(got) ? got : []);
 				})
 				.catch(() => {});
 			return () => {
 				current = false;
 			};
 		},
-		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
-		[]
+		// Stryker disable next-line ArrayDeclaration: each caller passes a module function, which never changes, so the effect runs once either way.
+		[load]
 	);
-	return sessions;
+	return list;
 };
+
+/** The devices controlling this one, kept up to date. */
+export const useRemoteSessions = (): RemoteSession[] =>
+	useBackendList("remote://sessions", remoteSessions);
+
+/** The devices the user denied, kept up to date. */
+export const useRemoteBlocked = (): BlockedDevice[] =>
+	useBackendList("remote://blocked", remoteBlocked);
 
 /**
  * Makes the player's destination the one remote commands act on, and while
@@ -179,7 +190,7 @@ type ConsentEvent = Omit<ConsentRequest, "expiresAt"> & { expiresInMs: number };
  */
 export const useConsentRequest = (): {
 	request: ConsentRequest | null;
-	answer: (request: ConsentRequest, allow: boolean) => void;
+	answer: (request: ConsentRequest, answer: ConsentAnswer) => void;
 } => {
 	const [request, setRequest] = useState<ConsentRequest | null>(null);
 	useTauriEvent<ConsentEvent>("remote://consent", ({ expiresInMs, ...event }) =>
@@ -208,10 +219,10 @@ export const useConsentRequest = (): {
 	useTauriEvent<{ request: number }>("remote://consent-hidden", ({ request: hidden }) =>
 		setRequest((shown) => (shown?.request === hidden ? null : shown))
 	);
-	const answer = (shown: ConsentRequest, allow: boolean) => {
+	const answer = (shown: ConsentRequest, given: ConsentAnswer) => {
 		// Off screen at once; the Rust side shows the next one, if any.
 		setRequest(null);
-		remoteAnswerConsent(shown.request, allow).catch(() => {});
+		remoteAnswerConsent(shown.request, given).catch(() => {});
 	};
 	return { request, answer };
 };

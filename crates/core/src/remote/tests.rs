@@ -17,7 +17,7 @@ use super::message::{
 };
 use super::sessions::RESUME_GRACE;
 use super::settings::{ControlMode, RemoteSettings};
-use super::target::{Action, ConsentPrompt, SessionInfo, Target, IDLE_TIMEOUT};
+use super::target::{Action, BlockedDevice, ConsentPrompt, SessionInfo, Target, IDLE_TIMEOUT};
 use super::ConnId;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -43,8 +43,16 @@ pub(crate) fn hello(key: &DeviceKey, name: &str, device_type: DeviceType) -> Hel
             Feature::Catalog,
             Feature::History,
             Feature::Providers,
+            Feature::Rename,
         ],
     }
+}
+
+/// A hello from a Cinette that came before renames.
+pub(crate) fn older_hello(key: &DeviceKey, name: &str, device_type: DeviceType) -> Hello {
+    let mut hello = hello(key, name, device_type);
+    hello.features.retain(|f| *f != Feature::Rename);
+    hello
 }
 
 /// A catalog item with just an id and a name.
@@ -99,8 +107,18 @@ fn unframe(bytes: &[u8]) -> Vec<u8> {
 /// A controller let through by a bare target handshake, for tests that
 /// play the target by hand. Returns the target's side of the channel.
 fn controller_and_bare_target(now: Instant) -> (Controller, Channel) {
-    let key = DeviceKey::generate();
     let target_key = DeviceKey::generate();
+    let target_hello = hello(&target_key, "TV", DeviceType::FireTv);
+    controller_and_bare_target_saying(target_key, target_hello, now)
+}
+
+/// [`controller_and_bare_target`] with the target's key and hello.
+fn controller_and_bare_target_saying(
+    target_key: DeviceKey,
+    target_hello: Hello,
+    now: Instant,
+) -> (Controller, Channel) {
+    let key = DeviceKey::generate();
     let (mut controller, first) = Controller::connect(
         &key,
         hello(&key, "Phone", DeviceType::Iphone),
@@ -109,8 +127,7 @@ fn controller_and_bare_target(now: Instant) -> (Controller, Channel) {
         now,
     )
     .unwrap();
-    let mut target =
-        TargetHandshake::new(&target_key, hello(&target_key, "TV", DeviceType::FireTv)).unwrap();
+    let mut target = TargetHandshake::new(&target_key, target_hello).unwrap();
     let mut to_target = VecDeque::from([first]);
     loop {
         let bytes = to_target.pop_front().unwrap();
@@ -211,9 +228,21 @@ impl Net {
     }
 
     pub fn connect_with(&mut self, key: DeviceKey, name: &str, resume: Option<String>) -> usize {
+        let hello = hello(&key, name, DeviceType::Iphone);
+        self.connect_saying(key, hello, resume)
+    }
+
+    /// Connects a controller from a Cinette that came before renames.
+    pub fn connect_older(&mut self, name: &str) -> usize {
+        let key = DeviceKey::generate();
+        let hello = older_hello(&key, name, DeviceType::Iphone);
+        self.connect_saying(key, hello, None)
+    }
+
+    fn connect_saying(&mut self, key: DeviceKey, hello: Hello, resume: Option<String>) -> usize {
         let (controller, first) = Controller::connect(
             &key,
-            hello(&key, name, DeviceType::Iphone),
+            hello,
             self.target.device_id(),
             resume,
             self.now,
@@ -392,6 +421,13 @@ impl Net {
         self.change_settings(settings);
     }
 
+    pub fn last_blocked(&self) -> Option<&Vec<BlockedDevice>> {
+        self.log.iter().rev().find_map(|a| match a {
+            Action::BlockedChanged(list) => Some(list),
+            _ => None,
+        })
+    }
+
     pub fn last_sessions(&self) -> Option<&Vec<SessionInfo>> {
         self.log.iter().rev().find_map(|a| match a {
             Action::SessionsChanged(list) => Some(list),
@@ -520,6 +556,25 @@ fn the_discovery_record_holds_nothing_private() {
 }
 
 #[test]
+fn the_systems_name_stands_in_for_the_type_until_the_user_names_it() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    net.target.name_by_default(" Den Mac ");
+    // A name with nothing left keeps the last one.
+    net.target.name_by_default("\u{200B}");
+    assert_eq!(net.target.discovery_record().unwrap().instance, "Den Mac");
+    let phone = net.connect("Phone");
+    assert_eq!(
+        net.clients[phone].controller.peer().unwrap().name,
+        "Den Mac"
+    );
+    net.change_settings(RemoteSettings {
+        device_name: Some("Kitchen".into()),
+        ..net.target.settings().clone()
+    });
+    assert_eq!(net.target.discovery_record().unwrap().instance, "Kitchen");
+}
+
+#[test]
 fn an_undiscoverable_device_refuses_new_connections_and_isnt_advertised() {
     for mode in [ControlMode::Always, ControlMode::Ask] {
         let mut net = Net::new(RemoteSettings {
@@ -620,20 +675,103 @@ fn a_controller_that_hangs_up_takes_its_dialog_away() {
 }
 
 #[test]
-fn a_denied_device_is_refused_without_a_dialog_for_a_minute() {
+fn a_denied_device_is_blocked_until_the_user_unblocks_it() {
     let mut net = Net::new(RemoteSettings::default());
     let key = DeviceKey::generate();
     net.connect_with(key.clone(), "Neighbor", None);
     net.answer(Answer::Deny);
+    let blocked = vec![BlockedDevice {
+        device_id: key.device_id(),
+        name: "Neighbor".into(),
+    }];
+    assert_eq!(net.last_blocked(), Some(&blocked));
+    assert_eq!(net.target.blocked(), blocked);
+    // After a denial's minute, and under Always allow too.
+    net.advance(DENIAL_COOLDOWN);
+    net.set_mode(ControlMode::Always);
     let again = net.connect_with(key.clone(), "Neighbor", None);
     assert_eq!(
         net.clients[again].closed_reason(),
         Some(CloseReason::Denied)
     );
     assert_eq!(net.prompt(), None);
-    net.advance(DENIAL_COOLDOWN);
+
+    // Unblocking something not blocked changes nothing.
+    assert!(net
+        .target
+        .unblock(&DeviceKey::generate().device_id())
+        .is_empty());
+    let actions = net.target.unblock(&key.device_id());
+    assert_eq!(actions, [Action::BlockedChanged(Vec::new())]);
+    assert!(net.target.blocked().is_empty());
+    net.set_mode(ControlMode::Ask);
     net.connect_with(key, "Neighbor", None);
     assert!(net.prompt().is_some());
+}
+
+#[test]
+fn unblocking_lets_a_device_ask_within_its_denials_minute() {
+    let mut net = Net::new(RemoteSettings::default());
+    let key = DeviceKey::generate();
+    net.connect_with(key.clone(), "Neighbor", None);
+    net.answer(Answer::Deny);
+    net.advance(super::consent::DENIAL_BACKOFF);
+    let actions = net.target.unblock(&key.device_id());
+    net.handle(actions);
+    net.connect_with(key, "Neighbor", None);
+    assert_eq!(net.prompt().unwrap().name, "Neighbor");
+}
+
+#[test]
+fn denying_a_device_that_holds_a_session_ends_it_and_its_resume() {
+    let mut net = Net::new(RemoteSettings::default());
+    let key = DeviceKey::generate();
+    let first = net.connect_with(key.clone(), "Phone", None);
+    net.answer(Answer::Allow);
+    let session = net.clients[first]
+        .controller
+        .session_id()
+        .unwrap()
+        .to_owned();
+    // The same device asks again on a second connection, and is denied.
+    net.connect_with(key.clone(), "Phone", None);
+    net.answer(Answer::Deny);
+    assert_eq!(
+        net.clients[first].closed_reason(),
+        Some(CloseReason::Revoked)
+    );
+    assert!(net.target.sessions().is_empty());
+    assert_eq!(net.last_sessions(), Some(&vec![]));
+    let back = net.connect_with(key, "Phone", Some(session));
+    assert_eq!(net.clients[back].closed_reason(), Some(CloseReason::Denied));
+    assert!(!net.clients[back].connected());
+}
+
+#[test]
+fn a_blocked_list_saved_earlier_refuses_at_once() {
+    let mut net = Net::new(RemoteSettings::default());
+    let key = DeviceKey::generate();
+    net.target.block(vec![BlockedDevice {
+        device_id: key.device_id(),
+        name: "Neighbor".into(),
+    }]);
+    let phone = net.connect_with(key, "Neighbor", None);
+    assert_eq!(
+        net.clients[phone].closed_reason(),
+        Some(CloseReason::Denied)
+    );
+    assert_eq!(net.prompt(), None);
+}
+
+#[test]
+fn a_dismissed_dialog_refuses_only_that_request() {
+    let mut net = Net::new(RemoteSettings::default());
+    let key = DeviceKey::generate();
+    net.connect_with(key.clone(), "Phone", None);
+    net.answer(Answer::Dismiss);
+    assert_eq!(net.last_blocked(), None);
+    net.connect_with(key, "Phone", None);
+    assert_eq!(net.prompt().unwrap().name, "Phone");
 }
 
 #[test]
@@ -1520,4 +1658,207 @@ fn a_controller_and_target_talk_over_loopback_tcp() {
         }
     }
     assert_eq!(server.join().unwrap(), Command::Stop);
+}
+
+// Renames
+
+fn renames(client: &Client) -> Vec<&str> {
+    client
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Renamed(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn session_names(net: &Net) -> Vec<String> {
+    net.last_sessions()
+        .unwrap()
+        .iter()
+        .map(|s| s.name.clone())
+        .collect()
+}
+
+#[test]
+fn a_new_name_reaches_the_controllers_that_read_renames() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let phone = net.connect("Phone");
+    let older = net.connect_older("Old phone");
+    net.change_settings(RemoteSettings {
+        device_name: Some(" Den\u{202E} ".into()),
+        ..net.target.settings().clone()
+    });
+    assert_eq!(renames(&net.clients[phone]), ["Den"]);
+    assert_eq!(net.clients[phone].controller.peer().unwrap().name, "Den");
+    // An older Cinette never hears it, so it can't answer unsupported.
+    assert!(!net.clients[older]
+        .controller
+        .heard
+        .iter()
+        .any(|m| matches!(m, Message::Renamed { .. })));
+    assert!(net.clients[older].connected());
+
+    // Settings that keep the name send nothing.
+    net.set_mode(ControlMode::Ask);
+    assert_eq!(renames(&net.clients[phone]), ["Den"]);
+    // Clearing the name goes back to the device type's.
+    net.change_settings(RemoteSettings {
+        device_name: None,
+        ..net.target.settings().clone()
+    });
+    assert_eq!(renames(&net.clients[phone]), ["Den", "Android TV"]);
+}
+
+#[test]
+fn a_controllers_new_name_reaches_the_targets_list() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let phone = net.connect("Phone");
+    net.connect("Tablet");
+    let bytes = net.clients[phone]
+        .controller
+        .rename("\u{2066}Kitchen\u{2069} ")
+        .unwrap();
+    net.send(phone, bytes);
+    assert_eq!(session_names(&net), ["Kitchen", "Tablet"]);
+
+    // The same name again changes nothing.
+    let changes = net.log.len();
+    let bytes = net.clients[phone].controller.rename("Kitchen").unwrap();
+    net.send(phone, bytes);
+    assert_eq!(net.log.len(), changes);
+
+    // Nothing left of a name is the device type's.
+    let bytes = net.clients[phone].controller.rename("\u{200B}").unwrap();
+    net.send(phone, bytes);
+    assert_eq!(session_names(&net), ["iPhone", "Tablet"]);
+}
+
+/// The bare target lets the controller in.
+fn let_in(controller: &mut Controller, target: &mut Channel, now: Instant) {
+    let accepted = target
+        .seal(&Message::Accepted {
+            session_id: "s".into(),
+            state: super::message::VersionedState {
+                epoch: "e".into(),
+                version: 1,
+                state: PlaybackSnapshot::default(),
+            },
+        })
+        .unwrap();
+    controller.receive(&unframe(&accepted), now);
+    assert!(controller.session_id().is_some());
+}
+
+#[test]
+fn a_controller_doesnt_rename_to_a_target_that_cant_read_it() {
+    let now = Instant::now();
+    let target_key = DeviceKey::generate();
+    let target_hello = older_hello(&target_key, "TV", DeviceType::FireTv);
+    let (mut controller, mut target) =
+        controller_and_bare_target_saying(target_key, target_hello, now);
+    // Not in a session yet.
+    assert_eq!(controller.rename("Den"), None);
+    let_in(&mut controller, &mut target, now);
+    assert_eq!(controller.rename("Den"), None);
+}
+
+#[test]
+fn a_controller_reports_only_a_name_that_changed() {
+    let now = Instant::now();
+    let (mut controller, mut target) = controller_and_bare_target(now);
+    let_in(&mut controller, &mut target, now);
+    let mut renamed = |name: &str| {
+        let bytes = target
+            .seal(&Message::Renamed { name: name.into() })
+            .unwrap();
+        controller.receive(&unframe(&bytes), now).events
+    };
+    assert_eq!(renamed("TV"), []);
+    assert_eq!(renamed("Den\u{200B}"), [Event::Renamed("Den".into())]);
+    assert_eq!(renamed("Den"), []);
+    assert_eq!(controller.peer().unwrap().name, "Den");
+}
+
+#[test]
+fn a_rename_while_asking_reaches_the_controller() {
+    let now = Instant::now();
+    let (mut controller, mut target) = controller_and_bare_target(now);
+    let bytes = target
+        .seal(&Message::Renamed { name: "Den".into() })
+        .unwrap();
+    let out = controller.receive(&unframe(&bytes), now);
+    assert_eq!(out.events, [Event::Renamed("Den".into())]);
+    assert_eq!(controller.peer().unwrap().name, "Den");
+    assert_eq!(controller.session_id(), None);
+}
+
+#[test]
+fn a_controller_waiting_for_the_dialog_hears_a_new_name() {
+    let mut net = Net::new(RemoteSettings::default());
+    let phone = net.connect("Phone");
+    assert!(net.prompt().is_some());
+    net.change_settings(RemoteSettings {
+        device_name: Some("Den".into()),
+        ..net.target.settings().clone()
+    });
+    assert_eq!(renames(&net.clients[phone]), ["Den"]);
+    net.answer(Answer::Allow);
+    assert!(net.clients[phone].connected());
+    assert_eq!(net.clients[phone].controller.peer().unwrap().name, "Den");
+}
+
+#[test]
+fn a_rename_from_a_controller_still_asking_is_refused() {
+    let mut net = Net::new(RemoteSettings::default());
+    let phone = net.connect("Phone");
+    let bytes = net.clients[phone]
+        .controller
+        .seal_raw(&Message::Renamed { name: "Den".into() })
+        .unwrap();
+    net.send(phone, bytes);
+    assert!(net.clients[phone]
+        .events
+        .contains(&Event::Error(ErrorCode::Unsupported)));
+    assert_eq!(net.prompt().unwrap().name, "Phone");
+    net.answer(Answer::Allow);
+    assert_eq!(session_names(&net), ["Phone"]);
+}
+
+#[test]
+fn renames_count_against_the_rate_limit() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let phone = net.connect("Phone");
+    let frames: Vec<Vec<u8>> = (0..30)
+        .map(|i| {
+            net.clients[phone]
+                .controller
+                .rename(&format!("Name {i}"))
+                .unwrap()
+        })
+        .collect();
+    net.send_all(phone, frames);
+    let names = session_names(&net);
+    assert_ne!(names, ["Name 29"], "every rename was taken");
+    // The bucket fills again with time.
+    net.advance(Duration::from_secs(1));
+    let bytes = net.clients[phone].controller.rename("Den").unwrap();
+    net.send(phone, bytes);
+    assert_eq!(session_names(&net), ["Den"]);
+}
+
+#[test]
+fn a_session_resumed_under_a_new_name_shows_it() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let key = DeviceKey::generate();
+    let phone = net.connect_with(key.clone(), "Phone", None);
+    let session = net.clients[phone].controller.session_id().unwrap().to_owned();
+    net.drop_link(phone);
+    let back = net.connect_with(key, "Kitchen", Some(session.clone()));
+    assert_eq!(
+        net.clients[back].controller.session_id(),
+        Some(session.as_str())
+    );
+    assert_eq!(session_names(&net), ["Kitchen"]);
 }

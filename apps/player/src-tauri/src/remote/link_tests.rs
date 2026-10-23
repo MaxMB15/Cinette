@@ -107,6 +107,7 @@ async fn target_keyed(mode: ControlMode, key: DeviceKey) -> Target {
         key.clone(),
         DeviceType::FireTv,
         settings,
+        Vec::new(),
         player.clone(),
         target::Limits {
             load_gap: Duration::ZERO,
@@ -213,6 +214,7 @@ struct Seen {
     phased_at: Vec<Instant>,
     states: Vec<VersionedState>,
     transfers: Vec<ControllerEvent>,
+    names: Vec<String>,
 }
 
 struct Recorder {
@@ -234,6 +236,10 @@ impl LinkHost for Recorder {
     }
     fn transfer(&self, _: u64, _: &DeviceId, event: &ControllerEvent) {
         self.seen.lock().unwrap().transfers.push(event.clone());
+        let _ = self.tx.send(());
+    }
+    fn renamed(&self, _: u64, _: &DeviceId, name: &str) {
+        self.seen.lock().unwrap().names.push(name.to_owned());
         let _ = self.tx.send(());
     }
 }
@@ -277,6 +283,12 @@ impl Link {
 
     async fn until_phase(&mut self, phase: Phase) {
         self.until(|l| l.phases().contains(&phase)).await;
+    }
+
+    /// Waits until the link is connected a second time, after a resume.
+    async fn until_connected_again(&mut self) {
+        self.until(|l| l.phases().iter().filter(|p| **p == Phase::Connected).count() == 2)
+            .await;
     }
 
     async fn closed(&mut self) -> Ended {
@@ -329,7 +341,12 @@ fn link_clocked(
         name: "Mac".into(),
         device_type: DeviceType::Mac,
         versions: vec![PROTOCOL_VERSION],
-        features: vec![Feature::Control, Feature::Catalog, Feature::Providers],
+        features: vec![
+            Feature::Control,
+            Feature::Catalog,
+            Feature::Providers,
+            Feature::Rename,
+        ],
     };
     let handle = super::start(
         LinkConfig {
@@ -379,7 +396,7 @@ async fn connects_and_attaches_to_what_plays() {
     link.until_phase(Phase::Connected).await;
     let phases = link.phases();
     assert_eq!(phases[0], Phase::Connecting);
-    let own_name = RemoteSettings::default().name(DeviceType::FireTv);
+    let own_name = crate::remote::device::default_name();
     assert!(
         matches!(phases[1], Phase::Verifying { ref code, ref name, .. } if code.len() == 6 && *name == own_name),
         "{phases:?}"
@@ -496,14 +513,7 @@ async fn a_dropped_connection_resumes_without_asking_again() {
 
     proxy.cut(false);
     link.until_phase(Phase::Reconnecting { attempt: 1 }).await;
-    link.until(|l| {
-        l.phases()
-            .iter()
-            .filter(|p| **p == Phase::Connected)
-            .count()
-            == 2
-    })
-    .await;
+    link.until_connected_again().await;
     assert!(t.prompts.try_recv().is_err(), "no second dialog");
     let codes = link
         .phases()
@@ -583,14 +593,7 @@ async fn commands_while_reconnecting_are_not_sent() {
         Err(LinkError::NotConnected)
     );
     proxy.reopen();
-    link.until(|l| {
-        l.phases()
-            .iter()
-            .filter(|p| **p == Phase::Connected)
-            .count()
-            == 2
-    })
-    .await;
+    link.until_connected_again().await;
 }
 
 #[tokio::test]
@@ -833,14 +836,7 @@ async fn a_device_missing_from_discovery_for_a_while_is_tried_again() {
     proxy.cut(false);
     link.until_phase(Phase::Reconnecting { attempt: 1 }).await;
     *found.lock().unwrap() = addresses;
-    link.until(|l| {
-        l.phases()
-            .iter()
-            .filter(|p| **p == Phase::Connected)
-            .count()
-            == 2
-    })
-    .await;
+    link.until_connected_again().await;
     assert!(!link
         .phases()
         .iter()
@@ -1088,14 +1084,7 @@ async fn a_resume_that_reaches_another_device_tries_again() {
     );
     link.until_phase(Phase::Connected).await;
     proxy.cut(false);
-    link.until(|l| {
-        l.phases()
-            .iter()
-            .filter(|p| **p == Phase::Connected)
-            .count()
-            == 2
-    })
-    .await;
+    link.until_connected_again().await;
     assert!(tries.load(Ordering::SeqCst) >= 3);
     assert!(!link
         .phases()
@@ -1103,10 +1092,9 @@ async fn a_resume_that_reaches_another_device_tries_again() {
         .any(|p| matches!(p, Phase::Closed { .. })));
 }
 
-#[tokio::test]
-async fn leaving_while_a_connection_is_being_opened_stops_at_once() {
-    let t = target(ControlMode::Always).await;
-    // A listener whose queue is full, so a new connection waits.
+/// The port of a listener whose queue is full, so a new connection to it
+/// waits, and what keeps it full.
+async fn full_listener() -> (u16, (TcpListener, Vec<TcpStream>)) {
     let socket = tokio::net::TcpSocket::new_v4().unwrap();
     socket.bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
     let full = socket.listen(1).unwrap();
@@ -1122,6 +1110,13 @@ async fn leaving_while_a_connection_is_being_opened_stops_at_once() {
         }
     }
     assert!(queued.len() < 8, "the queue never filled");
+    (port, (full, queued))
+}
+
+#[tokio::test]
+async fn leaving_while_a_connection_is_being_opened_stops_at_once() {
+    let t = target(ControlMode::Always).await;
+    let (port, _full) = full_listener().await;
     let mut link = link_to(&t, port, GRACE);
     link.until_phase(Phase::Connecting).await;
     let asked = Instant::now();
@@ -1132,7 +1127,6 @@ async fn leaving_while_a_connection_is_being_opened_stops_at_once() {
         asked.elapsed()
     );
     assert_eq!(link.closed().await, Ended::Left);
-    drop(queued);
 }
 
 #[tokio::test]
@@ -1307,4 +1301,104 @@ async fn a_cancel_with_nothing_going_on_sends_nothing() {
     // Still in control afterwards.
     assert!(link.handle.command(Command::Stop).await.is_ok());
     assert!(link.transfers().is_empty());
+}
+
+/// Waits for the target's one controller to be called `name`.
+async fn controller_named(t: &Target, name: &str) {
+    let named = timeout(WAIT, async {
+        loop {
+            if t.handle.sessions().await.first().map(|s| s.name.as_str()) == Some(name) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(named.is_ok(), "{:?}", t.handle.sessions().await);
+}
+
+#[tokio::test]
+async fn a_new_name_reaches_the_other_side_of_a_session() {
+    let t = target(ControlMode::Always).await;
+    let mut link = link_to(&t, t.port, GRACE);
+    link.until_phase(Phase::Connected).await;
+    controller_named(&t, "Mac").await;
+    link.handle.rename("Kitchen".into());
+    controller_named(&t, "Kitchen").await;
+
+    t.handle.update_settings(RemoteSettings {
+        device_name: Some("Den".into()),
+        ..RemoteSettings::default()
+    });
+    link.until(|l| l.recorder.seen.lock().unwrap().names == ["Den"])
+        .await;
+}
+
+/// Waits a second between attempts, so a test can act while the link waits.
+fn slow_backoff(_: u32) -> Duration {
+    Duration::from_secs(1)
+}
+
+#[tokio::test]
+async fn a_name_changed_while_the_link_waits_to_try_again_goes_with_the_resume() {
+    let t = target(ControlMode::Always).await;
+    let proxy = Proxy::new(t.port).await;
+    let addresses = Arc::new(Mutex::new(vec![SocketAddr::from(([127, 0, 0, 1], proxy.port))]));
+    let found = addresses.clone();
+    let mut link = link_timed(
+        &t,
+        Arc::new(move || found.lock().unwrap().clone()),
+        GRACE,
+        Limits {
+            backoff: slow_backoff,
+            ..QUICK
+        },
+    );
+    link.until_phase(Phase::Connected).await;
+    // Discovery lost the device, so each attempt finds nowhere to go and
+    // the link waits for the next.
+    let kept = std::mem::take(&mut *addresses.lock().unwrap());
+    proxy.cut(false);
+    link.until_phase(Phase::Reconnecting { attempt: 1 }).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    link.handle.rename("Attic".into());
+    *addresses.lock().unwrap() = kept;
+    link.until_connected_again().await;
+    controller_named(&t, "Attic").await;
+}
+
+#[tokio::test]
+async fn a_name_changed_while_a_connection_is_being_opened_goes_with_it() {
+    let t = target(ControlMode::Always).await;
+    // A connection to it waits until the link gives up and tries the target.
+    let (port, _full) = full_listener().await;
+    let mut link = link_with(&t, at(vec![port, t.port]), GRACE);
+    link.until_phase(Phase::Connecting).await;
+    link.handle.rename("Attic".into());
+    // The first address takes the link's whole connect timeout.
+    let connected = timeout(CONNECT_TIMEOUT + WAIT, async {
+        while !link.phases().contains(&Phase::Connected) {
+            link.changes.recv().await.unwrap();
+        }
+    })
+    .await;
+    assert!(connected.is_ok(), "{:?}", link.phases());
+    controller_named(&t, "Attic").await;
+}
+
+#[tokio::test]
+async fn a_target_renamed_while_the_link_was_down_shows_its_name_on_the_resume() {
+    let t = target(ControlMode::Always).await;
+    let proxy = Proxy::new(t.port).await;
+    let mut link = link_to(&t, proxy.port, GRACE);
+    link.until_phase(Phase::Connected).await;
+    proxy.cut(true);
+    link.until_phase(Phase::Reconnecting { attempt: 1 }).await;
+    t.handle.update_settings(RemoteSettings {
+        device_name: Some("Den".into()),
+        ..RemoteSettings::default()
+    });
+    proxy.reopen();
+    link.until_connected_again().await;
+    assert_eq!(link.recorder.seen.lock().unwrap().names, ["Den"]);
 }

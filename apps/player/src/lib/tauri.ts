@@ -784,8 +784,24 @@ export const remoteSetSettings = (settings: {
 /** A new device id. Every session ends. */
 export const remoteResetIdentity = (): Promise<RemoteSettings> => invoke("remote_reset_identity");
 
-export const remoteAnswerConsent = (request: number, allow: boolean): Promise<void> =>
-	invoke("remote_answer_consent", { request, allow });
+/** Allow, Deny, which blocks a device asking for control until it's
+ *  unblocked, or dismissing the dialog, which refuses only this request. */
+export type ConsentAnswer = "allow" | "deny" | "dismiss";
+
+export const remoteAnswerConsent = (request: number, answer: ConsentAnswer): Promise<void> =>
+	invoke("remote_answer_consent", { request, answer });
+
+/** A device the user denied, refused without a dialog until unblocked. */
+export interface BlockedDevice {
+	deviceId: string;
+	/** Its name when it was denied. */
+	name: string;
+}
+
+export const remoteBlocked = (): Promise<BlockedDevice[]> => invoke("remote_blocked");
+
+export const remoteUnblock = (deviceId: string): Promise<void> =>
+	invoke("remote_unblock", { deviceId });
 
 export const remoteSessions = (): Promise<RemoteSession[]> => invoke("remote_sessions");
 
