@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect } from "vitest";
-import { parseSrt } from "./subtitle-parser";
+import { parseSrt, toWebVtt } from "./subtitle-parser";
 
 describe("parseSrt", () => {
 	it("parses a basic SRT block", () => {
@@ -703,5 +703,46 @@ describe("parseSrt", () => {
 		const started = performance.now();
 		expect(parseSrt(srt)).toEqual([{ start: 1, end: 2, text: "Hi" }]);
 		expect(performance.now() - started).toBeLessThan(1000);
+	});
+});
+
+describe("toWebVtt", () => {
+	it("writes each cue with its times and escaped text", () => {
+		const vtt = toWebVtt(
+			[
+				{ start: 1.0016, end: 3, text: "Tom & Jerry\n<i>run</i> --> on" },
+				{ start: 3725.5, end: 3726.25, text: "Later" },
+			],
+			0,
+			0
+		);
+		expect(vtt).toBe(
+			"WEBVTT\n\n" +
+				"00:00:01.002 --> 00:00:03.000\nTom &amp; Jerry\n&lt;i&gt;run&lt;/i&gt; --&gt; on\n\n" +
+				"01:02:05.500 --> 01:02:06.250\nLater\n"
+		);
+	});
+
+	it("writes only the header for no cues", () => {
+		expect(toWebVtt([], 0, 0)).toBe("WEBVTT\n");
+	});
+
+	it("counts from the offset, with the delay, and leaves out what ends by then", () => {
+		const cues = [
+			{ start: 20, end: 28, text: "Ends at the start" },
+			{ start: 27, end: 29, text: "Runs over the start" },
+			{ start: 40, end: 41.5, text: "After" },
+		];
+		expect(toWebVtt(cues, 2, 30)).toBe(
+			"WEBVTT\n\n" +
+				"00:00:00.000 --> 00:00:01.000\nRuns over the start\n\n" +
+				"00:00:12.000 --> 00:00:13.500\nAfter\n"
+		);
+	});
+
+	it("shows each cue earlier for a negative delay", () => {
+		expect(toWebVtt([{ start: 5, end: 6, text: "Hi" }], -1.5, 0)).toBe(
+			"WEBVTT\n\n00:00:03.500 --> 00:00:04.500\nHi\n"
+		);
 	});
 });

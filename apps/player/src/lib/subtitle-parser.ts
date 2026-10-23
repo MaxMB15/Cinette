@@ -154,3 +154,35 @@ export const parseSrt = (content: string): SubtitleCue[] => {
 	});
 	return cues;
 };
+
+/** `seconds` as a WebVTT time, "HH:MM:SS.mmm". */
+const vttTime = (seconds: number): string => {
+	const ms = Math.round(seconds * 1000);
+	const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+	const hours = Math.floor(ms / 3_600_000);
+	const minutes = Math.floor(ms / 60_000) % 60;
+	const secs = Math.floor(ms / 1000) % 60;
+	return `${pad(hours)}:${pad(minutes)}:${pad(secs)}.${pad(ms % 1000, 3)}`;
+};
+
+/** Cue text as WebVTT reads it, with no markup and no "-->". */
+const vttText = (text: string): string =>
+	text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+
+/**
+ * `cues` as a WebVTT file for a receiver that plays from `offset` seconds
+ * into the item and counts from 0 there, as a converted cast does. A
+ * positive `delay` shows each cue later, as mpv's `sub-delay` does. A cue
+ * that ends by 0 is left out, and one that starts before 0 starts there.
+ */
+export const toWebVtt = (cues: SubtitleCue[], delay: number, offset: number): string => {
+	const shift = delay - offset;
+	const blocks = cues.flatMap(({ start, end, text }) =>
+		end + shift > 0
+			? [
+					`${vttTime(Math.max(0, start + shift))} --> ${vttTime(end + shift)}\n${vttText(text)}`,
+				]
+			: []
+	);
+	return ["WEBVTT", ...blocks].join("\n\n") + "\n";
+};

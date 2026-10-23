@@ -13,6 +13,7 @@
 
 import { createRestarts } from "@/lib/restarts";
 import type {
+	ExternalSubtitle,
 	PlaybackCapabilities,
 	PlaybackDestination,
 	PlaybackError,
@@ -29,7 +30,8 @@ import {
 	type PlayingInfo,
 	type StreamFormats,
 } from "@/lib/route-profiles";
-import type { CastAction, CastReceiver, CastRoute, CastUpdate } from "@/lib/tauri";
+import { toWebVtt } from "@/lib/subtitle-parser";
+import type { CastAction, CastReceiver, CastRoute, CastSubtitle, CastUpdate } from "@/lib/tauri";
 import type { Channel } from "@/lib/types";
 
 type MediaView = Extract<CastUpdate, { kind: "media" }>["media"];
@@ -201,7 +203,8 @@ export interface CastBackend {
 		route: CastRoute,
 		startAt: number | undefined,
 		restart: boolean,
-		freed: boolean
+		freed: boolean,
+		subtitle?: CastSubtitle
 	) => Promise<void>;
 	castControl: (receiverId: string, action: CastAction) => Promise<void>;
 	castStop: (receiverId: string) => Promise<void>;
@@ -285,6 +288,14 @@ export const PAUSE_LIMIT_MS = 10_000;
 
 export { RESTART_DELAYS_MS, STEADY_MS } from "@/lib/restarts";
 
+/** How long a new subtitle delay has to stay before the cast loads again
+ *  with it, so a slider's steps load once. */
+export const SETTLE_MS = 1000;
+
+/** Whether `a` and `b` are the same file, whatever their delays. */
+const sameFile = (a: ExternalSubtitle, b: ExternalSubtitle): boolean =>
+	a.cues === b.cues && a.name === b.name && a.language === b.language;
+
 /** What `castLoad` rejects with when the provider refused the login, which
  *  trying again won't change. */
 const REFUSED = "refused";
@@ -330,6 +341,12 @@ export const createCastDestination = (
 	let loaded: { channel: Channel; route: CastRoute; formats: StreamFormats } | null = null;
 	/** When the user paused, while paused. */
 	let pausedAt: number | null = null;
+	/** The subtitle to show, which every load of the item takes along. */
+	let subtitle: ExternalSubtitle | null = null;
+	/** The subtitle the latest load took, shown or hidden. */
+	let carried: ExternalSubtitle | null = null;
+	/** Cancels the load waiting for a new delay to settle, if one is. */
+	let cancelSettle = () => {};
 
 	const channelOf = (item: PlaybackItem): Channel => {
 		if (item.kind !== "local") throw new UnsupportedError("Casting another device's item");
@@ -407,8 +424,20 @@ export const createCastDestination = (
 		});
 		loaded = { channel, route, formats };
 		restarts.sent();
+		cancelSettle();
+		// A live channel's cast shows none, as this device's player does.
+		carried = channel.contentType === "live" ? null : subtitle;
+		// A converted stream counts from 0 at `startAt`.
+		const cues =
+			carried === null
+				? undefined
+				: {
+						vtt: toWebVtt(carried.cues, carried.delay, converted ? (startAt ?? 0) : 0),
+						name: carried.name,
+						language: carried.language,
+					};
 		await backend
-			.castLoad(receiver.id, channel, route, startAt, quiet, freed)
+			.castLoad(receiver.id, channel, route, startAt, quiet, freed, cues)
 			.catch((e: unknown) => {
 				// The backend stopped what played before it asked for this, so
 				// nothing plays now. A newer load or a stop says for itself.
@@ -479,6 +508,7 @@ export const createCastDestination = (
 			// the receiver's clock and the backend get none.
 			const startAt = channel.contentType === "live" ? undefined : opts?.startAt;
 			if (asked !== newest) throw SUPERSEDED;
+			subtitle = opts?.subtitle ?? null;
 			try {
 				await send(channel, castRoute, formats, startAt, false, opts?.freed);
 			} catch (e) {
@@ -509,6 +539,28 @@ export const createCastDestination = (
 			await send(loaded.channel, loaded.route, loaded.formats, seconds);
 		},
 		setVolume: (volume) => control({ action: "volume", level: volume / 100 }),
+		setExternalSubtitle: (next) => {
+			cancelSettle();
+			subtitle = next;
+			// The next load takes it along.
+			const at = loaded;
+			if (at === null || at.channel.contentType === "live") return;
+			const reload = () => {
+				if (loaded !== at) return;
+				send(at.channel, at.route, at.formats, positionNow(state, now())).catch(() => {});
+			};
+			// The receiver only has a track the load gave it.
+			if (carried === null) {
+				if (next !== null) reload();
+				return;
+			}
+			if (next === null || (sameFile(next, carried) && next.delay === carried.delay)) {
+				control({ action: "tracks", on: next !== null }).catch(() => {});
+				return;
+			}
+			if (sameFile(next, carried)) cancelSettle = schedule(reload, SETTLE_MS);
+			else reload();
+		},
 		selectSubtitle: async () => {
 			throw new UnsupportedError("Subtitles on a Cast receiver");
 		},

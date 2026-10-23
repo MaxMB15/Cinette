@@ -8,7 +8,7 @@
  */
 
 import type { PlayRoute, RouteDecision } from "@/lib/route";
-import type { Channel, PlayerState, PolledMpvState } from "@/lib/types";
+import type { Channel, PlayerState, PolledMpvState, SubtitleCue } from "@/lib/types";
 
 export type DestinationKind = "local" | "cast" | "airplay" | "cinette";
 
@@ -162,6 +162,15 @@ export class UnsupportedError extends Error {
 	}
 }
 
+/** A subtitle file this device read, for a destination that shows it. */
+export interface ExternalSubtitle {
+	cues: SubtitleCue[];
+	/** In seconds. A positive delay shows each cue later. */
+	delay: number;
+	name: string;
+	language: string | null;
+}
+
 export interface PlaybackDestination {
 	readonly id: string;
 	readonly kind: DestinationKind;
@@ -182,7 +191,13 @@ export interface PlaybackDestination {
 	 *  rejects if it couldn't. */
 	load(
 		item: PlaybackItem,
-		opts?: { startAt?: number; route?: PlayRoute; freed?: boolean }
+		opts?: {
+			startAt?: number;
+			route?: PlayRoute;
+			freed?: boolean;
+			/** Shown from the start, where the destination shows one. */
+			subtitle?: ExternalSubtitle | null;
+		}
 	): Promise<void>;
 	play(): Promise<void>;
 	pause(): Promise<void>;
@@ -198,6 +213,9 @@ export interface PlaybackDestination {
 	release?(): Promise<boolean>;
 	/** Lets go of what it holds once it's done with, where it holds any. */
 	dispose?(): void;
+	/** Shows `subtitle` with what plays, or hides it for `null`, where the
+	 *  destination shows one. */
+	setExternalSubtitle?(subtitle: ExternalSubtitle | null): void;
 	/** Whether this device converts what plays there, where it can. */
 	converted?(): boolean;
 

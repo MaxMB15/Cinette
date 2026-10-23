@@ -15,8 +15,10 @@ import {
 	type CastSnapshot,
 	PAUSE_LIMIT_MS,
 	RESTART_DELAYS_MS,
+	SETTLE_MS,
 	STEADY_MS,
 } from "@/lib/cast-destination";
+import type { ExternalSubtitle } from "@/lib/destination";
 import type { PlayRoute, StreamFormat } from "@/lib/route";
 import type { StreamFormats } from "@/lib/route-profiles";
 import type { CastReceiver, CastUpdate } from "@/lib/tauri";
@@ -410,7 +412,8 @@ describe("createCastDestination", () => {
 			{ via: "direct", generation: 7, source: 1, container: "ts" },
 			undefined,
 			false,
-			true
+			true,
+			undefined
 		);
 	});
 
@@ -427,7 +430,8 @@ describe("createCastDestination", () => {
 			{ via: "direct", generation: 7, source: 1, container: "ts" },
 			undefined,
 			false,
-			false
+			false,
+			undefined
 		);
 		expect(cast.getState()).toMatchObject({
 			status: "opening",
@@ -445,7 +449,8 @@ describe("createCastDestination", () => {
 			{ via: "direct", generation: 7, source: 0, container: "hls-ts" },
 			undefined,
 			false,
-			false
+			false,
+			undefined
 		);
 		expect(seen).toEqual(["opening", "playing"]);
 
@@ -482,7 +487,8 @@ describe("createCastDestination", () => {
 			},
 			undefined,
 			false,
-			false
+			false,
+			undefined
 		);
 		expect(cast.getState().status).toBe("opening");
 	});
@@ -553,12 +559,28 @@ describe("createCastDestination", () => {
 			video: "copy",
 			audio: "aac",
 		};
-		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 60, false, false);
+		expect(fake.castLoad).toHaveBeenLastCalledWith(
+			"cast:tv",
+			movie,
+			route,
+			60,
+			false,
+			false,
+			undefined
+		);
 		cast.receive({ kind: "media", media: media({ position: 5, duration: null, live: true }) });
 		expect(cast.getState()).toMatchObject({ position: 65, duration: 5400 });
 		expect(cast.capabilities.seek).toBe(true);
 		await cast.seek(1200);
-		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 1200, false, false);
+		expect(fake.castLoad).toHaveBeenLastCalledWith(
+			"cast:tv",
+			movie,
+			route,
+			1200,
+			false,
+			false,
+			undefined
+		);
 		expect(fake.castControl).not.toHaveBeenCalled();
 		expect(cast.getState().position).toBe(1200);
 		// After a stop, a seek goes to the receiver, which has nothing.
@@ -641,7 +663,8 @@ describe("createCastDestination", () => {
 			expect.anything(),
 			90,
 			false,
-			false
+			false,
+			undefined
 		);
 		// Play without a pause before it just plays.
 		await cast.play();
@@ -759,7 +782,8 @@ describe("createCastDestination", () => {
 			expect.objectContaining({ via: "converted" }),
 			undefined,
 			false,
-			false
+			false,
+			undefined
 		);
 		cast.receive({ kind: "media", media: media({ position: 5, duration: null, live: true }) });
 		expect(cast.getState().position).toBe(5);
@@ -771,7 +795,8 @@ describe("createCastDestination", () => {
 			expect.anything(),
 			1800,
 			false,
-			false
+			false,
+			undefined
 		);
 	});
 
@@ -919,7 +944,8 @@ describe("createCastDestination", () => {
 				expect.anything(),
 				95,
 				true,
-				false
+				false,
+				undefined
 			);
 		});
 
@@ -935,7 +961,8 @@ describe("createCastDestination", () => {
 				expect.anything(),
 				undefined,
 				true,
-				false
+				false,
+				undefined
 			);
 		});
 
@@ -1181,6 +1208,185 @@ describe("createCastDestination", () => {
 			expect(pending()).toEqual([]);
 			expect(fake.castLoad).not.toHaveBeenCalled();
 			expect(cast.getState().status).toBe("idle");
+		});
+	});
+
+	describe("subtitles", () => {
+		const film: StreamFormats = {
+			formats: [{ ...ts, audio: "ac3" }],
+			sources: [4],
+			duration: 5400,
+			generation: 7,
+		};
+		const filmItem = { kind: "local" as const, channel: movie };
+		const english: ExternalSubtitle = {
+			cues: [{ start: 70, end: 72, text: "Hi" }],
+			delay: 0,
+			name: "English",
+			language: "en",
+		};
+		/** What the receiver gets for `english` with its cue at `from`. */
+		const sent = (from: string, to: string) => ({
+			vtt: `WEBVTT\n\n${from} --> ${to}\nHi\n`,
+			name: "English",
+			language: "en",
+		});
+		/** What the last load sent. */
+		const lastLoad = (fake: ReturnType<typeof backend>) =>
+			(fake.castLoad.mock.lastCall ?? []) as unknown[];
+		/** The subtitle the last load took. */
+		const lastSubtitle = (fake: ReturnType<typeof backend>) => lastLoad(fake)[6];
+
+		/** A cast whose timers the test runs by hand, playing at 30 s into
+		 *  what the receiver has. */
+		const setUp = (formats: StreamFormats = film) => {
+			const fake = backend(formats);
+			const waiting: { run: () => void; ms: number; on: boolean }[] = [];
+			const cast = createCastDestination(receiver, fake, {
+				now: () => 1000,
+				schedule: (run, ms) => {
+					const timer = { run, ms, on: true };
+					waiting.push(timer);
+					return () => {
+						timer.on = false;
+					};
+				},
+			});
+			const pending = () => waiting.filter((t) => t.on).map((t) => t.ms);
+			const runTimers = async () => {
+				for (const timer of waiting.filter((t) => t.on)) {
+					timer.on = false;
+					timer.run();
+				}
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			};
+			const plays = () =>
+				cast.receive({ kind: "media", media: media({ position: 30, duration: null }) });
+			return { fake, cast, pending, runTimers, plays };
+		};
+
+		it("counts a converted stream's cues from where it starts, on every load", async () => {
+			const { fake, cast } = setUp();
+			await cast.load(filmItem, { startAt: 60, subtitle: english });
+			expect(lastSubtitle(fake)).toEqual(sent("00:00:10.000", "00:00:12.000"));
+			await cast.seek(65);
+			expect(lastSubtitle(fake)).toEqual(sent("00:00:05.000", "00:00:07.000"));
+			await cast.load(filmItem, { subtitle: english });
+			expect(lastSubtitle(fake)).toEqual(sent("00:01:10.000", "00:01:12.000"));
+		});
+
+		it("keeps the item's own times on a direct route", async () => {
+			const { fake, cast } = setUp({ ...xtream, duration: 600 });
+			await cast.load(filmItem, { startAt: 60, subtitle: { ...english, delay: 1 } });
+			expect(lastLoad(fake)[2]).toMatchObject({ via: "direct" });
+			expect(lastSubtitle(fake)).toEqual(sent("00:01:11.000", "00:01:13.000"));
+		});
+
+		it("drops the subtitle for a load without one", async () => {
+			const { fake, cast } = setUp();
+			await cast.load(filmItem, { subtitle: english });
+			await cast.load(filmItem);
+			expect(fake.castLoad).toHaveBeenCalledTimes(2);
+			expect(lastSubtitle(fake)).toBeUndefined();
+		});
+
+		it("casts a live channel without one, and keeps one given meanwhile to itself", async () => {
+			const { fake, cast, pending } = setUp(xtream);
+			await cast.load(item, { subtitle: english });
+			expect(fake.castLoad).toHaveBeenCalledTimes(1);
+			expect(lastSubtitle(fake)).toBeUndefined();
+			cast.setExternalSubtitle?.({ ...english, cues: [] });
+			cast.setExternalSubtitle?.(null);
+			expect(fake.castLoad).toHaveBeenCalledTimes(1);
+			expect(fake.castControl).not.toHaveBeenCalled();
+			expect(pending()).toEqual([]);
+		});
+
+		it("keeps one given before anything plays for nothing", () => {
+			const { fake, cast } = setUp();
+			cast.setExternalSubtitle?.(english);
+			expect(fake.castLoad).not.toHaveBeenCalled();
+			expect(fake.castControl).not.toHaveBeenCalled();
+		});
+
+		it("loads again from where it plays to show one the load didn't take", async () => {
+			const { fake, cast, plays } = setUp();
+			await cast.load(filmItem);
+			plays();
+			cast.setExternalSubtitle?.(null);
+			expect(fake.castLoad).toHaveBeenCalledTimes(1);
+			cast.setExternalSubtitle?.(english);
+			expect(fake.castLoad).toHaveBeenCalledTimes(2);
+			expect(lastLoad(fake)[3]).toBe(30);
+			expect(lastSubtitle(fake)).toEqual(sent("00:00:40.000", "00:00:42.000"));
+			expect(fake.castControl).not.toHaveBeenCalled();
+		});
+
+		it("hides and shows the subtitle the load took without loading again", async () => {
+			const { fake, cast } = setUp();
+			await cast.load(filmItem, { subtitle: english });
+			cast.setExternalSubtitle?.(null);
+			expect(fake.castControl).toHaveBeenLastCalledWith("cast:tv", {
+				action: "tracks",
+				on: false,
+			});
+			cast.setExternalSubtitle?.({ ...english });
+			expect(fake.castControl).toHaveBeenLastCalledWith("cast:tv", {
+				action: "tracks",
+				on: true,
+			});
+			expect(fake.castLoad).toHaveBeenCalledTimes(1);
+		});
+
+		it("loads another file again at once", async () => {
+			const { fake, cast, pending } = setUp();
+			await cast.load(filmItem, { subtitle: english });
+			for (const other of [
+				{ ...english, cues: [{ start: 70, end: 72, text: "Hi" }] },
+				{ ...english, name: "English (SDH)" },
+				{ ...english, language: null },
+			])
+				cast.setExternalSubtitle?.(other);
+			expect(fake.castLoad).toHaveBeenCalledTimes(4);
+			expect(lastSubtitle(fake)).toMatchObject({ name: "English", language: null });
+			expect(pending()).toEqual([]);
+			expect(fake.castControl).not.toHaveBeenCalled();
+		});
+
+		it("loads a new delay once it settles", async () => {
+			const { fake, cast, pending, runTimers } = setUp();
+			await cast.load(filmItem, { subtitle: english });
+			cast.setExternalSubtitle?.({ ...english, delay: 1 });
+			cast.setExternalSubtitle?.({ ...english, delay: 2 });
+			expect(pending()).toEqual([SETTLE_MS]);
+			expect(fake.castLoad).toHaveBeenCalledTimes(1);
+			await runTimers();
+			expect(fake.castLoad).toHaveBeenCalledTimes(2);
+			expect(lastSubtitle(fake)).toEqual(sent("00:01:12.000", "00:01:14.000"));
+			expect(fake.castControl).not.toHaveBeenCalled();
+		});
+
+		it("drops a delay waiting to settle when a load or a stop comes first", async () => {
+			const { fake, cast, pending, runTimers } = setUp();
+			await cast.load(filmItem, { subtitle: english });
+			cast.setExternalSubtitle?.({ ...english, delay: 1 });
+			await cast.seek(100);
+			expect(pending()).toEqual([]);
+			cast.setExternalSubtitle?.({ ...english, delay: 2 });
+			await cast.stop();
+			await runTimers();
+			expect(fake.castLoad).toHaveBeenCalledTimes(2);
+		});
+
+		it("shows a hidden subtitle by loading again once a load left it out", async () => {
+			const { fake, cast } = setUp();
+			await cast.load(filmItem, { subtitle: english });
+			cast.setExternalSubtitle?.(null);
+			await cast.seek(50);
+			expect(lastSubtitle(fake)).toBeUndefined();
+			cast.setExternalSubtitle?.(english);
+			expect(fake.castLoad).toHaveBeenCalledTimes(3);
+			expect(lastSubtitle(fake)).toEqual(sent("00:00:20.000", "00:00:22.000"));
 		});
 	});
 });
