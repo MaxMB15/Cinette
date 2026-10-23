@@ -39,6 +39,15 @@ export const isMobilePlatform = (p: Platform = getPlatform()): boolean =>
  */
 export const controlsOthers = (p: Platform = getPlatform()): boolean => p !== "tv";
 
+/** Whether it can play on a TV over Google Cast, on macOS and Linux. */
+export const castsFrom = (p: Platform): boolean => p === "macos" || p === "linux";
+
+/** Whether it can play video on a TV over AirPlay, on iOS and macOS. */
+export const airplaysFrom = (p: Platform): boolean => p === "ios" || p === "macos";
+
+/** Whether it can play on a TV over AirPlay or Google Cast. */
+export const playsOnTvs = (p: Platform): boolean => castsFrom(p) || airplaysFrom(p);
+
 /** The narrowest iPad, an iPad mini in portrait. Below this a tablet gets the phone layout. */
 export const TABLET_MIN_WIDTH = 744;
 /** An 11-inch iPad in landscape and up get the desktop layout. */

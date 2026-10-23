@@ -118,7 +118,7 @@
 	"get_cast_receivers": {},
 	"hold_cast_receivers": { "required": ["ids"] },
 	"cast_load": {
-		"required": ["receiverId", "channel", "route", "restart"],
+		"required": ["receiverId", "channel", "route", "restart", "freed"],
 		"optional": ["startAt"]
 	},
 	"cast_control": { "required": ["receiverId", "action"] },

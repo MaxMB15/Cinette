@@ -268,7 +268,9 @@ pub fn hold_cast_receivers<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) {
 /// Plays `channel` on the receiver `receiverId`, the way `route` says: the
 /// route the frontend's `chooseRoute` gave, with the place of its URL.
 /// `restart` when it starts the cast's stream again by itself, which
-/// rejects with `notConnected` once that cast has ended.
+/// rejects with `notConnected` once that cast has ended. `freed` when
+/// something on this computer just let go of the provider's stream, such as
+/// its own player.
 #[tauri::command]
 pub async fn cast_load<R: Runtime>(
     app: AppHandle<R>,
@@ -277,15 +279,25 @@ pub async fn cast_load<R: Runtime>(
     route: serde_json::Value,
     start_at: Option<f64>,
     restart: bool,
+    freed: bool,
 ) -> Result<(), String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let route = serde_json::from_value(route).map_err(|e| e.to_string())?;
-        playback::load(&app, &receiver_id, &channel, route, start_at, restart).await
+        playback::load(
+            &app,
+            &receiver_id,
+            &channel,
+            route,
+            start_at,
+            restart,
+            freed,
+        )
+        .await
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (app, receiver_id, channel, route, start_at, restart);
+        let _ = (app, receiver_id, channel, route, start_at, restart, freed);
         Err(UNSUPPORTED.into())
     }
 }

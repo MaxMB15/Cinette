@@ -5,9 +5,13 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { MemoryRouter, Routes, Route } from "react-router";
-import type { LayoutMode } from "@/lib/types";
+import type { LayoutMode, Platform } from "@/lib/types";
 
-const platform = vi.hoisted(() => ({ layoutMode: "desktop" as LayoutMode, controller: true }));
+const platform = vi.hoisted(() => ({
+	os: "ios" as Platform,
+	layoutMode: "desktop" as LayoutMode,
+	controller: true,
+}));
 
 vi.mock("@/lib/platform", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@/lib/platform")>()),
@@ -15,7 +19,7 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
 }));
 
 vi.mock("@/hooks/usePlatform", () => ({
-	usePlatform: () => ({ platform: "ios", layoutMode: platform.layoutMode }),
+	usePlatform: () => ({ platform: platform.os, layoutMode: platform.layoutMode }),
 }));
 
 vi.mock("@/lib/tauri", () => ({
@@ -26,6 +30,7 @@ vi.mock("@/lib/tauri", () => ({
 vi.mock("@/components/remote/RemoteControls", () => ({
 	DevicesButton: () => <button type="button">Devices</button>,
 	RemoteBar: () => <p>Remote bar</p>,
+	TvBar: () => <p>TV bar</p>,
 	ControllersBar: () => <p>Controllers bar</p>,
 	ProvidersAddedNotice: () => <p>Providers added</p>,
 }));
@@ -177,6 +182,7 @@ describe("AppLayout", () => {
 
 	describe("remote control", () => {
 		afterEach(() => {
+			platform.os = "ios";
 			platform.controller = true;
 			platform.layoutMode = "desktop";
 		});
@@ -185,10 +191,19 @@ describe("AppLayout", () => {
 			render(tree("/"));
 			expect(screen.getByRole("button", { name: "Devices" })).toBeInTheDocument();
 			expect(screen.getByText("Remote bar")).toBeInTheDocument();
+			expect(screen.getByText("TV bar")).toBeInTheDocument();
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 			expect(screen.getByText("Providers added")).toBeInTheDocument();
 			expect(screen.getByText("History imported")).toBeInTheDocument();
 			expect(screen.getByText("page")).toBeInTheDocument();
+		});
+
+		it("leaves the TV bar off where there's no AirPlay or Cast", () => {
+			platform.os = "android";
+			platform.layoutMode = "mobile";
+			render(tree("/"));
+			expect(screen.getByText("Remote bar")).toBeInTheDocument();
+			expect(screen.queryByText("TV bar")).toBeNull();
 		});
 
 		it("puts the devices button in a phone's tab bar, beside the pages", () => {
@@ -207,6 +222,7 @@ describe("AppLayout", () => {
 			platform.layoutMode = "mobile";
 			const { unmount } = render(tree("/player"));
 			expect(screen.queryByText("Remote bar")).toBeNull();
+			expect(screen.queryByText("TV bar")).toBeNull();
 			expect(screen.queryByText("Controllers bar")).toBeNull();
 			expect(screen.queryByText("Providers added")).toBeNull();
 			expect(screen.queryByText("History imported")).toBeNull();
@@ -216,6 +232,7 @@ describe("AppLayout", () => {
 			platform.layoutMode = "desktop";
 			render(tree("/player"));
 			expect(screen.getByText("Remote bar")).toBeInTheDocument();
+			expect(screen.getByText("TV bar")).toBeInTheDocument();
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 			expect(screen.getByText("Providers added")).toBeInTheDocument();
 			expect(screen.getByText("History imported")).toBeInTheDocument();
@@ -226,6 +243,8 @@ describe("AppLayout", () => {
 			render(tree("/"));
 			expect(screen.queryByRole("button", { name: "Devices" })).toBeNull();
 			expect(screen.queryByText("Remote bar")).toBeNull();
+			// AirPlay and Cast don't depend on controlling other devices.
+			expect(screen.getByText("TV bar")).toBeInTheDocument();
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 		});
 

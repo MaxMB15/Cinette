@@ -100,7 +100,7 @@ fn load(
     }
     app.invoke(
         "cast_load",
-        json!({ "receiverId": receiver, "channel": channel, "route": route, "startAt": start_at, "restart": false }),
+        json!({ "receiverId": receiver, "channel": channel, "route": route, "startAt": start_at, "restart": false, "freed": false }),
     )
 }
 
@@ -504,7 +504,7 @@ fn restart(app: &TestApp, channel: &Channel, route: Value) -> Result<Value, Valu
     app.invoke(
         "cast_load",
         json!({ "receiverId": "cast:tv", "channel": channel, "route": route,
-                "startAt": null, "restart": true }),
+                "startAt": null, "restart": true, "freed": false }),
     )
 }
 
@@ -830,7 +830,7 @@ fn load_in_background(
     let streams = handle.state::<crate::streams::StreamsState>();
     let generation = streams.remember(&channel.id, vec![channel.url.clone()]);
     route["generation"] = json!(generation);
-    let args = json!({ "receiverId": "cast:tv", "channel": channel, "route": route, "startAt": start_at, "restart": false });
+    let args = json!({ "receiverId": "cast:tv", "channel": channel, "route": route, "startAt": start_at, "restart": false, "freed": false });
     let handle = handle.clone();
     std::thread::spawn(move || crate::test_support::invoke_on(&handle, "cast_load", args))
 }
@@ -1166,7 +1166,7 @@ async fn keeps_a_plan_only_for_the_same_item_source_and_choices() {
                             "container": "mkv", "video": video, "audio": audio });
         app.invoke(
             "cast_load",
-            json!({ "receiverId": "cast:tv", "channel": movie, "route": route, "startAt": start, "restart": false }),
+            json!({ "receiverId": "cast:tv", "channel": movie, "route": route, "startAt": start, "restart": false, "freed": false }),
         )
         .unwrap();
     };
@@ -1198,7 +1198,7 @@ async fn keeps_a_plan_only_for_the_same_item_source_and_choices() {
                         "container": "mkv", "video": "none", "audio": "copy" });
     app.invoke(
         "cast_load",
-        json!({ "receiverId": "cast:tv", "channel": other, "route": route, "startAt": null, "restart": false }),
+        json!({ "receiverId": "cast:tv", "channel": other, "route": route, "startAt": null, "restart": false, "freed": false }),
     )
     .unwrap();
     next_of(&mut got, "LOAD").await;
@@ -1209,7 +1209,7 @@ async fn keeps_a_plan_only_for_the_same_item_source_and_choices() {
                         "container": "mkv", "video": "none", "audio": "copy" });
     app.invoke(
         "cast_load",
-        json!({ "receiverId": "cast:tv", "channel": movie, "route": route, "startAt": null, "restart": false }),
+        json!({ "receiverId": "cast:tv", "channel": movie, "route": route, "startAt": null, "restart": false, "freed": false }),
     )
     .unwrap();
     next_of(&mut got, "LOAD").await;
@@ -1378,6 +1378,35 @@ async fn a_seek_the_provider_turns_away_once_asks_again() {
         Err(json!("refused"))
     );
     assert_eq!(connections.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_first_cast_after_this_computers_player_let_go_asks_again() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    // The provider still counts the player's connection a moment after it
+    // closed, so it turns away the first ask.
+    let (source, connections) = refusing_source(wav16(), Duration::ZERO, false, vec![0]);
+    let movie = channel("m-1", &source, "movie");
+    add_channel(&app, &movie);
+    let generation = app
+        .handle()
+        .state::<crate::streams::StreamsState>()
+        .remember(&movie.id, vec![movie.url.clone()]);
+    let mut route = converted();
+    route["generation"] = json!(generation);
+    app.invoke(
+        "cast_load",
+        json!({ "receiverId": "cast:tv", "channel": movie, "route": route,
+                "startAt": null, "restart": false, "freed": true }),
+    )
+    .unwrap();
+    next_of(&mut got, "LOAD").await;
+    assert!(connections.load(Ordering::SeqCst) > 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1580,7 +1609,7 @@ async fn a_restart_whose_cast_ended_while_it_started_opens_none() {
     route["generation"] = json!(generation);
     let handle = app.handle();
     let args = json!({ "receiverId": "cast:tv", "channel": slow, "route": route,
-                       "startAt": null, "restart": true });
+                       "startAt": null, "restart": true, "freed": false });
     let restarting =
         std::thread::spawn(move || crate::test_support::invoke_on(&handle, "cast_load", args));
     wait_until("the probe's connection", || {

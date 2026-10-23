@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Select } from "@/components/ui/select";
 import { usePlatform } from "@/hooks/usePlatform";
-import { isMobilePlatform } from "@/lib/platform";
+import { castsFrom, isMobilePlatform } from "@/lib/platform";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import { getVersion } from "@tauri-apps/api/app";
 import { useQueryClient } from "@tanstack/react-query";
@@ -171,7 +171,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const segmentModes = usePlayerPref(readSkipSegmentModes, SKIP_SEGMENT_MODES_EVENT);
 	const streamThrough = usePlayerPref(readStreamThrough, STREAM_THROUGH_EVENT);
 	// Casting runs on macOS and Linux.
-	const castsHere = platform === "macos" || platform === "linux";
+	const castsHere = castsFrom(platform);
 
 	const geminiKey = useApiKey(GEMINI_KEY);
 	const omdbKey = useApiKey(OMDB_KEY);

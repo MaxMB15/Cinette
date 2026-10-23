@@ -387,6 +387,20 @@ describe("createCastDestination", () => {
 		expect(await blocked.route(item)).toEqual({ ok: false, reason: "unreachable" });
 	});
 
+	it("tells the backend when this device just let go of the stream", async () => {
+		const fake = backend();
+		const cast = createCastDestination(receiver, fake);
+		await cast.load(item, { route: { via: "direct", format: 1 }, freed: true });
+		expect(fake.castLoad).toHaveBeenLastCalledWith(
+			"cast:tv",
+			channel,
+			{ via: "direct", generation: 7, source: 1, container: "ts" },
+			undefined,
+			false,
+			true
+		);
+	});
+
 	it("loads the route it was given, or works one out", async () => {
 		const fake = backend();
 		const cast = createCastDestination(receiver, fake, { now: () => 3 });
@@ -399,6 +413,7 @@ describe("createCastDestination", () => {
 			channel,
 			{ via: "direct", generation: 7, source: 1, container: "ts" },
 			undefined,
+			false,
 			false
 		);
 		expect(cast.getState()).toMatchObject({
@@ -416,6 +431,7 @@ describe("createCastDestination", () => {
 			channel,
 			{ via: "direct", generation: 7, source: 0, container: "hls-ts" },
 			undefined,
+			false,
 			false
 		);
 		expect(seen).toEqual(["opening", "playing"]);
@@ -452,6 +468,7 @@ describe("createCastDestination", () => {
 				audio: "aac",
 			},
 			undefined,
+			false,
 			false
 		);
 		expect(cast.getState().status).toBe("opening");
@@ -523,12 +540,12 @@ describe("createCastDestination", () => {
 			video: "copy",
 			audio: "aac",
 		};
-		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 60, false);
+		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 60, false, false);
 		cast.receive({ kind: "media", media: media({ position: 5, duration: null, live: true }) });
 		expect(cast.getState()).toMatchObject({ position: 65, duration: 5400 });
 		expect(cast.capabilities.seek).toBe(true);
 		await cast.seek(1200);
-		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 1200, false);
+		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 1200, false, false);
 		expect(fake.castControl).not.toHaveBeenCalled();
 		expect(cast.getState().position).toBe(1200);
 		// After a stop, a seek goes to the receiver, which has nothing.
@@ -610,6 +627,7 @@ describe("createCastDestination", () => {
 			movie,
 			expect.anything(),
 			90,
+			false,
 			false
 		);
 		// Play without a pause before it just plays.
@@ -664,7 +682,7 @@ describe("createCastDestination", () => {
 		const cast = createCastDestination(receiver, fake, { now: () => clock });
 		await cast.load({ kind: "local", channel: movie });
 		await cast.pause();
-		await cast.release();
+		expect(await cast.release()).toBe(true);
 		expect(fake.castRelease).toHaveBeenCalledWith("cast:tv");
 		expect(fake.castStop).not.toHaveBeenCalled();
 		// Nothing is loaded now, so Play after a long pause converts nothing.
@@ -714,8 +732,6 @@ describe("createCastDestination", () => {
 		letGo();
 		await releasing;
 		expect(cast.getState().status).toBe("opening");
-		cast.settle();
-		expect(cast.getState()).toMatchObject({ status: "idle", connection: "connected" });
 		expect(cast.getState().item).not.toBeNull();
 	});
 
@@ -729,6 +745,7 @@ describe("createCastDestination", () => {
 			channel,
 			expect.objectContaining({ via: "converted" }),
 			undefined,
+			false,
 			false
 		);
 		cast.receive({ kind: "media", media: media({ position: 5, duration: null, live: true }) });
@@ -740,6 +757,7 @@ describe("createCastDestination", () => {
 			movie,
 			expect.anything(),
 			1800,
+			false,
 			false
 		);
 	});
@@ -827,8 +845,6 @@ describe("createCastDestination", () => {
 			expect(cast.getState().position).toBe(2400);
 			await cast.release();
 			expect(cast.getState().position).toBe(2400);
-			cast.settle();
-			expect(cast.getState().position).toBe(2400);
 			cast.receive({ kind: "closed", reason: "connectionLost" });
 			expect(cast.getState()).toMatchObject({ position: 2400, connection: "lost" });
 		});
@@ -889,7 +905,8 @@ describe("createCastDestination", () => {
 				movie,
 				expect.anything(),
 				95,
-				true
+				true,
+				false
 			);
 		});
 
@@ -904,7 +921,8 @@ describe("createCastDestination", () => {
 				channel,
 				expect.anything(),
 				undefined,
-				true
+				true,
+				false
 			);
 		});
 

@@ -717,6 +717,7 @@ describe("backend commands", () => {
 					episode,
 					{ via: "direct", generation: 3, source: 1, container: "hls-ts" },
 					30,
+					true,
 					true
 				),
 			"cast_load",
@@ -726,6 +727,7 @@ describe("backend commands", () => {
 				route: { via: "direct", generation: 3, source: 1, container: "hls-ts" },
 				startAt: 30,
 				restart: true,
+				freed: true,
 			},
 		],
 		[

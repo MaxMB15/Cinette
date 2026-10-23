@@ -1,9 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect } from "vitest";
-import { playbackKey, isFinished, shouldOfferResume } from "./playback";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import {
+	EMPTY_PROGRESS,
+	playbackKey,
+	isFinished,
+	progressFor,
+	saveProgress,
+	shouldOfferResume,
+} from "./playback";
+import { deletePlaybackPosition, markPositionFinished, savePlaybackPosition } from "./tauri";
 import type { Channel } from "./types";
+
+vi.mock("./tauri", () => ({
+	savePlaybackPosition: vi.fn(() => Promise.resolve()),
+	deletePlaybackPosition: vi.fn(() => Promise.resolve()),
+	markPositionFinished: vi.fn(() => Promise.resolve()),
+}));
 
 const ch = (overrides: Partial<Channel>): Channel => ({
 	id: "x",
@@ -91,5 +105,83 @@ describe("shouldOfferResume", () => {
 	});
 	it("is false once finished", () => {
 		expect(shouldOfferResume(5900, 6000)).toBe(false);
+	});
+});
+
+describe("progressFor", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("starts an item's progress where it starts, keyed by its resume key", () => {
+		vi.useFakeTimers({ now: 5000, toFake: ["Date"] });
+		const movie = ch({ name: "Heat", contentType: "movie" });
+		expect(progressFor(movie, 600)).toEqual({
+			key: "movie:heat",
+			url: "http://a/1.mkv",
+			position: 600,
+			duration: 0,
+			dirty: false,
+			lastSaved: 5000,
+			pendingStart: 600,
+		});
+		expect(progressFor(movie, undefined, "http://b/1.mkv")).toMatchObject({
+			url: "http://b/1.mkv",
+			position: 0,
+			pendingStart: null,
+		});
+	});
+});
+
+describe("saveProgress", () => {
+	afterEach(() => {
+		vi.clearAllMocks();
+		vi.useRealTimers();
+	});
+
+	const at = (position: number, more = {}) => ({
+		...EMPTY_PROGRESS,
+		key: "movie:heat",
+		position,
+		duration: 5400,
+		dirty: true,
+		...more,
+	});
+
+	it("saves where it got to, once, and when it was saved", async () => {
+		vi.useFakeTimers({ now: 7000, toFake: ["Date"] });
+		const p = at(600);
+		await saveProgress(p);
+		expect(savePlaybackPosition).toHaveBeenCalledWith("movie:heat", 600, 5400);
+		expect(p).toMatchObject({ dirty: false, lastSaved: 7000 });
+		await saveProgress(p);
+		expect(savePlaybackPosition).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps a finished item as finished, and forgets one barely started", async () => {
+		await saveProgress(at(5390));
+		expect(markPositionFinished).toHaveBeenCalledWith("movie:heat", 5400);
+		await saveProgress(at(29));
+		expect(deletePlaybackPosition).toHaveBeenCalledWith("movie:heat");
+		await saveProgress(at(30));
+		expect(savePlaybackPosition).toHaveBeenCalledWith("movie:heat", 30, 5400);
+	});
+
+	it("saves nothing without a key, a change or a length", async () => {
+		await saveProgress(at(600, { key: null }));
+		await saveProgress(at(600, { dirty: false }));
+		await saveProgress(at(600, { duration: 0 }));
+		expect(savePlaybackPosition).not.toHaveBeenCalled();
+		expect(markPositionFinished).not.toHaveBeenCalled();
+		expect(deletePlaybackPosition).not.toHaveBeenCalled();
+	});
+
+	it("gets past a save that failed", async () => {
+		vi.mocked(savePlaybackPosition).mockRejectedValueOnce("disk");
+		vi.mocked(markPositionFinished).mockRejectedValueOnce("disk");
+		vi.mocked(deletePlaybackPosition).mockRejectedValueOnce("disk");
+		await expect(saveProgress(at(600))).resolves.toBeUndefined();
+		await expect(saveProgress(at(5390))).resolves.toBeUndefined();
+		await expect(saveProgress(at(10))).resolves.toBeUndefined();
 	});
 });

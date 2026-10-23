@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { useDestinationState } from "@/hooks/useDestinationState";
+import { useNowPlaying } from "@/hooks/useNowPlaying";
 import {
 	AIRPLAY_AVAILABLE_EVENT,
 	AIRPLAY_PICKER_CLOSED_EVENT,
 	AIRPLAY_ROUTE_EVENT,
 	AIRPLAY_STATE_EVENT,
+	NOT_PICKED,
+	airplayBlockedMessage,
+	airplayFailureMessage,
 	airplaySender,
 	createAirPlayDestination,
 	type AirPlayBridge,
@@ -15,8 +20,8 @@ import {
 	type AirPlayNativeState,
 	type AirPlayRoute,
 } from "@/lib/airplay";
-import type { PlaybackState } from "@/lib/destination";
-import type { RouteDecision } from "@/lib/route";
+import { destinationStatus, type PlaybackState } from "@/lib/destination";
+import { nowPlaying, ofKind, sentMessage } from "@/lib/now-playing";
 import type { ConverterSupport } from "@/lib/route-profiles";
 import {
 	airplayChoose,
@@ -61,10 +66,6 @@ const bridge: AirPlayBridge = {
 	now: () => performance.now(),
 	sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
-
-// Stryker disable next-line ArrowFunction: React skips an unsubscribe that isn't a function, and this one does nothing.
-const noState = () => () => {};
-const getNull = () => null;
 
 /** Where AirPlay's route check runs before a receiver is known. The route
  *  doesn't depend on the receiver, since every one gets the same profile. */
@@ -113,19 +114,14 @@ const choose = (anchor: DOMRect) => pick(anchor, (route) => route !== null);
  *  back with the picture. */
 const chooseHere = (anchor: DOMRect) => pick(anchor, (route) => route === null);
 
-/** What sending the current item to AirPlay came to. `stopped` says local
- *  playback was already stopped when it failed, so nothing plays. */
-export type SendResult =
-	| { sent: true }
-	| { sent: false; why: "cancelled" }
-	| { sent: false; why: "blocked"; decision: Extract<RouteDecision, { ok: false }> }
-	| { sent: false; why: "failed"; error: unknown; stopped: boolean };
-
 export interface AirPlay {
 	/** A receiver is in reach, so the AirPlay button shows. */
 	available: boolean;
 	/** The receiver AirPlay video plays on, while it does. */
 	destination: AirPlayDestination | null;
+	/** The same, as of now rather than the last render: a stop clears it at
+	 *  once. */
+	current: () => AirPlayDestination | null;
 	/** The destination's state, or `null` while nothing plays over AirPlay. */
 	state: PlaybackState | null;
 	/**
@@ -143,7 +139,7 @@ export interface AirPlay {
 			stopLocal: () => Promise<void>;
 			confirm: () => Promise<boolean>;
 		}
-	) => Promise<SendResult>;
+	) => Promise<string | null>;
 	/** Stops AirPlay video, and resolves once it has. */
 	stop: () => Promise<void>;
 	/**
@@ -157,35 +153,31 @@ export interface AirPlay {
 	notPicked: boolean;
 }
 
+/** The AirPlay TV playing, if what plays is one. */
+const airplayPlaying = () =>
+	ofKind<AirPlayDestination>(nowPlaying.getState().destination, "airplay");
+
 /**
- * AirPlay for the player page, on iOS and macOS. Off elsewhere, where every
- * field stays empty. Leaving the page stops AirPlay. On a `mac`, the route
- * belongs to AVPlayer, not to the whole Mac, so stopping AirPlay is all it
- * takes to play here again.
+ * AirPlay on iOS and macOS: whether a TV is in reach, the system picker,
+ * and sending to the TV picked. Off elsewhere, where every field stays
+ * empty. AirPlay keeps playing when the player page closes; the
+ * now-playing store holds it. On a `mac`, the route belongs to AVPlayer,
+ * not to the whole Mac, so stopping AirPlay is all it takes to play here
+ * again.
  */
 export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 	const [available, setAvailable] = useState(false);
 	const [route, setRoute] = useState<AirPlayRoute | null>(null);
-	const [destination, setDestination] = useState<AirPlayDestination | null>(null);
+	const { destination: playing, ended } = useNowPlaying();
+	const destination = ofKind<AirPlayDestination>(playing, "airplay");
 	const [support, setSupport] = useState(NO_CONVERTER);
-	// The destination AirPlay plays on, for the cleanup when the page goes
-	// and for sends that finish after it has.
-	const active = useRef<AirPlayDestination | null>(null);
 	// Stryker disable next-line BooleanLiteral: The effect below sets it before any send can run.
 	const mounted = useRef(false);
 
 	useEffect(() => {
 		mounted.current = true;
-		// Leaving the page ends AirPlay, as the stop button ends local
-		// playback.
 		const leave = () => {
 			mounted.current = false;
-			const left = active.current;
-			active.current = null;
-			if (left) {
-				void left.stop().catch(() => {});
-				left.dispose();
-			}
 		};
 		if (!enabled) return leave;
 		let current = true;
@@ -229,17 +221,7 @@ export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 		};
 	}, [enabled]);
 
-	const subscribe = destination ? destination.subscribe : noState;
-	const getState = destination ? destination.getState : getNull;
-	const state = useSyncExternalStore(subscribe, getState);
-
-	/** Stops `target`, the one playing, and forgets it. */
-	const end = async (target: AirPlayDestination) => {
-		active.current = null;
-		setDestination(null);
-		await target.stop().catch(() => {});
-		target.dispose();
-	};
+	const state = useDestinationState(destination);
 
 	const send = useCallback<AirPlay["send"]>(
 		async (channel, { anchor, startAt, stopLocal, confirm }) => {
@@ -248,67 +230,60 @@ export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 			// The React Compiler can't compile a try with a throw or a `??` in
 			// it, so failures are caught on the promise. Only the load can fail
 			// after this device stopped, and it says so itself.
-			const attempt = async (): Promise<SendResult> => {
+			const attempt = async (): Promise<string | null> => {
 				// The item is checked before the picker opens: picking a TV
 				// moves this device's sound there, even for an item it can't
 				// play.
 				const check = createAirPlayDestination(ANY_RECEIVER, bridge, sender);
 				const decision = await check.route(item).finally(() => check.dispose());
-				if (!decision.ok) return { sent: false, why: "blocked", decision };
+				if (!decision.ok) return airplayBlockedMessage(decision);
 				// Asked before the picker too, so saying no leaves the sound here.
 				const converts = decision.route.via === "converted";
-				if (converts && !(await confirm())) return { sent: false, why: "cancelled" };
-				if (!mounted.current) return { sent: false, why: "cancelled" };
+				if (converts && !(await confirm())) return null;
+				if (!mounted.current) return null;
 				const picked = route ?? (await choose(anchor));
-				if (!picked || !mounted.current) return { sent: false, why: "cancelled" };
+				if (!picked || !mounted.current) return null;
 				const target = createAirPlayDestination(picked, bridge, sender);
 				const settled = await target.route(item);
 				// The page went while the check ran: nothing starts, and this
 				// device keeps playing.
 				if (!mounted.current || !settled.ok) {
 					target.dispose();
-					return settled.ok
-						? { sent: false, why: "cancelled" }
-						: { sent: false, why: "blocked", decision: settled };
+					return settled.ok ? null : airplayBlockedMessage(settled);
 				}
 				// The formats can change between the check and now, so a route
 				// that only converts now still asks.
 				if (settled.route.via === "converted" && !converts && !(await confirm())) {
 					target.dispose();
-					return { sent: false, why: "cancelled" };
+					return null;
 				}
-				await stopLocal();
-				if (!mounted.current) {
-					target.dispose();
-					return { sent: false, why: "cancelled" };
-				}
-				active.current = target;
-				setDestination(target);
-				const loaded = await target.load(item, { route: settled.route, startAt }).then(
-					() => ({ ok: true as const }),
-					(error: unknown) => ({ ok: false as const, error })
-				);
-				if (!loaded.ok) {
-					// Nothing plays on the TV, so the panel goes, and the player
-					// says why.
-					await end(target);
-					return { sent: false, why: "failed", error: loaded.error, stopped: true };
-				}
-				return { sent: true };
+				// A TV that fails to load is stopped, so its view goes, and the
+				// player says why.
+				const sent = await nowPlaying.send(target, channel, {
+					decision: settled,
+					startAt,
+					stopLocal,
+					// On a Mac, no TV took it, so it plays here again. A TV that's
+					// gone goes back to this device too, and says why.
+					ends: (s) =>
+						target.notPicked
+							? NOT_PICKED
+							: s.connection === "lost"
+								? destinationStatus(s, target.name)
+								: null,
+				});
+				// One that didn't start is done with, unless a newer send to the
+				// same TV took over.
+				if (!sent.ok && airplayPlaying() !== target) target.dispose();
+				return sentMessage(target, sent);
 			};
-			return attempt().catch((error: unknown): SendResult => ({
-				sent: false,
-				why: "failed",
-				error,
-				stopped: false,
-			}));
+			return attempt().catch(airplayFailureMessage);
 		},
 		[route, support]
 	);
 
 	const stop = async () => {
-		const playing = active.current;
-		if (playing) await end(playing);
+		if (airplayPlaying()) await nowPlaying.stop().catch(() => {});
 	};
 
 	const returnHere = async (anchor: DOMRect) => {
@@ -321,11 +296,11 @@ export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 	return {
 		available: enabled && (available || route !== null),
 		destination,
+		current: airplayPlaying,
 		state,
 		send,
 		stop,
 		returnHere,
-		// The destination's state changes with it, which renders this again.
-		notPicked: destination?.notPicked === true,
+		notPicked: ended === NOT_PICKED,
 	};
 };
