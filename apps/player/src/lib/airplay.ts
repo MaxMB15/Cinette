@@ -20,6 +20,7 @@ import {
 	type PlaybackState,
 	type Track,
 } from "@/lib/destination";
+import { convertWarning, REFUSED_MESSAGE, tvFailureMessage } from "@/lib/device-picker";
 import { chooseRoute, type PlayRoute, type RouteDecision, type SenderProfile } from "@/lib/route";
 
 type Blocked = Extract<RouteDecision, { ok: false }>;
@@ -97,25 +98,21 @@ export const AIRPLAY_RECEIVER = airplayTvProfile;
 export const airplaySender = (support: ConverterSupport): SenderProfile =>
 	iosSender(support, { needsScreen: false });
 
-/** What the confirm step says before a conversion starts. */
+/** What the confirm step says before an iPhone or iPad converts. */
 export const CONVERT_WARNING =
 	"This iPhone converts the stream and sends it to the TV. Keep it on Wi-Fi and charged. It can lock.";
 
-/** The same, on a Mac. */
-export const MAC_CONVERT_WARNING =
-	"This Mac converts the stream and sends it to the TV. It stays awake while it does. Keep it on the TV's network.";
-
-/** The confirm step's warning for this device. */
-export const airplayConvertWarning = (mac: boolean) =>
-	mac ? MAC_CONVERT_WARNING : CONVERT_WARNING;
+/** The confirm step's warning for this device, sending to `name`. A Mac
+ *  says what Cast says. */
+export const airplayConvertWarning = (mac: boolean, name = "the TV") =>
+	mac ? convertWarning(name, "on") : CONVERT_WARNING;
 
 const tracks = (list: AirPlayNativeState["subtitles"]): Track[] =>
 	list.map((t, i) => ({ id: String(i), label: t.label, language: t.language }));
 
 /** What the player says about an error AVPlayer reported. */
 export const airplayErrorMessage = (error: NonNullable<AirPlayNativeState["error"]>) => {
-	if (error.code === "refused")
-		return "The provider refused the stream. The login may have expired, or another device may be using it.";
+	if (error.code === "refused") return REFUSED_MESSAGE;
 	if (error.unsupported) return "The TV can't play this stream as it is.";
 	if (error.code === "openFailed") return "Couldn't start the stream on the TV.";
 	return "The stream stopped on the TV.";
@@ -124,25 +121,13 @@ export const airplayErrorMessage = (error: NonNullable<AirPlayNativeState["error
 /** Why AirPlay ended when no TV took the video, on a Mac. */
 export const NOT_PICKED = "No TV took the video.";
 
-/**
- * What the player says when sending to AirPlay failed: the provider's
- * refusal, the backend's own message, or a plain one.
- */
-export const airplayFailureMessage = (error: unknown): string => {
-	if (error === REFUSED) return airplayErrorMessage({ code: "refused" });
-	if (typeof error === "string" && error !== "") return error;
-	return "Couldn't start AirPlay.";
-};
-
 /** What a converted load answers when a later load or a stop came first.
  *  The same text as `SUPERSEDED` in src-tauri/src/airplay/conversion.rs. */
 export const SUPERSEDED = "superseded";
 
 /** What the player says when a seek on the TV failed. */
 export const airplaySeekMessage = (error: unknown): string =>
-	typeof error === "string" && error !== ""
-		? airplayFailureMessage(error)
-		: "Couldn't move the stream on the TV.";
+	tvFailureMessage("the TV", error, "Couldn't move the stream on the TV.");
 
 const NAMES: Record<string, string> = {
 	mkv: "MKV files",

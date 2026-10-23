@@ -227,16 +227,16 @@ pub(super) fn is_ours(ip: IpAddr) -> bool {
 /// of change doesn't end a stream that would have gone on.
 const MOVED_CHECKS: u32 = 2;
 
-/// How long a session whose connection went with this computer's old
-/// address tries to connect to its receiver again, as while Wi-Fi comes
-/// back, before it says the cast was lost.
+/// How long a session whose connection dropped tries to connect to its
+/// receiver again, as while Wi-Fi comes back, before it says the cast was
+/// lost.
 const RECONNECT_FOR: Duration = Duration::from_secs(30);
 
 /// How often it tries.
 const RECONNECT_EVERY: Duration = Duration::from_secs(1);
 
 /// How long a session waits on a silent receiver, and how it connects again
-/// after this computer's address changed. Tests give their own.
+/// after its connection dropped. Tests give their own.
 #[derive(Clone, Copy)]
 struct Timing {
     ping: Duration,
@@ -439,7 +439,6 @@ where
         let id = receiver_id.to_string();
         tauri::async_runtime::spawn(async move {
             let state = app.state::<CastPlayback>();
-            let ours = lock(&state.addresses).ours;
             let mut lost = None;
             let joined = drive(stream, session, first, receiver, |update| {
                 let dropped = matches!(
@@ -448,23 +447,25 @@ where
                         reason: "timeout" | "connectionLost"
                     }
                 );
-                if dropped && local.is_some_and(|ip| !ours(ip)) {
-                    // The connection went with this computer's old address,
-                    // as after a sleep on another network. It's taken up
-                    // again below, and the frontend hears of it only if
-                    // that fails.
+                // The connection dropped, as while the computer slept or
+                // after it moved to another network, and the receiver app may
+                // play on. It's taken up again below, so the frontend hears
+                // that it reconnects, and of the end only if that fails.
+                let update = if dropped {
                     lost = Some(update);
+                    CastUpdate::Reconnecting
                 } else {
-                    // Under the lock `begin` replaces a session under, so a
-                    // session a newer one replaced says nothing more, even
-                    // about what it read just before. No Rust code listens
-                    // to the update event; one that did must not call back
-                    // into `CastPlayback` from its handler, or it would wait
-                    // on this lock forever.
-                    let active = lock(&state.active);
-                    if !replaced(active.as_ref(), &id, generation) {
-                        emit(&app, &id, update);
-                    }
+                    update
+                };
+                // Under the lock `begin` replaces a session under, so a
+                // session a newer one replaced says nothing more, even about
+                // what it read just before. No Rust code listens to the
+                // update event; one that did must not call back into
+                // `CastPlayback` from its handler, or it would wait on this
+                // lock forever.
+                let active = lock(&state.active);
+                if !replaced(active.as_ref(), &id, generation) {
+                    emit(&app, &id, update);
                 }
             })
             .await;
@@ -504,9 +505,10 @@ where
     });
     drop(active);
     match old {
-        // The same receiver on a new connection, as after this computer's
-        // address changed. The old one goes without a word, so the receiver
-        // keeps its app and the frontend sees no end.
+        // The same receiver on a new connection, as after the old one
+        // dropped or this computer's address changed. The old one goes
+        // without a word, so the receiver keeps its app and the frontend sees
+        // no end.
         Some(old) if old.receiver_id == receiver_id => {
             #[cfg(test)]
             if state
@@ -552,10 +554,10 @@ fn replaced(active: Option<&Active>, receiver_id: &str, generation: u64) -> bool
 }
 
 /// Connects to `receiver_id` again after session `generation` lost its
-/// connection with this computer's old address, trying for a while, as
-/// while Wi-Fi comes back. Says whether the cast goes on: on the new
-/// connection, on one a load opened meanwhile, or not at all because it
-/// ended or went to another receiver meanwhile, which says so itself.
+/// connection, trying for a while, as while Wi-Fi comes back. Says whether
+/// the cast goes on: on the new connection, on one a load opened meanwhile,
+/// or not at all because it ended or went to another receiver meanwhile,
+/// which says so itself.
 async fn reconnect<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,
@@ -645,7 +647,7 @@ async fn ensure_connected<R: Runtime>(
     }
     // A receiver that doesn't answer shows as unavailable for a while. One
     // that isn't listed, the only other way this fails, isn't marked. A
-    // reconnect after a move doesn't mark it either, since one try that
+    // reconnect after a drop doesn't mark it either, since one try that
     // fails while Wi-Fi comes back says nothing about the receiver.
     let (stream, local) = connect(app, receiver_id)
         .await
@@ -724,7 +726,7 @@ async fn conversion_plan<R: Runtime>(
         .await
         .map_err(|e| match e {
             ProbeError::Refused(_) => REFUSED.to_string(),
-            _ => "unreachable".to_string(),
+            _ => "streamUnreachable".to_string(),
         })?;
     // AAC from MPEG-TS or HLS can't be copied into the Matroska the
     // converter writes, so it's converted like any other.
@@ -773,7 +775,7 @@ async fn start_conversion<R: Runtime>(
             ConvertError::NoEncoder => "noEncoder".to_string(),
             ConvertError::Unsupported => "unsupported".to_string(),
             ConvertError::NoRoute => "noRoute".to_string(),
-            ConvertError::Unreachable => "unreachable".to_string(),
+            ConvertError::Unreachable => "streamUnreachable".to_string(),
             ConvertError::Failed(_) => "converterFailed".to_string(),
         })
 }
@@ -792,10 +794,10 @@ async fn start_conversion<R: Runtime>(
 /// server, or from one of the cast's own for a direct route.
 ///
 /// Rejects with `subtitleTooLarge`, `notFound`, `unreachable`, `refused`,
-/// `noConverter`, `noEncoder`, `unsupported`, `noRoute`, `converterFailed`,
-/// `stale` or `superseded`, or, for a direct HLS route, `notPlaylist` or
-/// `cors`, after which the frontend routes the item again without that
-/// format.
+/// `streamUnreachable`, `noConverter`, `noEncoder`, `unsupported`, `noRoute`,
+/// `converterFailed`, `stale` or `superseded`, or, for a direct HLS route,
+/// `notPlaylist` or `cors`, after which the frontend routes the item again
+/// without that format.
 pub async fn load<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,

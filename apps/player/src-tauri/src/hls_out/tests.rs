@@ -441,27 +441,6 @@ fn reads_converter_errors() {
     assert_eq!(HlsError::from(RemuxError::Cancelled), HlsError::Failed);
 }
 
-#[test]
-fn says_why_for_the_player() {
-    assert_eq!(HlsError::Refused.for_player(), "refused");
-    assert_eq!(
-        HlsError::Unreachable.for_player(),
-        "Couldn't reach the stream to convert it."
-    );
-    assert_eq!(
-        HlsError::VideoCodec.for_player(),
-        "The TV can't play this video, and this device can't convert it."
-    );
-    assert_eq!(
-        HlsError::NoNetwork.for_player(),
-        "Connect to Wi-Fi to send this to the TV."
-    );
-    assert_eq!(
-        HlsError::Failed.for_player(),
-        "Couldn't convert the stream on this device."
-    );
-}
-
 fn control(started: Duration) -> Control {
     Control {
         pacer: Mutex::new(Pacer::new(0.0)),

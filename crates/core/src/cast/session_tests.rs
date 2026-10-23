@@ -94,19 +94,41 @@ fn load_request() -> LoadRequest {
 
 /// A session whose receiver app is ready, at `now`.
 fn ready(now: Instant) -> Session {
+    ready_asking(now).0
+}
+
+/// [`ready`], and the id of the media status it asked for on joining.
+fn ready_asking(now: Instant) -> (Session, u64) {
     let (mut session, _) = Session::start(SENDER.into(), now);
     let out = session.receive(&receiver_status(dmr("s1")), now);
     assert!(out.events.contains(&Event::Ready {
         session_id: "s1".into()
     }));
-    session
+    (session, asked_status(&out.send))
+}
+
+/// The request id of the media `GET_STATUS` among `frames`.
+fn asked_status(frames: &[Vec<u8>]) -> u64 {
+    sent(frames)
+        .iter()
+        .find(|(_, namespace, body)| namespace == NS_MEDIA && body["type"] == "GET_STATUS")
+        .and_then(|(_, _, body)| body["requestId"].as_u64())
+        .expect("a media GET_STATUS")
 }
 
 /// A ready session that's playing media 7.
 fn with_media(now: Instant) -> Session {
-    let mut session = ready(now);
-    session.receive(&media_status(0, playing(7, 10.0)), now);
+    let (mut session, asked) = ready_asking(now);
+    session.receive(&media_status(asked, playing(7, 10.0)), now);
     session
+}
+
+/// The media events in `out`.
+fn media_events(out: &Output) -> Vec<&Event> {
+    out.events
+        .iter()
+        .filter(|e| matches!(e, Event::Media(_)))
+        .collect()
 }
 
 fn media_event(out: &Output) -> MediaState {
@@ -1211,4 +1233,75 @@ fn a_null_time_or_request_id_reads_as_zero() {
     let media = media_event(&session.receive(&status, now));
     assert_eq!(media.current_time, 0.0);
     assert!(!media.can_pause);
+}
+
+#[test]
+fn a_load_into_an_app_that_plays_leaves_out_what_played_before() {
+    let now = Instant::now();
+    let (mut session, _) = Session::start(SENDER.into(), now);
+    // The load waits for the app, which already plays media 5.
+    session.load(load_request(), now).unwrap();
+    let joined = session.receive(&receiver_status(dmr("s1")), now);
+    let asked = asked_status(&joined.send);
+    let load = sent(&joined.send)
+        .into_iter()
+        .find(|(_, _, body)| body["type"] == "LOAD")
+        .and_then(|(_, _, body)| body["requestId"].as_u64())
+        .unwrap();
+    // Media 5's news, before and after the answer to the status asked for,
+    // says nothing and doesn't end the load.
+    for request_id in [0, asked, 0] {
+        let out = session.receive(&media_status(request_id, playing(5, 100.0)), now);
+        assert!(media_events(&out).is_empty(), "{request_id}");
+    }
+    // The answer to the load does.
+    let out = session.receive(&media_status(load, playing(6, 0.0)), now);
+    assert_eq!(media_event(&out).media_session_id, 6);
+    let later = now + LOAD_TIMEOUT;
+    session.receive(
+        &from("receiver-0", NS_HEARTBEAT, json!({ "type": "PONG" })),
+        later,
+    );
+    assert!(session.tick(later).events.is_empty());
+}
+
+#[test]
+fn a_new_media_without_a_request_id_ends_the_load_once_the_old_one_is_known() {
+    let now = Instant::now();
+    let (mut session, _) = Session::start(SENDER.into(), now);
+    session.load(load_request(), now).unwrap();
+    let joined = session.receive(&receiver_status(dmr("s1")), now);
+    let asked = asked_status(&joined.send);
+    session.receive(&media_status(asked, playing(5, 100.0)), now);
+    let out = session.receive(&media_status(0, playing(6, 0.0)), now);
+    assert_eq!(media_event(&out).media_session_id, 6);
+}
+
+#[test]
+fn a_switch_leaves_out_the_last_items_late_news() {
+    let now = Instant::now();
+    let mut session = with_media(now);
+    let id = sent(&session.load(load_request(), now).unwrap().send)[0].2["requestId"]
+        .as_u64()
+        .unwrap();
+    // Media 7 goes on reporting while the load waits.
+    let out = session.receive(&media_status(0, playing(7, 12.0)), now);
+    assert!(media_events(&out).is_empty());
+    let out = session.receive(&media_status(id, playing(8, 0.0)), now);
+    assert_eq!(media_event(&out).media_session_id, 8);
+    // And after it was answered.
+    let out = session.receive(&media_status(0, playing(7, 13.0)), now);
+    assert!(media_events(&out).is_empty());
+    let out = session.receive(&media_status(0, playing(8, 1.0)), now);
+    assert_eq!(media_event(&out).current_time, 1.0);
+}
+
+#[test]
+fn a_rejoin_without_a_load_reports_what_plays_at_once() {
+    let now = Instant::now();
+    let (mut session, _) = Session::rejoin(SENDER.into(), "s1".into(), now);
+    let joined = session.receive(&receiver_status(dmr("s1")), now);
+    let asked = asked_status(&joined.send);
+    let out = session.receive(&media_status(asked, playing(5, 100.0)), now);
+    assert_eq!(media_event(&out).media_session_id, 5);
 }

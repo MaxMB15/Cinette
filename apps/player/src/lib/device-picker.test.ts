@@ -13,6 +13,8 @@ import {
 	isDisabled,
 	keepWarning,
 	statusText,
+	tvFailureMessage,
+	REFUSED_MESSAGE,
 	type PickerEntry,
 } from "./device-picker";
 
@@ -90,13 +92,43 @@ describe("isDisabled", () => {
 	});
 });
 
+describe("tvFailureMessage", () => {
+	it("says why each kind of failure happened", () => {
+		expect(tvFailureMessage("TV", "unreachable")).toBe("Couldn't reach TV.");
+		expect(tvFailureMessage("TV", "notFound")).toBe("Couldn't reach TV.");
+		expect(tvFailureMessage("TV", "streamUnreachable")).toBe(
+			"Couldn't reach the stream to convert it."
+		);
+		expect(tvFailureMessage("TV", "refused")).toBe(REFUSED_MESSAGE);
+		expect(REFUSED_MESSAGE).toBe(
+			"The provider refused the stream. The login may have expired, or another device may be using it."
+		);
+		for (const code of ["noConverter", "noEncoder", "unsupported"])
+			expect(tvFailureMessage("TV", code)).toBe(
+				"This device can't convert this stream for TV."
+			);
+		expect(tvFailureMessage("TV", "noRoute")).toBe(
+			"This device has no network address TV can reach."
+		);
+		expect(tvFailureMessage("TV", "converterFailed")).toBe(
+			"Couldn't convert the stream on this device."
+		);
+		expect(tvFailureMessage("TV", new Error("x"))).toBe("Couldn't play it on TV.");
+		expect(tvFailureMessage("TV", "stale", "No answer.")).toBe("No answer.");
+		// A known code keeps its words whatever the fallback.
+		expect(tvFailureMessage("TV", "noRoute", "No answer.")).toBe(
+			"This device has no network address TV can reach."
+		);
+	});
+});
+
 describe("keepWarning", () => {
 	it("warns only before a converted route", () => {
 		expect(keepWarning({ ...chromecast, status: { via: "converted", keep: "on" } })).toBe(
-			"Casting this to Bedroom TV needs this computer to stay on and connected. Closing the lid ends it."
+			"Playing this on Bedroom TV needs this computer to stay on and connected. Closing the lid ends it."
 		);
 		expect(keepWarning({ ...chromecast, status: { via: "converted", keep: "onScreen" } })).toBe(
-			"Casting this to Bedroom TV needs Cinette to stay open on this device."
+			"Playing this on Bedroom TV needs Cinette to stay open on this device."
 		);
 		for (const status of [
 			undefined,

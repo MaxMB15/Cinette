@@ -709,6 +709,9 @@ export type CastUpdate =
 	 *  channel's connection ended, `moved` when this computer's address on
 	 *  the way to the receiver changed. */
 	| { kind: "conversionStopped"; why: "dropped" | "moved" }
+	/** The connection dropped and the cast connects again. A `ready` or a
+	 *  `closed` follows. */
+	| { kind: "reconnecting" }
 	| {
 			kind: "closed";
 			reason:
@@ -726,9 +729,10 @@ export const CAST_UPDATE_EVENT = "cast://update";
 /**
  * Play `channel` on a Cast receiver, connecting first when needed, with
  * `subtitle` shown from the start unless it's a live channel. Rejects
- * with `subtitleTooLarge`, `notFound`, `unreachable`, `refused`, `noConverter`,
- * `noEncoder`, `unsupported`, `noRoute`, `converterFailed`, `stale` or
- * `superseded`, or, for a direct HLS route, `notPlaylist` or `cors`.
+ * with `subtitleTooLarge`, `notFound`, `unreachable`, `refused`,
+ * `streamUnreachable`, `noConverter`, `noEncoder`, `unsupported`, `noRoute`,
+ * `converterFailed`, `stale` or `superseded`, or, for a direct HLS route,
+ * `notPlaylist` or `cors`.
  * `restart` when the cast starts its stream again by itself: it never
  * opens a cast, and rejects with `notConnected` once the cast has ended.
  */
