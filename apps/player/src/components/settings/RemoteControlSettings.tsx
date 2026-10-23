@@ -423,6 +423,7 @@ const DeviceList = ({
 		acted.current = null;
 		if (at === null || document.activeElement !== document.body) return;
 		const buttons = listRef.current?.querySelectorAll("button") ?? [];
+		// Stryker disable next-line OptionalChaining: the heading renders with the list, so it's never null here.
 		(buttons[Math.min(at, buttons.length - 1)] ?? headingRef.current)?.focus();
 	}, [rows.length]);
 	return (

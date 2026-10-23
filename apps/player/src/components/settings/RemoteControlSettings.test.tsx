@@ -55,6 +55,24 @@ const defaults: RemoteSettings = {
 	deviceId: "abc",
 };
 
+/** Shows the card with blocked devices numbered `ids`. Returns how to give
+ *  it the backend's next list. */
+const showBlocked = async (...ids: number[]) => {
+	const devices = (list: number[]) =>
+		list.map((i) => ({ deviceId: `d${i}abcdefgh`, name: `Device ${i}` }));
+	sessions.blocked = devices(ids);
+	vi.mocked(remoteGetSettings).mockResolvedValue(defaults);
+	const view = render(<RemoteControlSettings />);
+	await screen.findByText("Remote control", { selector: "h3,div" });
+	return (...next: number[]) => {
+		sessions.blocked = devices(next);
+		view.rerender(<RemoteControlSettings />);
+	};
+};
+
+const unblock = (i: number) =>
+	screen.getByRole("button", { name: `Unblock Device ${i} · ID d${i}abcd` });
+
 const shown = async (settings: RemoteSettings = defaults) => {
 	vi.mocked(remoteGetSettings).mockResolvedValue(settings);
 	render(<RemoteControlSettings />);
@@ -566,38 +584,47 @@ describe("RemoteControlSettings", () => {
 	});
 
 	it("moves focus to the next row, or the heading, when a row goes", async () => {
-		sessions.blocked = ["d1abcdefgh", "d2abcdefgh"].map((deviceId, i) => ({
-			deviceId,
-			name: `Device ${i + 1}`,
-		}));
-		vi.mocked(remoteGetSettings).mockResolvedValue(defaults);
-		const view = render(<RemoteControlSettings />);
-		await screen.findByText("Remote control", { selector: "h3,div" });
-		const first = screen.getByRole("button", { name: "Unblock Device 1 · ID d1abcd" });
-		first.focus();
-		fireEvent.click(first);
+		const backendLists = await showBlocked(1, 2);
+		unblock(1).focus();
+		fireEvent.click(unblock(1));
 		// The backend's list comes back without it.
-		sessions.blocked = [{ deviceId: "d2abcdefgh", name: "Device 2" }];
-		view.rerender(<RemoteControlSettings />);
-		const second = screen.getByRole("button", { name: "Unblock Device 2 · ID d2abcd" });
-		expect(second).toHaveFocus();
+		backendLists(2);
+		expect(unblock(2)).toHaveFocus();
 
-		fireEvent.click(second);
-		sessions.blocked = [];
-		view.rerender(<RemoteControlSettings />);
+		fireEvent.click(unblock(2));
+		backendLists();
 		expect(screen.getByText("Blocked devices")).toHaveFocus();
 	});
 
+	it("moves focus to the row now in the first one's place, not the last", async () => {
+		const backendLists = await showBlocked(1, 2, 3);
+		unblock(1).focus();
+		fireEvent.click(unblock(1));
+		backendLists(2, 3);
+		expect(unblock(2)).toHaveFocus();
+	});
+
+	it("moves focus to the row before the last one when that goes", async () => {
+		const backendLists = await showBlocked(1, 2);
+		unblock(2).focus();
+		fireEvent.click(unblock(2));
+		backendLists(1);
+		expect(unblock(1)).toHaveFocus();
+	});
+
+	it("leaves focus alone when the list changes with no button pressed", async () => {
+		const backendLists = await showBlocked(1);
+		// A device blocked from the prompt while Settings is open.
+		backendLists(1, 2);
+		expect(document.body).toHaveFocus();
+	});
+
 	it("leaves focus alone when it moved on before the row went", async () => {
-		sessions.blocked = [{ deviceId: "d1abcdefgh", name: "Device 1" }];
-		vi.mocked(remoteGetSettings).mockResolvedValue(defaults);
-		const view = render(<RemoteControlSettings />);
-		await screen.findByText("Remote control", { selector: "h3,div" });
-		fireEvent.click(screen.getByRole("button", { name: "Unblock Device 1 · ID d1abcd" }));
+		const backendLists = await showBlocked(1);
+		fireEvent.click(unblock(1));
 		const reset = screen.getByRole("button", { name: "Reset" });
 		reset.focus();
-		sessions.blocked = [];
-		view.rerender(<RemoteControlSettings />);
+		backendLists();
 		expect(reset).toHaveFocus();
 	});
 
