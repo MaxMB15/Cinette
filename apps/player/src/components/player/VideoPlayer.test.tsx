@@ -4915,50 +4915,26 @@ describe("Google Cast", () => {
 				expect(screen.getByRole("alert").textContent).toBe(note);
 			});
 
-			it("takes an ended TV with no item, or no item here, in its stride", async () => {
-				renderPlayer(null);
-				await flush();
+			it("hands the store the next episode, which plays through this page while it's open", async () => {
+				const setUpNext = vi.spyOn(nowPlaying, "setUpNext");
+				const view = await openItem(ep1, { episodes: [ep2, ep1] });
+				const upNext = () => setUpNext.mock.lastCall![0];
+				expect(upNext().episodes.map((e) => e.id)).toEqual([ep1.id, ep2.id]);
+				expect(upNext().autoplay).toBe(true);
+				fireEvent.click(screen.getAllByRole("button", { name: "Autoplay on" })[0]);
+				expect(upNext().autoplay).toBe(false);
 				const resend = airplaying();
-				act(() => fakeAirPlay.set({ state: castState({ status: "ended" }) }));
-				act(() => fakeAirPlay.set({ state: castState({ item: null, status: "ended" }) }));
-				await flush();
-				expect(resend).not.toHaveBeenCalled();
-			});
-
-			it("stops at the end of the last episode", async () => {
-				await openItem(ep2, { episodes: [ep1, ep2] });
-				const resend = airplaying();
-				const item = { title: ep2.name, contentType: "series" as const, ref: ep2.id };
-				act(() => fakeAirPlay.set({ state: castState({ item, status: "playing" }) }));
-				act(() => fakeAirPlay.set({ state: castState({ item, status: "ended" }) }));
-				await flush();
-				expect(resend).not.toHaveBeenCalled();
-			});
-
-			it("goes on to the next episode when the TV reaches the end", async () => {
-				await openItem(ep1, { episodes: [ep1, ep2] });
-				const resend = airplaying();
-				const item = { title: ep1.name, contentType: "series" as const, ref: ep1.id };
-				act(() => fakeAirPlay.set({ state: castState({ item, status: "playing" }) }));
-				expect(resend).not.toHaveBeenCalled();
-				act(() => fakeAirPlay.set({ state: castState({ item, status: "ended" }) }));
+				act(() => upNext().play!(ep2));
 				await flush();
 				expect(resend).toHaveBeenCalledWith(
 					expect.objectContaining({ kind: "airplay" }),
 					expect.objectContaining({ id: ep2.id }),
 					expect.anything()
 				);
-				// Not for an item the player doesn't have.
-				resend.mockClear();
-				const elsewhere = { ...item, ref: "other" };
-				act(() =>
-					fakeAirPlay.set({ state: castState({ item: elsewhere, status: "playing" }) })
-				);
-				act(() =>
-					fakeAirPlay.set({ state: castState({ item: elsewhere, status: "ended" }) })
-				);
-				await flush();
-				expect(resend).not.toHaveBeenCalled();
+				// With the page closed, the store plays it itself.
+				view.unmount();
+				expect(upNext()).toMatchObject({ autoplay: false, play: null });
+				expect(upNext().episodes).toHaveLength(2);
 			});
 		});
 

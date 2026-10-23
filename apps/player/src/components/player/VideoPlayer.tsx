@@ -635,9 +635,6 @@ export const PlayerView = () => {
 	useEffect(() => {
 		if (canSend && activeChannel) void warmStreamFormats(activeChannel).catch(() => {});
 	}, [canSend, activeChannel]);
-	// The now-playing store keeps the TV's resume point, also with the page
-	// closed.
-	const tvState = airplay.state ?? cast.state;
 	// Where the item was when it went to AirPlay. On a Mac, closing the
 	// picker without a TV, or with this Mac, sends it nowhere, and it plays
 	// here again from there, as if AirPlay never started.
@@ -1149,12 +1146,14 @@ export const PlayerView = () => {
 		if (Date.now() - seen.at > END_SEEN_WITHIN_MS) return;
 		autoplayNext();
 	}, [mpv.state, loadedUrl, autoplayNext]);
-	// A TV that reaches the end of the episode the player has goes on too,
-	// while this page is open.
-	const tvEnded = tvState?.status === "ended" && tvState.item?.ref === activeChannel?.id;
+	// A TV that reaches the end of an episode goes on through the store,
+	// which plays the next one through this page while it's open, and by
+	// itself once it's closed.
 	useEffect(() => {
-		if (tvEnded) autoplayNext();
-	}, [tvEnded, autoplayNext]);
+		const upNext = { episodes: sortedEpisodes, autoplay };
+		nowPlaying.setUpNext({ ...upNext, play: playEpisode });
+		return () => nowPlaying.setUpNext({ ...upNext, play: null });
+	}, [sortedEpisodes, autoplay, playEpisode]);
 
 	// --- Controls visibility ---
 	// Bumped by each click or tap so pressing a button, such as skip a few
