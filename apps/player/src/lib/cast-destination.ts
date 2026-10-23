@@ -88,8 +88,13 @@ export const applyUpdate = (
 	switch (update.kind) {
 		case "ready":
 			return { ...snapshot, phase: "ready" };
+		// The media stays, as the receiver may play on meanwhile.
+		case "reconnecting":
+			return { ...snapshot, phase: "connecting" };
 		case "volume":
 			return { ...snapshot, volume: update.level, volumeFixed: update.fixed };
+		// The backend leaves out what the media from before a load reports
+		// while the load waits, so any media here is the newest.
 		case "media": {
 			const played = update.media !== null && update.media.player !== "idle";
 			return {
@@ -365,12 +370,6 @@ export const createCastDestination = (
 	let newest: object = {};
 	/** The tries to start the stream again since it last ran steadily. */
 	const restarts = createRestarts(now);
-	/** The highest id of the media the receiver has reported, which a new
-	 *  load's media goes above. */
-	let seenMedia = 0;
-	/** {@link seenMedia} when the stream was last sent: media up to it is
-	 *  older, and its late reports don't count as the new stream playing. */
-	let oldMedia = 0;
 	/** Cancels the try waiting to start the stream again, if one is. */
 	let cancelRestart = () => {};
 	/** Forgets the tries, for a load, a stop or a release the user asked
@@ -393,7 +392,6 @@ export const createCastDestination = (
 		const sent = {};
 		newest = sent;
 		if (!quiet) resetRestarts();
-		oldMedia = seenMedia;
 		publish({
 			...snapshot,
 			// A closed cast connects again for this load.
@@ -535,9 +533,7 @@ export const createCastDestination = (
 			if (update.kind === "conversionStopped") restart();
 			// A cast that ended takes the tries to start it again with it.
 			if (update.kind === "closed") resetRestarts();
-			const media = snapshot.media;
-			if (media !== null) seenMedia = Math.max(seenMedia, media.mediaSessionId);
-			if (media?.player === "playing" && media.mediaSessionId > oldMedia) restarts.playing();
+			if (snapshot.media?.player === "playing") restarts.playing();
 		},
 		closedReason: () => snapshot.closedReason,
 		converted: () => snapshot.converted,

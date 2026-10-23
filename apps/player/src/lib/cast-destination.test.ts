@@ -96,6 +96,19 @@ describe("applyUpdate", () => {
 		});
 	});
 
+	it("says it connects again after a drop, keeping what plays, until it's ready", () => {
+		const playing = snap({
+			phase: "ready",
+			item: { title: "A", contentType: "movie", ref: "m" },
+			media: media(),
+		});
+		const reconnecting = applyUpdate(playing, { kind: "reconnecting" }, 1);
+		expect(reconnecting).toEqual({ ...playing, phase: "connecting" });
+		expect(castPlaybackState(reconnecting).connection).toBe("reconnecting");
+		const ready = applyUpdate(reconnecting, { kind: "ready" }, 2);
+		expect(castPlaybackState(ready).connection).toBe("connected");
+	});
+
 	it("keeps the volume and whether the TV fixes it", () => {
 		const next = applyUpdate(
 			idleSnapshot,
@@ -1108,42 +1121,6 @@ describe("createCastDestination", () => {
 				expect(pending()).toEqual([0]);
 			}
 			expect(cast.getState().error).toBeNull();
-		});
-
-		it("doesn't count the old media's reports as the new stream playing", async () => {
-			const { cast, clock, pending, next } = setUp(liveConverted);
-			await cast.load(item);
-			cast.receive({ kind: "media", media: media({ mediaSessionId: 1, live: true }) });
-			cast.receive({ kind: "conversionStopped", why: "dropped" });
-			await next();
-			// The receiver still plays what it has of the old stream.
-			cast.receive({ kind: "media", media: media({ mediaSessionId: 1, live: true }) });
-			clock.now += STEADY_MS;
-			cast.receive({ kind: "conversionStopped", why: "dropped" });
-			expect(pending()).toEqual([1_000]);
-			// The new stream plays.
-			await next();
-			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
-			clock.now += STEADY_MS;
-			cast.receive({ kind: "conversionStopped", why: "dropped" });
-			expect(pending()).toEqual([0]);
-		});
-
-		it("knows the old media even when nothing showed as the stream was sent", async () => {
-			const { cast, clock, pending, next } = setUp(liveConverted);
-			await cast.load(item);
-			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
-			cast.receive({ kind: "conversionStopped", why: "dropped" });
-			await next();
-			// It stops again before anything new plays, so no media shows as
-			// the next try goes out.
-			cast.receive({ kind: "conversionStopped", why: "dropped" });
-			await next();
-			// The receiver still reports the old media.
-			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
-			clock.now += STEADY_MS;
-			cast.receive({ kind: "conversionStopped", why: "dropped" });
-			expect(pending()).toEqual([2_000]);
 		});
 
 		it("says at once when the provider turns the login away", async () => {

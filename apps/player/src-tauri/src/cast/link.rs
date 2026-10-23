@@ -114,6 +114,10 @@ pub enum CastUpdate {
     /// channel's connection ended, `moved` when this computer's address on
     /// the way to the receiver changed, as after a sleep on another network.
     ConversionStopped { why: &'static str },
+    /// The connection dropped and the cast connects again. A `ready` or a
+    /// `closed` follows. The driver says this in place of the `closed` for
+    /// the drop.
+    Reconnecting,
     /// The cast is over. `reason` is `stopped`, `appStopped`, `launchFailed`,
     /// `timeout`, `protocol` or `connectionLost`.
     Closed { reason: &'static str },
