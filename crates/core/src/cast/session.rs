@@ -178,6 +178,10 @@ pub struct Session {
     queued_load: Option<LoadRequest>,
     /// The load waiting for its first status.
     loading: Option<(u64, Instant)>,
+    /// The media `GET_STATUS` sent on joining the app, until it's answered.
+    /// Until then a status without a request id may be about media that
+    /// played before, which the session doesn't know yet.
+    asked_status: Option<u64>,
     media: Option<MediaState>,
     /// How often it pings the receiver, and how long the receiver may say
     /// nothing before the session ends.
@@ -227,6 +231,7 @@ impl Session {
             last_poll: now,
             queued_load: None,
             loading: None,
+            asked_status: None,
             media: None,
             ping_interval: PING_INTERVAL,
             silence_limit: SILENCE_LIMIT,
@@ -531,10 +536,9 @@ impl Session {
         });
         self.stage = Stage::Ready { app };
         out.send.push(self.connect_to(&transport));
-        out.send.push(
-            self.request(&transport, NS_MEDIA, json!({ "type": "GET_STATUS" }))
-                .1,
-        );
+        let (asked, frame) = self.request(&transport, NS_MEDIA, json!({ "type": "GET_STATUS" }));
+        self.asked_status = Some(asked);
+        out.send.push(frame);
         if let Some(load) = self.queued_load.take() {
             self.send_load(load, now, out);
         }
@@ -552,11 +556,23 @@ impl Session {
     }
 
     fn media_status(&mut self, request_id: u64, entries: Vec<MediaStatusEntry>, out: &mut Output) {
+        if self.asked_status == Some(request_id) {
+            self.asked_status = None;
+        }
         let Some(entry) = entries.into_iter().next() else {
             self.media = None;
             out.events.push(Event::Media(None));
             return;
         };
+        // The app counts its media up, so a lower id is media a newer load
+        // replaced, reported late.
+        if self
+            .media
+            .as_ref()
+            .is_some_and(|m| entry.media_session_id < m.media_session_id)
+        {
+            return;
+        }
         let player = player_state(&entry.player_state, entry.idle_reason.as_deref());
         // The answer to the load, or new media already under way. A status
         // about the media from before the load doesn't count.
@@ -569,6 +585,7 @@ impl Session {
         if self.loading.is_some_and(|(id, _)| id == request_id)
             || (request_id == 0
                 && self.loading.is_some()
+                && self.asked_status.is_none()
                 && new_media
                 && !matches!(player, PlayerState::Idle(_)))
         {
@@ -606,7 +623,11 @@ impl Session {
                 .unwrap_or_default(),
         };
         self.media = Some(state.clone());
-        out.events.push(Event::Media(Some(state)));
+        // While a load waits, what plays is the media from before it, which
+        // the session keeps to tell the new media by, and doesn't report.
+        if self.loading.is_none() {
+            out.events.push(Event::Media(Some(state)));
+        }
     }
 
     fn media_command(&mut self, mut body: Value) -> Result<(u64, Vec<u8>), CommandError> {

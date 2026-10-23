@@ -61,14 +61,6 @@ export interface CastSnapshot {
 	 *  asked to start, then what the receiver said. It stays when the media
 	 *  goes, so a resume point keeps it. */
 	position: number;
-	/** The highest media id the receiver app has reported. A new load's
-	 *  media goes above it. */
-	seenMedia: number;
-	/** The receiver app's session the ids count in, once it's ready. */
-	appSession: string | null;
-	/** {@link seenMedia} when the stream was last sent. Media up to it is
-	 *  the old item's, whose late reports are left out. */
-	oldMedia: number;
 }
 
 export const idleSnapshot: CastSnapshot = {
@@ -85,9 +77,6 @@ export const idleSnapshot: CastSnapshot = {
 	converted: false,
 	loading: false,
 	position: 0,
-	seenMedia: 0,
-	appSession: null,
-	oldMedia: 0,
 };
 
 /** The snapshot after `update`, which arrived at `at`. */
@@ -97,23 +86,13 @@ export const applyUpdate = (
 	at: number
 ): CastSnapshot => {
 	switch (update.kind) {
-		// A receiver app that was launched counts its media from 1 again. One
-		// that was joined again, as after the connection dropped, goes on.
 		case "ready":
-			return update.sessionId === snapshot.appSession
-				? { ...snapshot, phase: "ready" }
-				: {
-						...snapshot,
-						phase: "ready",
-						appSession: update.sessionId,
-						seenMedia: 0,
-						oldMedia: 0,
-					};
+			return { ...snapshot, phase: "ready" };
 		case "volume":
 			return { ...snapshot, volume: update.level, volumeFixed: update.fixed };
+		// The backend leaves out what the media from before a load reports
+		// while the load waits, so any media here is the newest.
 		case "media": {
-			if (update.media !== null && update.media.mediaSessionId <= snapshot.oldMedia)
-				return snapshot;
 			const played = update.media !== null && update.media.player !== "idle";
 			return {
 				...snapshot,
@@ -124,7 +103,6 @@ export const applyUpdate = (
 					: snapshot.position,
 				loading: snapshot.loading && !played && update.media?.idleReason !== "error",
 				error: played ? null : snapshot.error,
-				seenMedia: Math.max(snapshot.seenMedia, update.media?.mediaSessionId ?? 0),
 			};
 		}
 		case "loadFailed":
@@ -423,7 +401,6 @@ export const createCastDestination = (
 			position: startAt ?? 0,
 			duration: formats.duration ?? 0,
 			media: null,
-			oldMedia: snapshot.seenMedia,
 		});
 		loaded = { channel, route, formats };
 		restarts.sent();
