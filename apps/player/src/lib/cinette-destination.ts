@@ -31,6 +31,9 @@ export interface CatalogItem {
 	season?: number;
 	episode?: number;
 	nowPlaying?: string;
+	/** For an episode, its series' id, as `catalog.episodes` takes it. Older
+	 *  targets leave it out. */
+	seriesId?: string;
 }
 
 /** The other device's state, as its player reports it. */

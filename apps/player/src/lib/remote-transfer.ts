@@ -56,7 +56,7 @@ const parts = (asked: Extract<RemoteAsked, { kind: "history" }>): string => {
 /** The consent dialog's explanation, under the title. */
 export const consentBody = (deviceType: string, asked: RemoteAsked | undefined): string => {
 	if (!asked) {
-		return `${deviceType} on your network. It will be able to play, pause and choose what plays here, and see what this device can play. Only allow it if the code matches the one on that device.`;
+		return `${deviceType} on your network. It will be able to play, pause and choose what plays here, and see what this device can play. Only allow it if the code matches the one on that device. Deny blocks it until you unblock it in Settings.`;
 	}
 	if (asked.kind === "providers") {
 		const names = listOf(asked.providers.map((p) => `“${p.name}”`));

@@ -41,8 +41,8 @@ env:
 jobs:
   # A pull request checks out its merge into dev. The first parent is dev, so
   # the diff against it is what the pull request changes. The plan says which
-  # checks have changed lines to look at, and splits the Rust mutants in them
-  # into shards.
+  # checks have changed lines to look at, and splits the files Stryker
+  # mutates and the Rust mutants in the changed lines into shards.
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -52,6 +52,7 @@ jobs:
       frontend: ${{ steps.plan.outputs.frontend }}
       rust: ${{ steps.plan.outputs.rust }}
       stryker: ${{ steps.plan.outputs.stryker }}
+      stryker-matrix: ${{ steps.plan.outputs.stryker-matrix }}
       matrix: ${{ steps.plan.outputs.matrix }}
       app: ${{ steps.plan.outputs.app }}
     steps:
@@ -60,11 +61,13 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
-      # The tests make small git repos of their own with made-up files.
+      # The tests make small git repos of their own with made-up files. A few
+      # check that the script agrees with the Stryker and Vitest config files.
       - name: Test changed-code.py
         run: |
-          if git diff --quiet HEAD^1 HEAD -- 'scripts/changed-code*'; then
-            echo "This pull request doesn't change scripts/changed-code*."
+          if git diff --quiet HEAD^1 HEAD -- 'scripts/changed-code*' \
+            apps/player/stryker.config.mjs apps/player/vitest.config.ts; then
+            echo "This pull request doesn't change scripts/changed-code* or the Stryker and Vitest config."
           else
             python3 -I scripts/changed-code-test.py
           fi
@@ -219,13 +222,25 @@ jobs:
 
   # StrykerJS on the changed lines of the frontend's source, apart from tests
   # and the files in scripts/changed-code-exclude.toml. A change to the
-  # Stryker or test setup also mutates all of src/lib, to show the setup
-  # still works.
+  # Stryker or Vitest config, to the setupFiles Vitest loads before every
+  # test, or to the versions of the test tools also mutates all of src/lib,
+  # to show the setup still works. A change to another file in src/test is a
+  # change to test code and mutates nothing. The plan splits the files into
+  # shards of about 1,500 lines, about 20 minutes each, and keeps each file's
+  # lines in one shard. Each shard checks the changed lines in its own files.
   frontend-mutants:
+    name: frontend-mutants (${{ matrix.shard }})
     needs: plan
     if: needs.plan.outputs.stryker == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.stryker-matrix) }}
+    env:
+      MUTATE: ${{ matrix.mutate }}
+      LINES: ${{ matrix.lines }}
+      TITLE: Frontend mutation testing${{ matrix.shards > 1 && format(', shard {0} of {1}', matrix.shard, matrix.shards) || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -233,8 +248,9 @@ jobs:
           persist-credentials: false
 
       # Fails, with an annotation, for a file Stryker can't take, so no
-      # changed file goes unchecked.
-      - name: Pick the lines to mutate
+      # changed file goes unchecked, and says whether the run is for a setup
+      # change. The files the shard mutates come from the plan job.
+      - name: Check the files to mutate
         id: plan
         run: python3 scripts/changed-code.py stryker --base HEAD^1 --head HEAD --output "$GITHUB_OUTPUT"
 
@@ -255,7 +271,6 @@ jobs:
         working-directory: apps/player
         shell: bash
         env:
-          MUTATE: ${{ steps.plan.outputs.mutate }}
           FULL: ${{ steps.plan.outputs.full }}
         run: |
           rm -rf reports/mutation
@@ -276,11 +291,11 @@ jobs:
         run: |
           report=apps/player/reports/mutation/mutation.json
           if [ "$OUTCOME" = success ] && [ ! -f "$report" ] && [ "$NONE" = true ]; then
-            printf '## Frontend mutation testing\n\nThe changed lines have no code for Stryker to mutate.\n' >> "$GITHUB_STEP_SUMMARY"
+            printf '## %s\n\nThe changed lines have no code for Stryker to mutate.\n' "$TITLE" >> "$GITHUB_STEP_SUMMARY"
           elif [ "$OUTCOME" = success ] && [ ! -f "$report" ]; then
-            printf '## Frontend mutation testing\n\nNo test loads the changed files, so Stryker had nothing to run. The check below fails for that.\n' >> "$GITHUB_STEP_SUMMARY"
+            printf '## %s\n\nNo test loads the changed files, so Stryker had nothing to run. The check below fails for that.\n' "$TITLE" >> "$GITHUB_STEP_SUMMARY"
           else
-            python3 scripts/stryker-summary.py --title "Frontend mutation testing" "$report" >> "$GITHUB_STEP_SUMMARY"
+            python3 scripts/stryker-summary.py --title "$TITLE" "$report" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # The HTML report shows each mutant in its source file.
@@ -288,7 +303,7 @@ jobs:
         if: ${{ !cancelled() && steps.stryker.outcome != 'skipped' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: stryker-report
+          name: stryker-report-shard-${{ matrix.shard }}
           path: apps/player/reports/mutation/
           if-no-files-found: ignore
           retention-days: 30
@@ -300,11 +315,11 @@ jobs:
       # means no test loads the changed files. A mutant a comment turns off
       # there gets a warning. A run for a setup change checks only the
       # changed lines too, since most of what it tests isn't the pull
-      # request's.
+      # request's. A shard of such a run with no changed files has nothing to
+      # check.
       - name: Check the changed lines
-        if: ${{ !cancelled() && steps.stryker.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.stryker.outcome == 'success' && matrix.lines != '' }}
         env:
-          LINES: ${{ steps.plan.outputs.lines }}
           NONE: ${{ steps.stryker.outputs.none }}
         run: |
           python3 scripts/stryker-summary.py --check --lines "$LINES" \

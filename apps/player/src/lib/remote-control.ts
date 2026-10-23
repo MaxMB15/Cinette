@@ -66,6 +66,7 @@ export interface RemoteControl {
 }
 
 type ControllerEvent = { deviceId: string; link: number } & LinkPhase;
+type RenamedEvent = { deviceId: string; link: number; name: string };
 type StateEvent = {
 	deviceId: string;
 	link: number;
@@ -106,6 +107,13 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 		}
 	};
 
+	/** The device renamed itself during the session. */
+	const onRenamed = ({ deviceId, link: id, name }: RenamedEvent) => {
+		const link = state.link;
+		if (link?.id !== id || link.deviceId !== deviceId) return;
+		set({ link: { ...link, name } });
+	};
+
 	const onState = ({ deviceId, link: id, state: versioned }: StateEvent) => {
 		const link = state.link;
 		if (link?.id !== id || link.deviceId !== deviceId) return;
@@ -134,6 +142,7 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 				backend.listen<RemoteDevice[]>("remote://devices", (devices) => set({ devices })),
 				backend.listen<ControllerEvent>("remote://controller", onPhase),
 				backend.listen<StateEvent>("remote://state", onState),
+				backend.listen<RenamedEvent>("remote://renamed", onRenamed),
 			]);
 			// Events that came before listening started are in this list.
 			backend

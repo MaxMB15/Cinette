@@ -54,7 +54,7 @@ describe("useRemoteControl", () => {
 		const a = renderHook(() => useRemoteControl());
 		const b = renderHook(() => useRemoteControl());
 		await waitFor(() => expect(handlers.has("remote://devices")).toBe(true));
-		expect(vi.mocked(listen)).toHaveBeenCalledTimes(3);
+		expect(vi.mocked(listen)).toHaveBeenCalledTimes(4);
 		act(() => handlers.get("remote://devices")!({ event: "", id: 0, payload: [tv] }));
 		expect(a.result.current.devices).toStrictEqual([tv]);
 		expect(b.result.current.devices).toStrictEqual([tv]);
@@ -155,7 +155,7 @@ describe("useRemoteControl", () => {
 		first.unmount();
 		const again = renderHook(() => useRemoteControl());
 		await act(async () => {});
-		expect(vi.mocked(listen), "the same listeners go on").toHaveBeenCalledTimes(3);
+		expect(vi.mocked(listen), "the same listeners go on").toHaveBeenCalledTimes(4);
 		await act(() => again.result.current.leave());
 		await act(async () => {});
 		expect(

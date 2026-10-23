@@ -211,11 +211,11 @@ impl ChannelMoves {
     /// names the right series even where `old_id` now names another one.
     fn for_episode(&self, old_id: &str, episode_id: &str) -> Option<String> {
         let moved = self.by_old_id.get(old_id)?;
-        let series = episode_id
-            .strip_prefix(moved.provider_id.as_str())?
-            .strip_prefix('-')
-            .and_then(xtream::series_id_for_episode_id)?;
-        Some(format!("{}-{series}", moved.provider_id))
+        let card = xtream::series_card_for_episode(episode_id)?;
+        // Only an episode of the provider that moved.
+        card.strip_prefix(moved.provider_id.as_str())?
+            .starts_with("-series-")
+            .then_some(card)
     }
 
     /// The new id of the channel row `old_id` names, for a row with nothing

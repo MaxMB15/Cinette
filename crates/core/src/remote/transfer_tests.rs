@@ -347,6 +347,8 @@ fn a_denied_transfer_leaves_control_alone_and_cools_down() {
     assert!(net.clients[phone].connected());
     assert_eq!(net.prompt(), None);
     assert_eq!(export_needed(&net, phone), None);
+    // Denying a transfer doesn't block the device from control.
+    assert!(net.target.blocked().is_empty());
 
     // Asking again at once gets no dialog.
     net.clients[phone].events.clear();
@@ -1031,7 +1033,9 @@ fn a_new_control_request_ends_a_transfer_request_without_a_ghost_session() {
         net.clients[phone].connected(),
         "the session's connection stays"
     );
-    net.answer(Answer::Deny);
+    // Dismissed, so only this request is refused. Deny would block the
+    // device and end its session too.
+    net.answer(Answer::Dismiss);
     assert!(!net.clients[again].connected());
     let sessions = net.last_sessions().unwrap();
     assert_eq!(sessions.len(), 1);

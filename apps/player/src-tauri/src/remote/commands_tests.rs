@@ -109,7 +109,7 @@ fn a_blank_name_means_the_default() {
 fn an_episode_keeps_its_show_season_and_number() {
     let state = player_state(json!({
         "item": {
-            "id": "xt-ep-9-s1-2", "name": "Pilot", "contentType": "series", "group": "Drama",
+            "id": "p1-xt-ep-9-s1-2", "name": "Pilot", "contentType": "series", "group": "Drama",
             "logoUrl": null, "seriesTitle": "The Show", "season": 1, "episode": 2
         }
     }));
@@ -118,6 +118,34 @@ fn an_episode_keeps_its_show_season_and_number() {
     assert_eq!(item.series_title.as_deref(), Some("The Show"));
     assert_eq!(item.season, Some(1));
     assert_eq!(item.episode, Some(2));
+    // The series it's in, so a controller can find the episodes around it.
+    assert_eq!(item.series_id.as_deref(), Some("p1-series-9"));
+}
+
+#[test]
+fn only_an_episode_names_a_series() {
+    let state = player_state(json!({
+        "item": {
+            "id": "movie-8", "name": "Heat", "contentType": "movie", "group": "Films",
+            "logoUrl": null
+        }
+    }));
+    let item = state
+        .into_snapshot(&[])
+        .item
+        .unwrap();
+    assert_eq!(item.series_id, None);
+}
+
+#[test]
+fn an_m3u_episode_names_no_series() {
+    let state = player_state(json!({
+        "item": {
+            "id": "ch-4", "name": "Pilot S01E01", "contentType": "series", "group": "Drama",
+            "logoUrl": null
+        }
+    }));
+    assert_eq!(state.into_snapshot(&[]).item.unwrap().series_id, None);
 }
 
 #[test]

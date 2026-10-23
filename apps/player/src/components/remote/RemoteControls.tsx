@@ -44,7 +44,7 @@ import { getPlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /** At least 44 points each way on a touch screen, as iOS asks. */
-const TOUCH = "pointer-coarse:min-h-11 pointer-coarse:min-w-11";
+export const TOUCH = "pointer-coarse:min-h-11 pointer-coarse:min-w-11";
 
 const BUTTON = cn(
 	"px-3 py-1.5 text-xs rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",

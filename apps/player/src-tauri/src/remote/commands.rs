@@ -15,6 +15,7 @@ use mvp_core::models::channel::Channel;
 use mvp_core::remote::message::{
     Capabilities, ErrorCode, PlaybackError, PlaybackSnapshot, PlaybackStatus, Track,
 };
+use mvp_core::remote::consent::Answer;
 use mvp_core::remote::settings::{ControlMode, RemoteSettings};
 use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle, Runtime};
@@ -31,7 +32,7 @@ pub struct RemoteSettingsView {
     pub remote_control: ControlMode,
     /// The name the user gave, if any.
     pub device_name: Option<String>,
-    /// The name used when none is given: the device type.
+    /// The name used when none is given: the system's, or the device type.
     pub default_name: String,
     pub device_id: String,
 }
@@ -129,6 +130,10 @@ impl PlayerState {
                 ..Channel::default()
             };
             let mut item = mvp_core::remote::catalog::CatalogItem::from_channel(&channel, &hosts);
+            // Of a series, the player only plays episodes, and a provider's
+            // episode id names its series, so a controller can find the
+            // episodes around it.
+            item.series_id = mvp_core::iptv::xtream::series_card_for_episode(&channel.id);
             if item
                 .logo
                 .as_deref()
@@ -187,11 +192,16 @@ impl CommandOutcome {
 #[cfg(remote)]
 mod imp {
     use super::*;
-    use crate::remote::device::device_type;
+    use crate::remote::device::default_name;
     use crate::remote::service::SessionEvent;
     use crate::remote::RemoteService;
-    use mvp_core::remote::consent::Answer;
+    use mvp_core::remote::identity::DeviceId;
     use tauri::{Manager, State};
+
+    /// The device id a command named.
+    pub fn device_id(text: &str) -> Result<DeviceId, String> {
+        DeviceId::parse(text).ok_or_else(|| "That isn't a device id.".to_owned())
+    }
 
     pub fn service<R: Runtime>(app: &AppHandle<R>) -> Result<State<'_, RemoteService>, String> {
         app.try_state::<RemoteService>()
@@ -204,14 +214,9 @@ mod imp {
             discoverable: settings.discoverable,
             remote_control: settings.remote_control,
             device_name: settings.device_name,
-            default_name: mvp_core::remote::settings::default_name(device_type()).to_owned(),
+            default_name: default_name().to_owned(),
             device_id: service.device_id().to_string(),
         }
-    }
-
-    pub fn answer(service: &RemoteService, request: u64, allow: bool) {
-        let answer = if allow { Answer::Allow } else { Answer::Deny };
-        service.handle.answer(request, answer);
     }
 
     pub async fn sessions(service: &RemoteService) -> Vec<SessionEvent> {
@@ -311,21 +316,57 @@ pub async fn remote_reset_identity<R: Runtime>(
     }
 }
 
-/// The user's answer to a consent dialog. Closing the dialog is a deny.
+/// The user's answer to a consent dialog: `allow`, `deny`, which blocks a
+/// device asking for control, or `dismiss`, for a dialog closed without a
+/// choice, which refuses only this request.
 #[command]
 pub async fn remote_answer_consent<R: Runtime>(
     app: AppHandle<R>,
     request: u64,
-    allow: bool,
+    answer: Answer,
 ) -> Result<(), String> {
     #[cfg(remote)]
     {
-        imp::answer(&*imp::service(&app)?, request, allow);
+        imp::service(&app)?.handle.answer(request, answer);
         Ok(())
     }
     #[cfg(not(remote))]
     {
-        let _ = (app, request, allow);
+        let _ = (app, request, answer);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// The devices the user denied, oldest first.
+#[command]
+pub async fn remote_blocked<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
+    #[cfg(remote)]
+    {
+        let blocked = imp::service(&app)?.handle.blocked().await;
+        serde_json::to_value(blocked).map_err(|e| e.to_string())
+    }
+    #[cfg(not(remote))]
+    {
+        let _ = app;
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Lets a device the user denied ask again.
+#[command]
+pub async fn remote_unblock<R: Runtime>(
+    app: AppHandle<R>,
+    device_id: String,
+) -> Result<(), String> {
+    #[cfg(remote)]
+    {
+        let device = imp::device_id(&device_id)?;
+        imp::service(&app)?.handle.unblock(device);
+        Ok(())
+    }
+    #[cfg(not(remote))]
+    {
+        let _ = (app, device_id);
         Err(UNAVAILABLE.into())
     }
 }
@@ -487,8 +528,7 @@ pub async fn remote_connect<R: Runtime>(
 ) -> Result<(), String> {
     #[cfg(remote)]
     {
-        let id = mvp_core::remote::identity::DeviceId::parse(&device_id)
-            .ok_or_else(|| "That isn't a device id.".to_owned())?;
+        let id = imp::device_id(&device_id)?;
         imp::service(&app)?.connect(id, link)
     }
     #[cfg(not(remote))]

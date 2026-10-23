@@ -4,14 +4,14 @@
 //! Starts the target when the app starts, and connects it to Tauri: events
 //! for the webview, the cache for catalog answers, and DNS-SD.
 
-use super::device::device_type;
+use super::device::{default_name, device_type};
 use super::running::Transfers;
 use super::devices::{Devices, RemoteDevice};
 use super::link::{self, LinkConfig, LinkHandle, LinkHost, Phase};
 use super::target::{
     self, CatalogPage, Exported, Imported, SavedProviders, TargetHandle, TargetHost, TransferEvent,
 };
-use super::{identity, SETTINGS_KEY, SETTINGS_STORE_FILE};
+use super::{identity, BLOCKED_KEY, SETTINGS_KEY, SETTINGS_STORE_FILE};
 use crate::commands::AppState;
 use crate::discovery::{self, Advertisement, Registration};
 use mvp_core::models::channel::Channel;
@@ -25,7 +25,7 @@ use mvp_core::remote::message::{
 };
 use mvp_core::remote::sessions::RESUME_GRACE;
 use mvp_core::remote::settings::RemoteSettings;
-use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
+use mvp_core::remote::target::{BlockedDevice, ConsentPrompt, SessionInfo};
 use mvp_core::remote::transfer::flow::{
     Asked, ControllerEvent as TransferUpdate, Direction, Progress, ProviderName, ProviderOutcome,
     ProviderSettings,
@@ -173,13 +173,13 @@ impl RemoteService {
             Some(false) => return Err("That device doesn't allow remote control.".into()),
             Some(true) => {}
         }
-        let (key, name) = {
-            let saved = lock(&self.state);
-            (saved.key.clone(), saved.settings.name(device_type()))
-        };
+        // Held until the new link is in its slot, as set_settings holds it
+        // while it renames the link there, so a rename can't fall between.
+        let saved = lock(&self.state);
+        let key = saved.key.clone();
         let hello = Hello {
             id: key.device_id(),
-            name,
+            name: saved.settings.name(default_name()),
             device_type: device_type(),
             versions: vec![PROTOCOL_VERSION],
             features: vec![
@@ -187,6 +187,7 @@ impl RemoteService {
                 Feature::Catalog,
                 Feature::History,
                 Feature::Providers,
+                Feature::Rename,
             ],
         };
         let devices = self.devices.clone();
@@ -207,6 +208,7 @@ impl RemoteService {
         let mut slot = lock(&self.link);
         let old = slot.replace(link::start(config, self.link_host.clone()));
         drop(slot);
+        drop(saved);
         if let Some(old) = old {
             tauri::async_runtime::spawn(async move { old.leave().await });
         }
@@ -253,16 +255,23 @@ impl RemoteService {
     /// Hands the settings to the target, then saves them. The target takes
     /// them first, so Never allow ends the sessions even when the file
     /// can't be written; the error then says the choice won't last past a
-    /// restart. One call at a time, so the file and the target agree.
+    /// restart. One call at a time, so the file and the target agree. A
+    /// new name also goes to the device this one controls.
     pub fn set_settings<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         settings: RemoteSettings,
     ) -> Result<(), String> {
         let mut state = lock(&self.state);
+        let name = settings.name(default_name());
+        if name != state.settings.name(default_name())
+            && let Some(link) = lock(&self.link).as_ref()
+        {
+            link.rename(name);
+        }
         state.settings = settings.clone();
         self.handle.update_settings(settings.clone());
-        save_settings(app, &settings)
+        save(app, SETTINGS_KEY, &settings)
     }
 
     /// Asks the device link `link` controls to take the providers with
@@ -794,6 +803,16 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
         let _ = self.app.emit("remote://sessions", list);
     }
 
+    fn blocked_changed(&self, blocked: &[BlockedDevice]) {
+        // The block holds until Cinette quits even when the file can't be
+        // written. There's no one to tell here, since the change came from
+        // answering a dialog, so it's only logged.
+        if let Err(e) = save(&self.app, BLOCKED_KEY, &blocked) {
+            tracing::warn!("[remote] the blocked devices: {e}");
+        }
+        let _ = self.app.emit("remote://blocked", blocked);
+    }
+
     fn apply(&self, token: u64, command: &Command) {
         let remembered = lock(&self.episodes);
         let channel = match command {
@@ -839,7 +858,7 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
             self.loading.leave(gate);
             let episodes = episodes?;
             let providers = super::catalog::read(&state.cache, |c| c.get_providers())?;
-            return super::catalog::episode_page(&providers, &episodes, cursor, limit);
+            return super::catalog::episode_page(&providers, &series_id, &episodes, cursor, limit);
         }
         super::catalog::answer(&state.cache, query)
     }
@@ -979,6 +998,16 @@ pub struct ControllerEvent<'a> {
     pub link: u64,
     #[serde(flatten)]
     pub phase: &'a Phase,
+}
+
+/// What `remote://renamed` carries: the device a link controls has a new
+/// name.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamedEvent<'a> {
+    pub device_id: String,
+    pub link: u64,
+    pub name: &'a str,
 }
 
 /// What `remote://state` carries.
@@ -1138,6 +1167,20 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
                 let _ = app.emit("remote://state", event);
             }
         });
+    }
+
+    fn renamed(&self, link: u64, device: &DeviceId, name: &str) {
+        if !self.current(link) {
+            return;
+        }
+        let _ = self.app.emit(
+            "remote://renamed",
+            RenamedEvent {
+                device_id: device.to_string(),
+                link,
+                name,
+            },
+        );
     }
 
     fn transfer(&self, link: u64, device: &DeviceId, event: &TransferUpdate) {
@@ -1391,34 +1434,32 @@ fn follow_discovery<R: Runtime>(
     });
 }
 
-/// Writes `settings` to the settings file. When that fails, the store keeps
-/// what it had, so a later write of the file doesn't save them after all.
-fn save_settings<R: Runtime>(app: &AppHandle<R>, settings: &RemoteSettings) -> Result<(), String> {
+/// Writes `value` under `key` in the settings file. When that fails, the
+/// store keeps what it had, so a later write of the file doesn't save it
+/// after all.
+fn save<R: Runtime, T: Serialize>(app: &AppHandle<R>, key: &str, value: &T) -> Result<(), String> {
     let couldnt = |e: &dyn std::fmt::Display| {
         format!("This works until Cinette quits, but it couldn't be saved: {e}")
     };
     let store = app.store(SETTINGS_STORE_FILE).map_err(|e| couldnt(&e))?;
-    let before = store.get(SETTINGS_KEY);
-    store.set(
-        SETTINGS_KEY,
-        serde_json::to_value(settings).map_err(|e| couldnt(&e))?,
-    );
+    let before = store.get(key);
+    store.set(key, serde_json::to_value(value).map_err(|e| couldnt(&e))?);
     store.save().map_err(|e| {
         match before {
-            Some(value) => store.set(SETTINGS_KEY, value),
+            Some(value) => store.set(key, value),
             None => {
-                store.delete(SETTINGS_KEY);
+                store.delete(key);
             }
         }
         couldnt(&e)
     })
 }
 
-/// The saved settings, or the defaults.
-fn load_settings<R: Runtime>(app: &AppHandle<R>) -> RemoteSettings {
+/// What's saved under `key` in the settings file, or the default.
+fn load<R: Runtime, T: serde::de::DeserializeOwned + Default>(app: &AppHandle<R>, key: &str) -> T {
     app.store(SETTINGS_STORE_FILE)
         .ok()
-        .and_then(|store| store.get(SETTINGS_KEY))
+        .and_then(|store| store.get(key))
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default()
 }
@@ -1575,7 +1616,7 @@ fn start_on<R: Runtime>(
     let transfers = Arc::new(transfers);
     let key = identity::load_or_create(&key_dir)
         .map_err(|e| format!("couldn't load the device key: {e}"))?;
-    let settings = load_settings(app);
+    let settings: RemoteSettings = load(app, SETTINGS_KEY);
     let prompt = Arc::new(Mutex::new(None));
     let progress: ProgressWaiter = Arc::new(Mutex::new(None));
     let history: SendingHistory = Arc::new(Mutex::new(None));
@@ -1597,6 +1638,9 @@ fn start_on<R: Runtime>(
         key.clone(),
         device_type(),
         settings.clone(),
+        // A list with an id that doesn't read loads as none: the app wrote
+        // it, so only a damaged file does that.
+        load(app, BLOCKED_KEY),
         host,
         limits,
     )

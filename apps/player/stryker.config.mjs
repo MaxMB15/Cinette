@@ -15,6 +15,8 @@ export default {
 		// The main config plus a fix for how the runner picks tests by name.
 		configFile: "vitest.stryker.config.ts",
 	},
+	// scripts/changed-code.py lists the same files to split a run of all of
+	// src/lib into shards, and its tests check that the two agree.
 	mutate: [
 		"src/lib/**/*.{ts,tsx}",
 		"!src/lib/**/*.test.{ts,tsx}",

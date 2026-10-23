@@ -77,21 +77,26 @@ fn not_discoverable_refuses_new_connections_in_every_mode() {
 }
 
 #[test]
-fn the_default_name_is_the_device_type() {
+fn a_name_the_user_gave_wins_over_the_default() {
     let settings = RemoteSettings::default();
-    assert_eq!(settings.name(DeviceType::Mac), "Mac");
-    assert_eq!(settings.name(DeviceType::FireTv), "Fire TV");
-    assert_eq!(settings.name(DeviceType::Other), "Device");
+    assert_eq!(settings.name("Den Mac"), "Den Mac");
     let blank = RemoteSettings {
         device_name: Some("  \n ".into()),
         ..RemoteSettings::default()
     };
-    assert_eq!(blank.name(DeviceType::Iphone), "iPhone");
+    assert_eq!(blank.name("Den Mac"), "Den Mac");
     let named = RemoteSettings {
         device_name: Some(" Living room ".into()),
         ..RemoteSettings::default()
     };
-    assert_eq!(named.name(DeviceType::AndroidTv), "Living room");
+    assert_eq!(named.name("Den Mac"), "Living room");
+}
+
+#[test]
+fn the_type_names_read_as_the_spec_says() {
+    assert_eq!(default_name(DeviceType::Mac), "Mac");
+    assert_eq!(default_name(DeviceType::FireTv), "Fire TV");
+    assert_eq!(default_name(DeviceType::Other), "Device");
 }
 
 #[test]
@@ -174,4 +179,10 @@ fn clean_name_drops_control_characters_and_cuts_long_names() {
     // A cut that ends in a space doesn't keep it.
     let spaced = format!("{} b", "a".repeat(62));
     assert_eq!(clean_name(&spaced), Some("a".repeat(62)));
+}
+
+#[test]
+fn a_name_another_device_gave_is_cleaned_or_its_types() {
+    assert_eq!(shown_name(" Den\u{202E} ", DeviceType::Mac), "Den");
+    assert_eq!(shown_name("\u{200B}", DeviceType::Mac), "Mac");
 }

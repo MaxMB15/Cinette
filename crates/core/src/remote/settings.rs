@@ -29,7 +29,8 @@ pub struct RemoteSettings {
     pub discoverable: bool,
     /// "Remote control". Spec 4 B.
     pub remote_control: ControlMode,
-    /// The name the user gave this device. `None` uses [`default_name`].
+    /// The name the user gave this device. `None` uses the device's default
+    /// name.
     pub device_name: Option<String>,
 }
 
@@ -80,17 +81,18 @@ impl RemoteSettings {
         self.remote_control != ControlMode::Never
     }
 
-    /// The name to show and advertise.
-    pub fn name(&self, device_type: DeviceType) -> String {
+    /// The name to show and advertise: the one the user gave, or else
+    /// `default`.
+    pub fn name(&self, default: &str) -> String {
         self.device_name
             .as_deref()
             .and_then(clean_name)
-            .unwrap_or_else(|| default_name(device_type).to_owned())
+            .unwrap_or_else(|| default.to_owned())
     }
 }
 
-/// The name a device has until the user names it. It's the kind of device
-/// rather than the system's device name, which often carries the owner's name.
+/// The kind of device, as a name: a device's name when the system gives it
+/// none, and another device's when it sends none.
 pub fn default_name(device_type: DeviceType) -> &'static str {
     match device_type {
         DeviceType::Mac => "Mac",
@@ -135,6 +137,12 @@ pub fn clean_name(name: &str) -> Option<String> {
         cleaned.truncate(cleaned.trim_end().len());
     }
     (!cleaned.is_empty()).then_some(cleaned)
+}
+
+/// What to show for a name another device gave: [`clean_name`], or the
+/// default for its type when nothing is left.
+pub fn shown_name(name: &str, device_type: DeviceType) -> String {
+    clean_name(name).unwrap_or_else(|| default_name(device_type).to_owned())
 }
 
 /// Whether `c` is a Unicode format character (category Cf), such as a
