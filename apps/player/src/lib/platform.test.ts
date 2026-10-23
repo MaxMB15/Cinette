@@ -10,6 +10,8 @@ import {
 	controlsOthers,
 	type Viewport,
 	playsOnTvs,
+	castsFrom,
+	airplaysFrom,
 } from "./platform";
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
@@ -115,6 +117,12 @@ describe("playsOnTvs", () => {
 	it("is AirPlay's iOS and macOS, and Cast's macOS and Linux", () => {
 		for (const p of ["macos", "linux", "ios"] as const) expect(playsOnTvs(p)).toBe(true);
 		for (const p of ["windows", "android", "tv"] as const) expect(playsOnTvs(p)).toBe(false);
+	});
+
+	it("knows which of the two each one has", () => {
+		const all = ["macos", "linux", "ios", "windows", "android", "tv"] as const;
+		expect(all.filter(castsFrom)).toEqual(["macos", "linux"]);
+		expect(all.filter(airplaysFrom)).toEqual(["macos", "ios"]);
 	});
 });
 

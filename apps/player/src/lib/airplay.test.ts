@@ -475,13 +475,20 @@ describe("createAirPlayDestination", () => {
 
 	it("lets go of the provider for another item and keeps its own", async () => {
 		const { bridge, d } = await convertedMovie();
-		await d.release();
+		expect(await d.release()).toBe(true);
 		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
 		expect(d.converted()).toBe(false);
 		expect(d.getState().item?.ref).toBe("movie-7");
-		// Nothing to end the second time.
-		await d.release();
+		// Nothing to end the second time, and the TV keeps what it fetches.
+		expect(await d.release()).toBe(false);
 		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+	});
+
+	it("loads the next item even when the conversion couldn't end", async () => {
+		const { bridge, d, film } = await convertedMovie();
+		bridge.endConversion.mockRejectedValueOnce(new Error("gone"));
+		await d.load({ kind: "local", channel: film }, { route: converting });
+		expect(bridge.loadConverted).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows why an item didn't start on the TV", async () => {

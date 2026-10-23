@@ -97,6 +97,12 @@ export const sentMessage = (target: PlaybackDestination, sent: Sent): string | n
 	return stopped ? `${why} Nothing is playing.` : why;
 };
 
+/** `destination`, if it's a `kind` one. */
+export const ofKind = <T extends PlaybackDestination>(
+	destination: PlaybackDestination | null,
+	kind: T["kind"]
+): T | null => (destination?.kind === kind ? (destination as T) : null);
+
 export interface NowPlaying {
 	getState(): NowPlayingState;
 	subscribe(listener: () => void): () => void;
@@ -183,18 +189,19 @@ export const createNowPlaying = ({
 		}
 	};
 
-	/** What a send that sent nothing came to. A TV that let go of its
-	 *  stream for it has stopped, so it goes. */
-	const unsent = <T extends Sent & { released: boolean }>(sent: T): T => {
-		if (sent.released) void stop().catch(() => {});
-		return sent;
-	};
-
 	const send: NowPlaying["send"] = async (target, channel, opts) => {
 		const mine = {};
 		token = mine;
 		const newest = () => token === mine;
 		const overtaken = { ok: false, why: "overtaken" } as const;
+		/** What this send came to when it sent nothing. A TV that let go of
+		 *  its stream for it has stopped, so it goes, unless a newer send or
+		 *  a stop took over, which has the TV now. */
+		const unsent = (sent: Sent & { released: boolean }): Sent => {
+			if (!newest()) return overtaken;
+			if (sent.released) void stop().catch(() => {});
+			return sent;
+		};
 		const item = { kind: "local" as const, channel };
 		let decision = opts.decision;
 		let released = false;
@@ -208,14 +215,15 @@ export const createNowPlaying = ({
 			// The TV that plays may hold the provider's only connection. It lets
 			// go of it, keeping its session, and looks again.
 			if ("error" in routed && state.destination === target && target.release) {
-				released = true;
-				await target.release().catch(() => {});
-				for (const ms of RELEASE_RETRY_MS) {
-					await wait(ms);
-					if (!newest()) return overtaken;
-					routed = await look();
-					if (!("error" in routed)) break;
-				}
+				// One that couldn't say may have let go.
+				released = await target.release().catch(() => true);
+				if (released)
+					for (const ms of RELEASE_RETRY_MS) {
+						await wait(ms);
+						if (!newest()) return overtaken;
+						routed = await look();
+						if (!("error" in routed)) break;
+					}
 			}
 			if ("error" in routed)
 				return unsent({ ok: false, why: "unrouted", error: routed.error, released });
@@ -238,10 +246,11 @@ export const createNowPlaying = ({
 				.catch(() => {})
 				.finally(() => old.dispose?.());
 		activate(target, channel, opts);
-		// Unless the TV switches items, this device's player or another TV
-		// just let go of the stream, and the TV asks again if the provider
-		// still counts that connection.
-		return target.load(item, { startAt: opts.startAt, route, freed: !switching }).then(
+		// Something just let go of the stream: this device's player, another
+		// TV, or this TV for the route. A TV that only switches items closes
+		// its own. The TV asks again if the provider still counts it.
+		const freed = !switching || released;
+		return target.load(item, { startAt: opts.startAt, route, freed }).then(
 			() => ({ ok: true }) as const,
 			(error: unknown): Sent => {
 				// The backend says a newer load or a stop came, which says for itself.

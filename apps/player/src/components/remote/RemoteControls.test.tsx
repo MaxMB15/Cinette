@@ -830,6 +830,17 @@ describe("TvBar", () => {
 		expect(screen.getByText("Player page")).toBeInTheDocument();
 	});
 
+	it("says how the TV is doing in place of where it plays", async () => {
+		const tv = await playing();
+		render(<TvBar />, { wrapper: MemoryRouter });
+		const bar = screen.getByRole("region", { name: "Now playing" });
+		act(() => tv.set(playbackState({ status: "buffering" })));
+		expect(bar).toHaveTextContent("Buffering…");
+		expect(bar).not.toHaveTextContent("Playing on");
+		act(() => tv.set(playbackState({ status: "playing" })));
+		expect(bar).toHaveTextContent("Playing on Hotel TV");
+	});
+
 	it("stops the TV through the store, which forgets it", async () => {
 		const tv = await playing();
 		render(<TvBar />, { wrapper: MemoryRouter });
@@ -891,6 +902,7 @@ describe("TvBar", () => {
 		const row = screen.getByRole("status");
 		expect(row).toHaveTextContent("Lost the connection to Hotel TV.");
 		expect(row).toHaveClass("min-h-12", "bg-card");
+		expect(row.querySelector(".lucide-tv")).not.toBeNull();
 		fireEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("status")).toBeNull();
 	});

@@ -193,8 +193,9 @@ export interface PlaybackDestination {
 	selectAudio(trackId: string): Promise<void>;
 	stop(): Promise<void>;
 	/** Lets go of the provider's stream and keeps the session, so the
-	 *  provider allows another connection, where the destination can. */
-	release?(): Promise<void>;
+	 *  provider allows another connection, where the destination can.
+	 *  Resolves to whether it let go of anything. */
+	release?(): Promise<boolean>;
 	/** Lets go of what it holds once it's done with, where it holds any. */
 	dispose?(): void;
 	/** Whether this device converts what plays there, where it can. */

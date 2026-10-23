@@ -365,6 +365,25 @@ describe("useAirPlay", () => {
 		});
 	});
 
+	it("ends AirPlay when the TV is gone, and says so", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		await act(async () => {
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
+		});
+		const playing = { ...IDLE_NATIVE_STATE, status: "playing" as const };
+		act(() => events.emit("airplay://state", playing));
+		expect(nowPlaying.getState().destination).not.toBeNull();
+		act(() => events.emit("airplay://state", { ...playing, connection: "lost" }));
+		expect(nowPlaying.getState()).toMatchObject({
+			destination: null,
+			ended: "Lost the connection to Living Room TV.",
+		});
+		expect(result.current.notPicked).toBe(false);
+		act(() => nowPlaying.dismiss());
+	});
+
 	it("skips the picker when the audio route is already AirPlay", async () => {
 		tauri.airplayGetRoute.mockResolvedValue(tv);
 		const { result } = renderHook(() => useAirPlay(true));

@@ -806,7 +806,8 @@ describe("useCast", () => {
 				expect.objectContaining({ via: "direct", generation: 6 }),
 				undefined,
 				false,
-				false
+				// It let go of the stream for the route, so it's freed.
+				true
 			);
 			expect(result.current.destination?.id).toBe("cast:tv");
 		});
