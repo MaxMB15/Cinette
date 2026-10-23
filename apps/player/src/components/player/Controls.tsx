@@ -37,10 +37,16 @@ interface ControlsProps {
 	visible: boolean;
 	isFullscreen?: boolean;
 	onPlay: () => void;
-	onPause: () => void;
+	/** Leave out where playback can't pause, as on some TVs: there's no
+	 *  Pause button then. */
+	onPause?: () => void;
 	onStop: () => void;
 	onSeek: (position: number) => void;
-	onVolumeChange: (volume: number) => void;
+	/** Leave out, with `onToggleMute`, where the volume can't be set: there's
+	 *  no volume control then. */
+	onVolumeChange?: (volume: number) => void;
+	/** The top of the volume slider. mpv goes to 150; a TV to 100. */
+	maxVolume?: number;
 	onToggleMute?: () => void;
 	onFullscreen?: () => void;
 	onInfo?: () => void;
@@ -107,6 +113,7 @@ export const Controls = ({
 	onSelectSource,
 	onShortcuts,
 	showVolumeSlider = true,
+	maxVolume = 150,
 	downloadSlot,
 	castSlot,
 	skip,
@@ -278,15 +285,17 @@ export const Controls = ({
 								<Play className="h-5 w-5" />
 							</Button>
 						) : (
-							<Button
-								variant="ghost"
-								size="icon"
-								onClick={onPause}
-								className="text-white hover:bg-white/20"
-								aria-label="Pause"
-							>
-								<Pause className="h-5 w-5" />
-							</Button>
+							onPause && (
+								<Button
+									variant="ghost"
+									size="icon"
+									onClick={onPause}
+									className="text-white hover:bg-white/20"
+									aria-label="Pause"
+								>
+									<Pause className="h-5 w-5" />
+								</Button>
+							)
 						))}
 
 					{playbackInBar && skipButtons && (
@@ -318,37 +327,40 @@ export const Controls = ({
 					</Button>
 
 					{/* Volume */}
-					<div className="flex items-center gap-2 ml-2">
-						<Button
-							variant="ghost"
-							size="icon"
-							onClick={
-								onToggleMute ?? (() => onVolumeChange(state.volume > 0 ? 0 : 100))
-							}
-							className="text-white hover:bg-white/20"
-							aria-label={state.volume === 0 ? "Unmute" : "Mute"}
-						>
-							{state.volume === 0 ? (
-								<VolumeX className="h-5 w-5" />
-							) : (
-								<Volume2 className="h-5 w-5" />
+					{onVolumeChange && (
+						<div className="flex items-center gap-2 ml-2">
+							<Button
+								variant="ghost"
+								size="icon"
+								onClick={
+									onToggleMute ??
+									(() => onVolumeChange(state.volume > 0 ? 0 : 100))
+								}
+								className="text-white hover:bg-white/20"
+								aria-label={state.volume === 0 ? "Unmute" : "Mute"}
+							>
+								{state.volume === 0 ? (
+									<VolumeX className="h-5 w-5" />
+								) : (
+									<Volume2 className="h-5 w-5" />
+								)}
+							</Button>
+							{showVolumeSlider && (
+								<div className="w-24">
+									<Slider
+										value={state.volume}
+										min={0}
+										max={maxVolume}
+										step={1}
+										onValueChange={onVolumeChange}
+										onKeyDown={leaveSliderKeysToPlayer}
+										aria-label="Volume"
+										aria-valuetext={`${state.volume}%`}
+									/>
+								</div>
 							)}
-						</Button>
-						{showVolumeSlider && (
-							<div className="w-24">
-								<Slider
-									value={state.volume}
-									min={0}
-									max={150}
-									step={1}
-									onValueChange={onVolumeChange}
-									onKeyDown={leaveSliderKeysToPlayer}
-									aria-label="Volume"
-									aria-valuetext={`${state.volume}%`}
-								/>
-							</div>
-						)}
-					</div>
+						</div>
+					)}
 
 					<div className="flex-1" />
 

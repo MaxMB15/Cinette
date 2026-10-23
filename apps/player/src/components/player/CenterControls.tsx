@@ -11,7 +11,8 @@ interface CenterControlsProps {
 	/** True while paused or stopped, so the middle button plays. */
 	paused: boolean;
 	onPlay: () => void;
-	onPause: () => void;
+	/** Leave out where playback can't pause: there's no Pause button then. */
+	onPause?: () => void;
 	/** How far the skip buttons jump. Leave out when the stream can't seek. */
 	skip?: SkipIntervals;
 	onSkip?: (seconds: number) => void;
@@ -68,21 +69,23 @@ export const CenterControls = ({
 						</button>
 					)}
 
-					<button
-						type="button"
-						onClick={paused ? onPlay : onPause}
-						aria-label={paused ? "Play" : "Pause"}
-						className={cn(
-							button,
-							"h-16 w-16 bg-black/40 active:bg-white/20 sm:h-20 sm:w-20"
-						)}
-					>
-						{paused ? (
-							<Play className="ml-1 h-8 w-8 fill-current sm:h-10 sm:w-10" />
-						) : (
-							<Pause className="h-8 w-8 fill-current sm:h-10 sm:w-10" />
-						)}
-					</button>
+					{(paused || onPause) && (
+						<button
+							type="button"
+							onClick={paused ? onPlay : onPause}
+							aria-label={paused ? "Play" : "Pause"}
+							className={cn(
+								button,
+								"h-16 w-16 bg-black/40 active:bg-white/20 sm:h-20 sm:w-20"
+							)}
+						>
+							{paused ? (
+								<Play className="ml-1 h-8 w-8 fill-current sm:h-10 sm:w-10" />
+							) : (
+								<Pause className="h-8 w-8 fill-current sm:h-10 sm:w-10" />
+							)}
+						</button>
+					)}
 
 					{skipButtons && (
 						<button

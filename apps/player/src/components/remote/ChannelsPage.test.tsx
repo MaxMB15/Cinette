@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import type { Link } from "@/lib/remote-control";
 
 const control = vi.hoisted(() => ({ link: null as Link | null }));
@@ -12,8 +12,14 @@ vi.mock("@/components/channels/ChannelList", () => ({
 }));
 const platform = vi.hoisted(() => ({ controller: true }));
 vi.mock("@/lib/platform", () => ({ controlsOthers: () => platform.controller }));
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock("react-router", () => ({ useNavigate: () => navigate }));
 vi.mock("@/components/remote/RemoteCatalog", () => ({
-	RemoteCatalog: ({ link }: { link: Link }) => <p>{link.name}'s catalog</p>,
+	RemoteCatalog: ({ link, onPlayed }: { link: Link; onPlayed: () => void }) => (
+		<button type="button" onClick={onPlayed}>
+			{link.name}'s catalog
+		</button>
+	),
 }));
 
 import { ChannelsPage } from "./ChannelsPage";
@@ -46,6 +52,15 @@ describe("ChannelsPage", () => {
 		render(<ChannelsPage />);
 		expect(screen.getByText("This device's channels")).toBeInTheDocument();
 		platform.controller = true;
+	});
+
+	it("opens the player page once the other device takes an item", () => {
+		navigate.mockClear();
+		control.link = link({ phase: "connected" });
+		render(<ChannelsPage />);
+		expect(navigate).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByText("Living Room's catalog"));
+		expect(navigate).toHaveBeenCalledWith("/player");
 	});
 
 	it("keeps this device's channels while still asking", () => {

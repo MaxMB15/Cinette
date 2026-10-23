@@ -3,6 +3,8 @@
 
 import { describe, it, expect } from "vitest";
 import {
+	destinationControls,
+	destinationStatus,
 	localPlaybackState,
 	localCapabilities,
 	orderDestinations,
@@ -13,6 +15,7 @@ import {
 	type PlaybackState,
 } from "./destination";
 import type { Channel, PolledMpvState } from "./types";
+import { playbackCapabilities, playbackState } from "@/test/destination-fixtures";
 
 const mpvState = (over: Partial<PolledMpvState> = {}): PolledMpvState => ({
 	isPlaying: false,
@@ -203,21 +206,8 @@ describe("UnsupportedError", () => {
 });
 
 describe("positionNow", () => {
-	const state = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
-		status: "playing",
-		item: null,
-		position: 600,
-		positionAt: 1000,
-		duration: 5400,
-		volume: 40,
-		subtitles: [],
-		subtitleId: null,
-		audio: [],
-		audioId: null,
-		connection: "connected",
-		error: null,
-		...patch,
-	});
+	const state = (patch: Partial<PlaybackState> = {}) =>
+		playbackState({ item: null, positionAt: 1000, ...patch });
 
 	it("moves on with the time since the receiver said, while it plays", () => {
 		expect(positionNow(state(), 3000)).toBe(602);
@@ -232,5 +222,132 @@ describe("positionNow", () => {
 	it("stays where it was while it doesn't play", () => {
 		for (const status of ["paused", "buffering", "opening", "idle"] as const)
 			expect(positionNow(state({ status }), 3000)).toBe(600);
+	});
+});
+
+/** A movie whose position was read at 1 s. */
+const tvState = (patch: Partial<PlaybackState> = {}) =>
+	playbackState({ positionAt: 1000, ...patch });
+const tvCaps = playbackCapabilities;
+
+describe("destinationControls", () => {
+	it("shows a playing item with its position now, and every control it has", () => {
+		expect(destinationControls(tvState(), tvCaps(), 3000)).toEqual({
+			player: {
+				isPlaying: true,
+				isPaused: false,
+				currentUrl: "mv1",
+				volume: 40,
+				position: 602,
+				duration: 5400,
+			},
+			over: false,
+			pause: true,
+			seek: true,
+			volume: true,
+		});
+	});
+
+	it("counts buffering as playing, and paused as paused", () => {
+		expect(
+			destinationControls(tvState({ status: "buffering" }), tvCaps(), 0).player
+		).toMatchObject({ isPlaying: true, isPaused: false });
+		expect(
+			destinationControls(tvState({ status: "paused" }), tvCaps(), 0).player
+		).toMatchObject({
+			isPlaying: false,
+			isPaused: true,
+		});
+		expect(
+			destinationControls(tvState({ status: "opening" }), tvCaps(), 0).player
+		).toMatchObject({
+			isPlaying: false,
+			isPaused: false,
+		});
+	});
+
+	it("leaves out what the destination can't do", () => {
+		const c = destinationControls(
+			tvState(),
+			tvCaps({ seek: false, pause: false, volume: "none" }),
+			1000
+		);
+		expect(c).toMatchObject({ pause: false, seek: false, volume: false });
+		// No length, no seek bar.
+		expect(c.player.duration).toBe(0);
+	});
+
+	it("has no seek bar for an item without a length", () => {
+		const c = destinationControls(tvState({ duration: 0 }), tvCaps(), 1000);
+		expect(c.seek).toBe(false);
+		expect(c.player.duration).toBe(0);
+	});
+
+	it("names no item when nothing plays", () => {
+		expect(
+			destinationControls(tvState({ item: null }), tvCaps(), 0).player.currentUrl
+		).toBeNull();
+	});
+
+	it("is over when lost, failed, at the end, in error, or idle with its item, and then offers nothing", () => {
+		for (const patch of [
+			{ connection: "lost" as const },
+			{ error: { code: "failed" as const } },
+			{ status: "ended" as const },
+			{ status: "error" as const },
+			{ status: "idle" as const },
+		]) {
+			expect(destinationControls(tvState(patch), tvCaps(), 0)).toMatchObject({
+				over: true,
+				pause: false,
+				seek: false,
+				volume: false,
+			});
+		}
+		// Idle with nothing loaded yet isn't over.
+		expect(destinationControls(tvState({ status: "idle", item: null }), tvCaps(), 0).over).toBe(
+			false
+		);
+		expect(destinationControls(tvState({ connection: "reconnecting" }), tvCaps(), 0).over).toBe(
+			false
+		);
+	});
+});
+
+describe("destinationStatus", () => {
+	it("says nothing while it plays or is paused", () => {
+		expect(destinationStatus(tvState(), "Hotel TV")).toBeNull();
+		expect(destinationStatus(tvState({ status: "paused" }), "Hotel TV")).toBeNull();
+	});
+
+	it("says where it stands, in order", () => {
+		expect(
+			destinationStatus(tvState({ connection: "lost", status: "opening" }), "Hotel TV")
+		).toBe("Lost the connection to Hotel TV.");
+		expect(
+			destinationStatus(
+				tvState({ error: { code: "failed" }, connection: "reconnecting" }),
+				"Hotel TV"
+			)
+		).toBe("It stopped on Hotel TV.");
+		expect(
+			destinationStatus(
+				tvState({ connection: "reconnecting", status: "opening" }),
+				"Hotel TV"
+			)
+		).toBe("Reconnecting…");
+		expect(destinationStatus(tvState({ status: "opening" }), "Hotel TV")).toBe(
+			"Starting on Hotel TV…"
+		);
+		expect(destinationStatus(tvState({ status: "buffering" }), "Hotel TV")).toBe("Buffering…");
+		expect(destinationStatus(tvState({ status: "ended" }), "Hotel TV")).toBe("Finished.");
+	});
+
+	it("says an error's message, in the destination's own words where it has them", () => {
+		const failed = tvState({ error: { code: "refused", message: "403" } });
+		expect(destinationStatus(failed, "Hotel TV")).toBe("403");
+		expect(destinationStatus(failed, "Hotel TV", (m) => `Hotel TV said ${m}.`)).toBe(
+			"Hotel TV said 403."
+		);
 	});
 });

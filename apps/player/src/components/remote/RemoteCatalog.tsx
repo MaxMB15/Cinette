@@ -75,7 +75,14 @@ export const groupName = (group: string): string => group || "No group";
  * device, while it's the one that plays. Browsing never touches what plays
  * there; choosing an item plays it there.
  */
-export const RemoteCatalog = ({ link }: { link: Link }) => {
+export const RemoteCatalog = ({
+	link,
+	onPlayed = () => {},
+}: {
+	link: Link;
+	/** Called once the other device took an item to play. */
+	onPlayed?: () => void;
+}) => {
 	const [type, setType] = useState<ContentType>("live");
 	const [place, setPlace] = useState<Place>({ kind: "groups" });
 	const [typed, setTyped] = useState("");
@@ -87,6 +94,16 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	// Which view a page of "Load more" belongs to; a newer one drops it.
 	const shownRef = useRef({});
 	const viewRef = useLatestRef(view);
+	// The latest item picked; one a newer pick replaced, or that answers
+	// after the catalog closed, opens nothing.
+	const pickRef = useRef<object | null>(null);
+	useEffect(
+		() => () => {
+			pickRef.current = null;
+		},
+		// Stryker disable next-line ArrayDeclaration: A list that never changes runs the cleanup only on unmount, whatever it holds.
+		[]
+	);
 	const connected = link.phase.phase === "connected";
 
 	const searchRef = useLatestRef(search);
@@ -148,9 +165,17 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 
 	const play = (item: CatalogItem) => {
 		setMessage(null);
-		link.destination
-			.load({ kind: "remote", itemId: item.id, title: item.name })
-			.catch(() => setMessage(`${link.name} couldn't play ${item.name}.`));
+		const pick = {};
+		pickRef.current = pick;
+		link.destination.load({ kind: "remote", itemId: item.id, title: item.name }).then(
+			() => {
+				if (pickRef.current === pick) onPlayed();
+			},
+			() => {
+				if (pickRef.current === pick)
+					setMessage(`${link.name} couldn't play ${item.name}.`);
+			}
+		);
 	};
 
 	const choose = (item: CatalogItem) => {
