@@ -94,7 +94,7 @@ fn system_name() -> Option<String> {
     None
 }
 
-// mutants: skip FnValue, UnaryOperator: It only builds for macOS, and mutation runs build on Linux.
+// mutants: skip FnValue: It only builds for macOS, and mutation runs build on Linux.
 /// The Mac's computer name, as System Settings, General, About shows it.
 #[cfg(target_os = "macos")]
 fn computer_name() -> Option<String> {
@@ -113,6 +113,7 @@ fn computer_name() -> Option<String> {
     let name = unsafe { SCDynamicStoreCopyComputerName(std::ptr::null(), std::ptr::null_mut()) };
     // SAFETY: a non-null name is a CFString this call created, which the
     // wrapper releases.
+    // mutants: skip UnaryOperator: It only builds for macOS, and mutation runs build on Linux.
     (!name.is_null()).then(|| unsafe { CFString::wrap_under_create_rule(name) }.to_string())
 }
 
@@ -340,10 +341,14 @@ mod tests {
             .args(["--get", "ComputerName"])
             .output()
             .unwrap();
-        let expected = String::from_utf8(scutil.stdout).unwrap();
+        // scutil fails when no name is set, and then there's none to read.
+        let expected = scutil
+            .status
+            .success()
+            .then(|| String::from_utf8(scutil.stdout).unwrap());
         assert_eq!(
             computer_name().as_deref(),
-            Some(expected.trim_end_matches('\n'))
+            expected.as_deref().map(|name| name.trim_end_matches('\n'))
         );
     }
 
