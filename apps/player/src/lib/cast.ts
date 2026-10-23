@@ -79,10 +79,10 @@ export const castPickerNotice = (cast: CastLookout): string | null => {
 	return null;
 };
 
-/** Whether the player shows its Cast button: when there's a receiver, or
- *  when Cinette knows why it found none, so the picker can say so. */
-export const showsCastButton = (cast: CastLookout): boolean =>
-	cast.receivers.length > 0 || cast.localNetworkDenied || cast.vpnActive;
+/** Whether the player shows its Cast button: only when there's a receiver
+ *  to pick. Settings and the Devices picker say when Cinette can't look. */
+export const showsCastButton = (cast: Pick<CastLookout, "receivers">): boolean =>
+	cast.receivers.length > 0;
 
 /** What to say when a control for the receiver failed. Play after a long
  *  pause converts again, so it fails as a cast that didn't start does. */
