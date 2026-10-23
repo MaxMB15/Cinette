@@ -416,16 +416,19 @@ const DeviceList = ({
 }) => {
 	const headingRef = useRef<HTMLParagraphElement>(null);
 	const listRef = useRef<HTMLUListElement>(null);
-	// The row whose action was used last, until the list changes.
-	const acted = useRef<number | null>(null);
+	// The row whose action was used last, and where it was, until it goes.
+	// An effect of an earlier render that runs after the press, while the
+	// row is still there, leaves it alone.
+	const acted = useRef<{ at: number; key: string } | null>(null);
 	useEffect(() => {
-		const at = acted.current;
+		const pressed = acted.current;
+		if (pressed === null || rows.some((row) => row.key === pressed.key)) return;
 		acted.current = null;
-		if (at === null || document.activeElement !== document.body) return;
+		if (document.activeElement !== document.body) return;
 		const buttons = listRef.current?.querySelectorAll("button") ?? [];
 		// Stryker disable next-line OptionalChaining: the heading renders with the list, so it's never null here.
-		(buttons[Math.min(at, buttons.length - 1)] ?? headingRef.current)?.focus();
-	}, [rows.length]);
+		(buttons[Math.min(pressed.at, buttons.length - 1)] ?? headingRef.current)?.focus();
+	}, [rows]);
 	return (
 		<div>
 			<p ref={headingRef} tabIndex={-1} className="text-sm font-medium mb-2 outline-hidden">
@@ -447,7 +450,7 @@ const DeviceList = ({
 								className={cn("shrink-0", TOUCH)}
 								aria-label={`${action} ${row.name}${row.tag}`}
 								onClick={() => {
-									acted.current = i;
+									acted.current = { at: i, key: row.key };
 									row.act();
 								}}
 							>
