@@ -7,7 +7,6 @@ import type * as Bridge from "@/lib/tauri";
 import type { StreamFormat } from "@/lib/route";
 import {
 	IDLE_NATIVE_STATE,
-	NOT_PICKED,
 	airplayBlockedMessage,
 	airplayFailureMessage,
 	type AirPlayNativeState,
@@ -360,7 +359,10 @@ describe("useAirPlay", () => {
 		});
 		page.unmount();
 		act(() => events.emit("airplay://state", notPicked));
-		expect(nowPlaying.getState()).toMatchObject({ destination: null, ended: NOT_PICKED });
+		expect(nowPlaying.getState()).toMatchObject({
+			destination: null,
+			ended: "No TV took the video.",
+		});
 	});
 
 	it("skips the picker when the audio route is already AirPlay", async () => {

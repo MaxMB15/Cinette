@@ -381,7 +381,11 @@ export const PlayerView = () => {
 	// --- Watch progress (resume support) ---
 
 	// Persists the tracked position for the current item.
-	const flushProgress = useCallback(() => saveProgress(progressRef.current), []);
+	const flushProgress = useCallback(
+		() => saveProgress(progressRef.current),
+		// Stryker disable next-line ArrayDeclaration: It only reads a ref, so it's the same function with any deps.
+		[]
+	);
 
 	useEffect(() => {
 		const p = progressRef.current;
@@ -1091,12 +1095,16 @@ export const PlayerView = () => {
 	// Use refs to avoid stale closures while keeping the effect dependency minimal
 	const nextEpisodeRef = useLatestRef(nextEpisode);
 	const autoplayRef = useLatestRef(autoplay);
-	/** Plays the next episode of a series, when autoplay is on. */
-	const autoplayNext = useCallback(() => {
-		if (!autoplayRef.current || activeChannelRef.current?.contentType !== "series") return;
-		const next = nextEpisodeRef.current;
-		if (next) playEpisode(next);
-	}, [playEpisode, autoplayRef, activeChannelRef, nextEpisodeRef]);
+	/** Plays the next episode, when autoplay is on. Only an episode of a
+	 *  series has one. */
+	const autoplayNext = useCallback(
+		() => {
+			const next = nextEpisodeRef.current;
+			if (autoplayRef.current && next) playEpisode(next);
+		},
+		// Stryker disable next-line ArrayDeclaration: The rest are refs, and playEpisode only changes with mpv's state, while an older one starts the episode the same way through mpv's same actions.
+		[playEpisode, autoplayRef, nextEpisodeRef]
+	);
 
 	// Advance when the episode reaches its end, not when it stops near it. A
 	// pause in the last seconds, or the resume prompt pausing the player, leaves
@@ -1131,10 +1139,10 @@ export const PlayerView = () => {
 	}, [mpv.state, loadedUrl, autoplayNext]);
 	// A TV that reaches the end of the episode the player has goes on too,
 	// while this page is open.
-	const tvEnded = tvState?.status === "ended" ? tvState.item?.ref : undefined;
+	const tvEnded = tvState?.status === "ended" && tvState.item?.ref === activeChannel?.id;
 	useEffect(() => {
-		if (tvEnded !== undefined && tvEnded === activeChannelRef.current?.id) autoplayNext();
-	}, [tvEnded, activeChannelRef, autoplayNext]);
+		if (tvEnded) autoplayNext();
+	}, [tvEnded, autoplayNext]);
 
 	// --- Controls visibility ---
 	// Bumped by each click or tap so pressing a button, such as skip a few

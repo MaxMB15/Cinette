@@ -4747,6 +4747,16 @@ describe("Google Cast", () => {
 			expect(getMountedPlayer()?.getState().item?.ref).toBe(harborLights().id);
 		});
 
+		it("names the new item here once the cast has gone", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			casting();
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			await act(() => vi.mocked(nowPlaying.send).mock.calls[0][2].stopLocal());
+			act(() => fakeCast.set({ destination: null, state: null }));
+			expect(screen.getByText(ep2.name)).toBeInTheDocument();
+		});
+
 		it("puts away a note about the cast once the next item goes to the receiver", async () => {
 			await openItem(ep1, { episodes: [ep1, ep2] });
 			const tvNow = casting();
@@ -4822,6 +4832,8 @@ describe("Google Cast", () => {
 				);
 				expect(fakeAirPlay.get().send).not.toHaveBeenCalled();
 				expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+				// It went, so there's nothing to say.
+				expect(screen.queryByRole("alert")).toBeNull();
 				// The player moves on once it's going to the TV.
 				await act(() => resend.mock.calls[0][2].stopLocal());
 				expect(getMountedPlayer()?.getState().item?.ref).toBe(harborLights().id);
@@ -4869,6 +4881,44 @@ describe("Google Cast", () => {
 				fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 				await flush();
 				expect(screen.getByRole("alert").textContent).toMatch(/Nothing is playing\.$/);
+			});
+
+			it("keeps its note when a cast goes later", async () => {
+				await openItem(ep1, { episodes: [ep1, ep2] });
+				const resend = airplaying();
+				resend.mockResolvedValueOnce({
+					ok: false,
+					why: "failed",
+					error: "refused",
+					switching: true,
+				});
+				fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+				await flush();
+				const note = screen.getByRole("alert").textContent;
+				act(() => {
+					fakeAirPlay.set({ destination: null, state: null });
+					fakeCast.set({
+						receivers: [receiver("cast:tv", "Hotel TV")],
+						statuses: new Map([["cast:tv", { via: "direct" as const }]]),
+					});
+				});
+				fireEvent.click(screen.getByRole("button", { name: "Cast" }));
+				await flush();
+				fireEvent.click(screen.getByRole("button", { name: /Hotel TV/ }));
+				await flush();
+				expect(fakeCast.get().send).toHaveBeenCalled();
+				// It's AirPlay's, so a cast that went leaves it.
+				expect(screen.getByRole("alert").textContent).toBe(note);
+			});
+
+			it("takes an ended TV with no item, or no item here, in its stride", async () => {
+				renderPlayer(null);
+				await flush();
+				const resend = airplaying();
+				act(() => fakeAirPlay.set({ state: castState({ status: "ended" }) }));
+				act(() => fakeAirPlay.set({ state: castState({ item: null, status: "ended" }) }));
+				await flush();
+				expect(resend).not.toHaveBeenCalled();
 			});
 
 			it("stops at the end of the last episode", async () => {
@@ -5212,6 +5262,16 @@ describe("another Cinette device", () => {
 		await flush();
 		expect(panel()).not.toBeNull();
 		expect(view.container.querySelector(".from-black\\/60")).toBeNull();
+	});
+
+	it("starts no episode here from the keys while it controls another device", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		fakeMpv.actions.load.mockClear();
+		act(() => fakeRemote.set(linkTo().link));
+		await flush();
+		await press("n");
+		await press("p");
+		expect(fakeMpv.actions.load).not.toHaveBeenCalled();
 	});
 
 	it("shows while the link reconnects, and not before it connects", async () => {
