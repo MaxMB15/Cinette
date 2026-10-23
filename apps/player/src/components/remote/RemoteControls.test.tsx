@@ -937,6 +937,8 @@ describe("ControllersBar", () => {
 		render(<ControllersBar />);
 		const bar = screen.getByRole("region", { name: "Devices controlling this one" });
 		expect(bar).toHaveTextContent("Controlled from");
+		// It wraps, and is opaque like the remote bar, so the video on the player page doesn't show through.
+		expect(bar).toHaveClass("flex-wrap", "bg-card", "from-primary/10", "to-primary/10");
 		expect(within(bar).getByText("Laptop").tagName).toBe("BDI");
 		expect(bar).not.toHaveTextContent("Laptop Reconnecting…");
 		fireEvent.click(screen.getByRole("button", { name: "Disconnect Laptop" }));
