@@ -5,10 +5,10 @@
 # StrykerJS. Like mutants.yml does for the Rust code, it makes small changes
 # to the code and runs the tests that reach each one. The weekly and manual
 # runs of all of src/lib list the changes no test notices in the summary, and
-# fail only on an error, like a first test run that fails. The Changed code
-# workflow, changed-code.yml, checks the lines a pull request changes. Nothing
-# goes to Stryker's dashboard. The report is only kept as an artifact of the
-# run.
+# fail only on an error, like a first test run that fails. The plan job
+# splits src/lib into shards, as the Changed code workflow, changed-code.yml,
+# does for the lines a pull request changes. Nothing goes to Stryker's
+# dashboard. Each shard's report is only kept as an artifact of the run.
 name: Frontend mutation testing
 
 on:
@@ -28,12 +28,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mutants:
+  # The files in src/lib that stryker.config.mjs's mutate globs give, in
+  # shards of about 1,500 lines.
+  plan:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    # The whole of src/lib takes about 30 minutes here, testing 4 mutants at
-    # once, one for each of the runner's cores.
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Split src/lib into shards
+        id: plan
+        run: python3 scripts/changed-code.py stryker --all --output "$GITHUB_OUTPUT"
+
+  mutants:
+    name: mutants (${{ matrix.shard }})
+    needs: plan
+    runs-on: ubuntu-latest
+    # A shard takes about 20 minutes here, testing 4 mutants at once, one for
+    # each of the runner's cores.
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      MUTATE: ${{ matrix.mutate }}
+      TITLE: Frontend mutation testing${{ matrix.shards > 1 && format(', shard {0} of {1}', matrix.shard, matrix.shards) || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,12 +73,12 @@ jobs:
         working-directory: apps/player
         run: |
           rm -rf reports/mutation
-          pnpm exec stryker run
+          pnpm exec stryker run --mutate "$MUTATE"
 
       - name: Write the summary
         if: ${{ !cancelled() }}
         run: |
-          python3 scripts/stryker-summary.py --title "Frontend mutation testing" \
+          python3 scripts/stryker-summary.py --title "$TITLE" \
             apps/player/reports/mutation/mutation.json >> "$GITHUB_STEP_SUMMARY"
 
       # The HTML report shows each mutant in its source file, and the JSON
@@ -63,7 +87,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: stryker-report
+          name: stryker-report-shard-${{ matrix.shard }}
           path: apps/player/reports/mutation/
           if-no-files-found: ignore
           retention-days: 30
