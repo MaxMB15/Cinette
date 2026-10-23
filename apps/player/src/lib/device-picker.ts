@@ -131,6 +131,34 @@ export const convertWarning = (name: string, keep: "on" | "onScreen"): string =>
 		? `Casting this to ${name} needs this computer to stay on and connected. Closing the lid ends it.`
 		: `Casting this to ${name} needs Cinette to stay open on this device.`;
 
+/** What the player says when the provider turned the login down. */
+export const REFUSED_MESSAGE =
+	"The provider refused the stream. The login may have expired, or another device may be using it.";
+
+/** What to say when `name` didn't start playing, from the code its load or
+ *  route rejected with. Cast and AirPlay answer the same codes. */
+export const tvFailureMessage = (name: string, error: unknown): string => {
+	switch (String(error)) {
+		case "unreachable":
+		case "notFound":
+			return `Couldn't reach ${name}.`;
+		case "streamUnreachable":
+			return "Couldn't reach the stream to convert it.";
+		case "refused":
+			return REFUSED_MESSAGE;
+		case "noConverter":
+		case "noEncoder":
+		case "unsupported":
+			return `This device can't convert this stream for ${name}.`;
+		case "noRoute":
+			return `This device has no network address ${name} can reach.`;
+		case "converterFailed":
+			return "Couldn't convert the stream on this device.";
+		default:
+			return `Couldn't play it on ${name}.`;
+	}
+};
+
 /** This device's own row. */
 export const LOCAL_ENTRY: PickerEntry = { id: "local", kind: "local", name: "This device" };
 

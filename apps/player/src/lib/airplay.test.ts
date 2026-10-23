@@ -11,7 +11,6 @@ import {
 	airplayBlockedMessage,
 	airplayCapabilities,
 	airplayErrorMessage,
-	airplayFailureMessage,
 	airplaySeekMessage,
 	SUPERSEDED,
 	airplaySender,
@@ -23,6 +22,7 @@ import {
 	type AirPlayNativeState,
 } from "@/lib/airplay";
 import { UnsupportedError, type PlaybackState } from "@/lib/destination";
+import { REFUSED_MESSAGE } from "@/lib/device-picker";
 import { airplayTvProfile, desktopSender, NOT_READY, REFUSED } from "@/lib/route-profiles";
 import type { StreamFormat } from "@/lib/route";
 import type { Channel } from "@/lib/types";
@@ -1042,23 +1042,14 @@ describe("createAirPlayDestination", () => {
 	});
 });
 
-describe("airplayFailureMessage", () => {
-	it("words the provider's refusal, passes the backend's message, or says it plainly", () => {
-		expect(airplayFailureMessage("refused")).toBe(airplayErrorMessage({ code: "refused" }));
-		expect(airplayFailureMessage("Connect to Wi-Fi to send this to the TV.")).toBe(
-			"Connect to Wi-Fi to send this to the TV."
-		);
-		expect(airplayFailureMessage("")).toBe("Couldn't start AirPlay.");
-		expect(airplayFailureMessage(new Error("x"))).toBe("Couldn't start AirPlay.");
-		expect(airplayFailureMessage(undefined)).toBe("Couldn't start AirPlay.");
-	});
-});
-
 describe("airplaySeekMessage", () => {
-	it("words the refusal, passes the backend's message, or says it plainly", () => {
-		expect(airplaySeekMessage(REFUSED)).toBe(airplayFailureMessage(REFUSED));
-		expect(airplaySeekMessage("Couldn't reach the stream to convert it.")).toBe(
+	it("words the backend's code as a TV's, or says it plainly", () => {
+		expect(airplaySeekMessage(REFUSED)).toBe(REFUSED_MESSAGE);
+		expect(airplaySeekMessage("streamUnreachable")).toBe(
 			"Couldn't reach the stream to convert it."
+		);
+		expect(airplaySeekMessage("noRoute")).toBe(
+			"This device has no network address the TV can reach."
 		);
 		expect(airplaySeekMessage("")).toBe("Couldn't move the stream on the TV.");
 		expect(airplaySeekMessage(new Error("x"))).toBe("Couldn't move the stream on the TV.");

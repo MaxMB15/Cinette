@@ -4538,7 +4538,7 @@ describe("Google Cast", () => {
 		fireEvent.click(within(panel).getByRole("button", { name: "Play" }));
 		await flush();
 		expect(screen.getByRole("alert").textContent).toBe(
-			"The provider refused the stream. The login may have expired."
+			"The provider refused the stream. The login may have expired, or another device may be using it."
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		act(() => fakeCast.set({ state: castState() }));
@@ -4988,7 +4988,9 @@ describe("Google Cast", () => {
 			tvNow.getState.mockReturnValue(castState({ status: "paused" }));
 			tvNow.play.mockRejectedValueOnce("converterFailed");
 			await press(" ");
-			expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on Hotel TV.");
+			expect(screen.getByRole("alert").textContent).toBe(
+				"Couldn't convert the stream on this device."
+			);
 			fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 			// Once the connection is going, the cast says so itself.
 			tvNow.getState.mockReturnValue(castState({ connection: "reconnecting" }));

@@ -576,7 +576,7 @@ describe("useCast", () => {
 				why = await result.current.send("cast:tv", other, { stopLocal });
 			});
 			expect(why).toBe(
-				"The provider refused the stream. The login may have expired. Nothing is playing."
+				"The provider refused the stream. The login may have expired, or another device may be using it. Nothing is playing."
 			);
 			expect(result.current.destination?.id).toBe("cast:tv");
 			expect(result.current.state).toMatchObject({
@@ -868,7 +868,7 @@ describe("useCast", () => {
 					1 + RELEASE_RETRY_MS.length + 1
 				);
 				expect(why).toBe(
-					"The provider refused the stream. The login may have expired. Nothing is playing."
+					"The provider refused the stream. The login may have expired, or another device may be using it. Nothing is playing."
 				);
 			} finally {
 				vi.useRealTimers();
@@ -902,7 +902,9 @@ describe("useCast", () => {
 			await act(async () => {
 				why = await result.current.send("cast:tv", film, { stopLocal });
 			});
-			expect(why).toBe("The provider refused the stream. The login may have expired.");
+			expect(why).toBe(
+				"The provider refused the stream. The login may have expired, or another device may be using it."
+			);
 			expect(tauri.castRelease).not.toHaveBeenCalled();
 		});
 	});
