@@ -417,3 +417,20 @@ fn validate_refuses_bad_queries() {
     .validate()
     .is_some());
 }
+
+#[test]
+fn an_older_targets_item_has_no_series_and_none_goes_out() {
+    // As a target from before `seriesId` sends it.
+    let item: CatalogItem = serde_json::from_str(
+        r#"{"id":"xt-ep-9-s1-2","name":"Pilot","contentType":"series","group":"Drama","season":1,"episode":2}"#,
+    )
+    .unwrap();
+    assert_eq!(item.series_id, None);
+    assert!(!serde_json::to_string(&item).unwrap().contains("seriesId"));
+    let named = CatalogItem {
+        series_id: Some("xt-series-9".into()),
+        ..item
+    };
+    let json = serde_json::to_string(&named).unwrap();
+    assert!(json.contains(r#""seriesId":"xt-series-9""#), "{json}");
+}

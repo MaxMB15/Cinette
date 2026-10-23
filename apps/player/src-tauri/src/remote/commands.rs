@@ -129,6 +129,10 @@ impl PlayerState {
                 ..Channel::default()
             };
             let mut item = mvp_core::remote::catalog::CatalogItem::from_channel(&channel, &hosts);
+            // Of a series, the player only plays episodes, and a provider's
+            // episode id names its series, so a controller can find the
+            // episodes around it.
+            item.series_id = mvp_core::iptv::xtream::series_card_for_episode(&channel.id);
             if item
                 .logo
                 .as_deref()

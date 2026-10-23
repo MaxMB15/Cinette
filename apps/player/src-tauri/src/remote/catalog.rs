@@ -33,7 +33,7 @@ pub fn answer(cache: &Mutex<CacheStore>, query: CatalogQuery) -> CatalogPage {
         let (episodes, providers) = read(cache, |c| {
             Ok((c.get_series_episodes(&series_id)?, c.get_providers()?))
         })?;
-        return episode_page(&providers, &episodes, cursor, limit);
+        return episode_page(&providers, &series_id, &episodes, cursor, limit);
     }
     let (channels, providers) = read(cache, |c| Ok((c.get_all_channels()?, c.get_providers()?)))?;
     let hosts = match query {
@@ -53,10 +53,12 @@ pub(crate) fn read<T>(
     read(&cache).map_err(failed)
 }
 
-/// The page of `episodes` from `cursor`, the id of its first episode.
-/// `providers` are this device's, for [`hosts`].
+/// The page of `series_id`'s `episodes` from `cursor`, the id of its first
+/// episode. `providers` are this device's, for [`hosts`]. Each episode names
+/// its series, so a controller can find the ones around it.
 pub fn episode_page(
     providers: &[Provider],
+    series_id: &str,
     episodes: &[Channel],
     cursor: Option<String>,
     limit: u32,
@@ -72,7 +74,10 @@ pub fn episode_page(
     let end = (start + page_size(limit)).min(episodes.len());
     let page = episodes[start..end]
         .iter()
-        .map(|c| item(c, &hosts))
+        .map(|c| CatalogItem {
+            series_id: Some(series_id.to_owned()),
+            ..item(c, &hosts)
+        })
         .collect();
     let next = episodes.get(end).map(|e| e.id.clone());
     Ok((page, next))
