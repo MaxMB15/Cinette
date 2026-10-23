@@ -644,11 +644,12 @@ export const PlayerView = () => {
 	const remoteLink = controlsOthers() && linked ? link : null;
 	const tv: PlaybackDestination | null =
 		airplay.destination ?? cast.destination ?? remoteLink?.destination ?? null;
-	// The name the view shows, which for the link follows a rename.
-	const tvName = airplay.destination?.name ?? cast.destination?.name ?? remoteLink?.name ?? "";
+	// The name the view shows, which for the link follows a rename. There's
+	// one whenever there's a TV.
+	const tvName = airplay.destination?.name ?? cast.destination?.name ?? remoteLink?.name;
 	/** Says why a control on the TV failed, from a key or the view. */
 	const reportFailure = (error: unknown, seeking: boolean) => {
-		const failure = tv && controlFailure(tv, tvName, error, seeking);
+		const failure = tv && controlFailure(tv, tvName!, error, seeking);
 		if (failure) setNotice(failure);
 	};
 	const tvRef = useLatestRef(tv);
@@ -1679,6 +1680,7 @@ export const PlayerView = () => {
 			onStop={() =>
 				void remoteLink.destination.stop().then(
 					() => navigate("/"),
+					// Stryker disable next-line BooleanLiteral: Another Cinette device's failure reads the same for a seek.
 					(error: unknown) => reportFailure(error, false)
 				)
 			}
