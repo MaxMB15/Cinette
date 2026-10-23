@@ -125,11 +125,11 @@ export const keepWarning = (entry: PickerEntry): string | null => {
 };
 
 /** What the user is asked before this device converts for `name`, from
- *  what it has to do meanwhile. */
+ *  what it has to do meanwhile. Cast and AirPlay on a Mac ask the same. */
 export const convertWarning = (name: string, keep: "on" | "onScreen"): string =>
 	keep === "on"
-		? `Casting this to ${name} needs this computer to stay on and connected. Closing the lid ends it.`
-		: `Casting this to ${name} needs Cinette to stay open on this device.`;
+		? `Playing this on ${name} needs this computer to stay on and connected. Closing the lid ends it.`
+		: `Playing this on ${name} needs Cinette to stay open on this device.`;
 
 /** This device's own row. */
 export const LOCAL_ENTRY: PickerEntry = { id: "local", kind: "local", name: "This device" };

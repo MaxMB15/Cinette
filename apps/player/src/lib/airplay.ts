@@ -20,6 +20,7 @@ import {
 	type PlaybackState,
 	type Track,
 } from "@/lib/destination";
+import { convertWarning } from "@/lib/device-picker";
 import { chooseRoute, type PlayRoute, type RouteDecision, type SenderProfile } from "@/lib/route";
 
 type Blocked = Extract<RouteDecision, { ok: false }>;
@@ -97,17 +98,14 @@ export const AIRPLAY_RECEIVER = airplayTvProfile;
 export const airplaySender = (support: ConverterSupport): SenderProfile =>
 	iosSender(support, { needsScreen: false });
 
-/** What the confirm step says before a conversion starts. */
+/** What the confirm step says before an iPhone or iPad converts. */
 export const CONVERT_WARNING =
 	"This iPhone converts the stream and sends it to the TV. Keep it on Wi-Fi and charged. It can lock.";
 
-/** The same, on a Mac. */
-export const MAC_CONVERT_WARNING =
-	"This Mac converts the stream and sends it to the TV. It stays awake while it does. Keep it on the TV's network.";
-
-/** The confirm step's warning for this device. */
-export const airplayConvertWarning = (mac: boolean) =>
-	mac ? MAC_CONVERT_WARNING : CONVERT_WARNING;
+/** The confirm step's warning for this device, sending to `name`. A Mac
+ *  says what Cast says. */
+export const airplayConvertWarning = (mac: boolean, name = "the TV") =>
+	mac ? convertWarning(name, "on") : CONVERT_WARNING;
 
 const tracks = (list: AirPlayNativeState["subtitles"]): Track[] =>
 	list.map((t, i) => ({ id: String(i), label: t.label, language: t.language }));
