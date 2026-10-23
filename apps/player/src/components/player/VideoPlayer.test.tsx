@@ -4276,6 +4276,15 @@ describe("Google Cast", () => {
 		expect(castButton()).not.toBeNull();
 	});
 
+	it("shows neither button for a stream with no channel to send", async () => {
+		fakeAirPlay.set({ available: true });
+		fakeCast.set({ receivers: [receiver("cast:tv", "Hotel TV")] });
+		renderPlayer({ url: MOVIE_URL, channelName: "A stream" });
+		await flush();
+		expect(screen.queryByRole("button", { name: "AirPlay" })).toBeNull();
+		expect(castButton()).toBeNull();
+	});
+
 	it("lists the receivers with how this item gets there, and casts from where it is", async () => {
 		fakeCast.set({
 			receivers: [receiver("cast:tv", "Hotel TV"), receiver("cast:den", "Den", false)],
