@@ -122,19 +122,23 @@ interface PlayerNotice {
 }
 
 /**
- * What the player says when a key's control failed on `tv`, or `null`. A
- * cast says why in its own words while it's connected, and says for itself
- * when it's going. AirPlay says why a seek failed.
+ * What the player says when a control failed on `tv`, called `name`, from
+ * a key or a click, or `null`. A cast says why in its own words while it's
+ * connected, and says for itself when it's going. AirPlay says why a seek
+ * failed; the rest shows on the TV. Another Cinette device couldn't be
+ * reached.
  */
-const keyFailure = (
+const controlFailure = (
 	tv: PlaybackDestination,
+	name: string,
 	error: unknown,
 	seeking: boolean
 ): PlayerNotice | null => {
 	if (tv.kind === "cast")
 		return tv.getState().connection === "connected"
-			? { text: castControlMessage(tv.name, error), cast: true }
+			? { text: castControlMessage(name, error), cast: true }
 			: null;
+	if (tv.kind === "cinette") return { text: `Couldn't reach ${name}.`, cast: false };
 	return seeking ? { text: airplaySeekMessage(error), cast: false } : null;
 };
 
@@ -640,7 +644,28 @@ export const PlayerView = () => {
 	const remoteLink = controlsOthers() && linked ? link : null;
 	const tv: PlaybackDestination | null =
 		airplay.destination ?? cast.destination ?? remoteLink?.destination ?? null;
+	// The name the view shows, which for the link follows a rename.
+	const tvName = airplay.destination?.name ?? cast.destination?.name ?? remoteLink?.name ?? "";
+	/** Says why a control on the TV failed, from a key or the view. */
+	const reportFailure = (error: unknown, seeking: boolean) => {
+		const failure = tv && controlFailure(tv, tvName, error, seeking);
+		if (failure) setNotice(failure);
+	};
 	const tvRef = useLatestRef(tv);
+	const reportFailureRef = useLatestRef(reportFailure);
+	/** Stops what plays here before something else takes over, keeping
+	 *  where it got to. */
+	const stopLocal = async () => {
+		flushProgress();
+		await playback.stop();
+	};
+	const stopLocalRef = useLatestRef(stopLocal);
+	// Controlling another device takes over the player, so nothing plays
+	// here under it, as when a cast or AirPlay starts.
+	const remoteId = remoteLink?.id;
+	useEffect(() => {
+		if (remoteId !== undefined) void stopLocalRef.current();
+	}, [remoteId, stopLocalRef]);
 	// Once a TV is in reach, the panel is asked ahead what a send would wait
 	// on, so the button opens the picker sooner.
 	const canSend = airplay.available || showsCastButton(cast);
@@ -1348,10 +1373,8 @@ export const PlayerView = () => {
 			const episode = action.type === "nextEpisode" || action.type === "prevEpisode";
 			if (tv && !(tv.kind === "cast" && episode)) {
 				const key = airplayKey(action, tv.getState(), tv.capabilities, performance.now());
-				const failed = (seeking: boolean) => (error: unknown) => {
-					const failure = keyFailure(tv, error, seeking);
-					if (failure) setNotice(failure);
-				};
+				const failed = (seeking: boolean) => (error: unknown) =>
+					reportFailureRef.current(error, seeking);
 				if (key.kind === "play") void tv.play().catch(failed(false));
 				if (key.kind === "pause") void tv.pause().catch(failed(false));
 				if (key.kind === "seek") void tv.seek(key.to).catch(failed(true));
@@ -1440,6 +1463,7 @@ export const PlayerView = () => {
 			mpv,
 			playback,
 			tvRef,
+			reportFailureRef,
 			pendingResume,
 			castConfirm,
 			showShortcuts,
@@ -1523,10 +1547,7 @@ export const PlayerView = () => {
 			anchor,
 			startAt,
 			confirm,
-			stopLocal: async () => {
-				flushProgress();
-				await playback.stop();
-			},
+			stopLocal,
 		});
 		if (result.sent || result.why === "cancelled") return null;
 		if (result.why === "blocked") {
@@ -1544,10 +1565,7 @@ export const PlayerView = () => {
 		cast
 			.send(receiverId, channel, {
 				startAt: mpv.state.duration > 0 ? mpv.state.position : undefined,
-				stopLocal: async () => {
-					flushProgress();
-					await playback.stop();
-				},
+				stopLocal,
 			})
 			.then((why) => setNotice(afterCast(why)));
 	const castSlot =
@@ -1565,12 +1583,6 @@ export const PlayerView = () => {
 		) : undefined;
 
 	const castTv = cast.destination;
-	/** Says why a control on the receiver failed, unless the cast is going,
-	 *  which says so itself. */
-	const castControlFailed = (error: unknown) => {
-		if (!castTv || castTv.getState().connection !== "connected") return;
-		castNotice(castControlMessage(castTv.name, error));
-	};
 	const airplayTv = airplay.destination;
 	/** Plays the item here again after a TV let it go, from `position`. */
 	const playHereFrom = async (position: number, failed: (message: string) => void) => {
@@ -1583,7 +1595,7 @@ export const PlayerView = () => {
 			)
 			.catch(() => failed("Couldn't play it on this device."));
 	};
-	const shared = { touchLayout: touchDevice, skip };
+	const shared = { touchLayout: touchDevice, skip, onFailed: reportFailure };
 	const destinationView = airplayTv ? (
 		<DestinationView
 			{...shared}
@@ -1591,10 +1603,6 @@ export const PlayerView = () => {
 			name={airplayTv.name}
 			label="AirPlay"
 			icon={Airplay}
-			// Only a seek says why it didn't work; the rest shows on the TV.
-			onFailed={(error, seeking) => {
-				if (seeking) deviceNotice(airplaySeekMessage(error));
-			}}
 			onPlayHere={async (position, anchor) => {
 				flushProgress();
 				// AirPlay lets go of the stream before mpv opens it, since many
@@ -1621,7 +1629,6 @@ export const PlayerView = () => {
 			name={castTv.name}
 			label="Google Cast"
 			icon={Cast}
-			onFailed={castControlFailed}
 			failure={(message) => castFailureMessage(castTv.name, message)}
 			onPrevEpisode={prevEpisode ? () => playEpisode(prevEpisode) : undefined}
 			onNextEpisode={nextEpisode ? () => playEpisode(nextEpisode) : undefined}
@@ -1646,12 +1653,11 @@ export const PlayerView = () => {
 			name={remoteLink.name}
 			label="Cinette device"
 			icon={MonitorSmartphone}
-			onFailed={() => deviceNotice(`Couldn't reach ${remoteLink.name}.`)}
 			// It stops there, and this page goes back to that device's catalog.
 			onStop={() =>
 				void remoteLink.destination.stop().then(
 					() => navigate("/"),
-					() => deviceNotice(`Couldn't reach ${remoteLink.name}.`)
+					(error: unknown) => reportFailure(error, false)
 				)
 			}
 		/>
@@ -1736,8 +1742,9 @@ export const PlayerView = () => {
 
 			{destinationView}
 
-			{(activeChannelName || showBack) && showControls && (
-				<div className="absolute top-0 left-0 right-0 flex items-center gap-1 bg-linear-to-b from-black/60 to-transparent p-4 pt-[calc(1rem+env(safe-area-inset-top))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))]">
+			{/* Over a TV's view too, which has no Back of its own. */}
+			{(activeChannelName || showBack) && (showControls || tv) && (
+				<div className="absolute top-0 left-0 right-0 z-40 flex items-center gap-1 bg-linear-to-b from-black/60 to-transparent p-4 pt-[calc(1rem+env(safe-area-inset-top))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))]">
 					{showBack && (
 						<button
 							type="button"

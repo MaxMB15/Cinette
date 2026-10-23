@@ -4,70 +4,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Cast } from "lucide-react";
-import type { PlaybackCapabilities, PlaybackDestination, PlaybackState } from "@/lib/destination";
+import type { PlaybackState } from "@/lib/destination";
+import {
+	fakeDestination,
+	playbackCapabilities as capabilities,
+	playbackState as state,
+} from "@/test/destination-fixtures";
 import { DestinationView } from "./DestinationView";
-
-const state = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
-	status: "playing",
-	item: { title: "A Film", contentType: "movie", ref: "mv1" },
-	position: 600,
-	positionAt: performance.now(),
-	duration: 5400,
-	volume: 40,
-	subtitles: [],
-	subtitleId: null,
-	audio: [],
-	audioId: null,
-	connection: "connected",
-	error: null,
-	...patch,
-});
-
-const capabilities = (patch: Partial<PlaybackCapabilities> = {}): PlaybackCapabilities => ({
-	seek: true,
-	pause: true,
-	volume: "absolute",
-	subtitles: "none",
-	externalSubtitles: false,
-	audioTracks: false,
-	resumeAt: true,
-	catalog: false,
-	...patch,
-});
-
-/** A destination whose state the test sets, with every method a mock. */
-const fakeDestination = (s: PlaybackState, caps = capabilities()) => {
-	let current = s;
-	const listeners = new Set<(state: PlaybackState) => void>();
-	const ok = () => vi.fn(() => Promise.resolve());
-	const destination = {
-		id: "cast:tv",
-		kind: "cast",
-		name: "Hotel TV",
-		catalog: { kind: "local" },
-		capabilities: caps,
-		route: vi.fn(),
-		load: ok(),
-		play: ok(),
-		pause: ok(),
-		seek: vi.fn<(value: number) => Promise<void>>(() => Promise.resolve()),
-		setVolume: vi.fn<(value: number) => Promise<void>>(() => Promise.resolve()),
-		selectSubtitle: vi.fn<(id: string | null) => Promise<void>>(() => Promise.resolve()),
-		selectAudio: vi.fn<(id: string) => Promise<void>>(() => Promise.resolve()),
-		stop: ok(),
-		getState: () => current,
-		subscribe: (listener: (state: PlaybackState) => void) => {
-			listeners.add(listener);
-			return () => listeners.delete(listener);
-		},
-	};
-	const set = (next: PlaybackState) =>
-		act(() => {
-			current = next;
-			for (const l of listeners) l(next);
-		});
-	return { destination: destination as unknown as PlaybackDestination & typeof destination, set };
-};
 
 const handlers = () => ({
 	onFailed: vi.fn(),
@@ -80,11 +23,12 @@ const show = (
 	caps = capabilities(),
 	more: Partial<Parameters<typeof DestinationView>[0]> = {}
 ) => {
-	const fake = fakeDestination(s, caps);
+	const destination = fakeDestination("cast", "Hotel TV", s, caps);
+	const set = (next: PlaybackState) => act(() => destination.set(next));
 	const on = handlers();
 	const view = render(
 		<DestinationView
-			destination={fake.destination}
+			destination={destination}
 			name="Hotel TV"
 			label="Google Cast"
 			icon={Cast}
@@ -94,7 +38,7 @@ const show = (
 			{...more}
 		/>
 	);
-	return { ...fake, on, view };
+	return { destination, set, on, view };
 };
 
 afterEach(() => {
@@ -110,9 +54,12 @@ describe("DestinationView", () => {
 		expect(screen.queryByRole("status")).toBeNull();
 	});
 
-	it("leaves out the title with no item", () => {
+	it("shows the device, with nothing to drive, until something plays there", () => {
 		show(state({ item: null, status: "idle" }));
+		expect(screen.getByRole("region")).toHaveTextContent("Nothing playing on Hotel TV");
 		expect(screen.queryByText("A Film")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Play" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
 	});
 
 	it("says where it stands", () => {
@@ -190,12 +137,18 @@ describe("DestinationView", () => {
 		expect(screen.getByText("10:02")).toBeTruthy();
 	});
 
-	it("stops the clock once it's paused", () => {
+	it("stops the clock once it's paused, and when it goes", () => {
 		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
-		const { set } = show(state({ positionAt: performance.now() }));
+		const { set, view } = show(state({ positionAt: performance.now() }));
+		expect(vi.getTimerCount()).toBe(1);
 		set(state({ status: "paused", positionAt: performance.now() }));
+		expect(vi.getTimerCount()).toBe(0);
 		act(() => vi.advanceTimersByTime(3000));
 		expect(screen.getByText("10:00")).toBeTruthy();
+		set(state({ positionAt: performance.now() }));
+		expect(vi.getTimerCount()).toBe(1);
+		view.unmount();
+		expect(vi.getTimerCount()).toBe(0);
 	});
 
 	it("sets the volume up to 100, and mutes, unless it's fixed", () => {
@@ -237,6 +190,26 @@ describe("DestinationView", () => {
 		expect(destination.selectAudio).toHaveBeenLastCalledWith("a2");
 	});
 
+	it("shows the audio track that plays", () => {
+		show(
+			state({
+				audio: [
+					{ id: "a1", label: "English" },
+					{ id: "a2", label: "French" },
+				],
+				audioId: "a2",
+			}),
+			capabilities({ audioTracks: true })
+		);
+		expect(screen.getByRole("combobox", { name: "Audio" })).toHaveValue("a2");
+		expect(screen.queryByRole("combobox", { name: "Subtitles" })).toBeNull();
+	});
+
+	it("has no pickers where it has no tracks to pick", () => {
+		show();
+		expect(screen.queryByRole("combobox")).toBeNull();
+	});
+
 	it("shows no subtitle picked as none, and leaves out pickers it can't use", () => {
 		show(state(), capabilities({ subtitles: "select" }));
 		expect(screen.getByRole("combobox", { name: "Subtitles" })).toHaveValue("");
@@ -268,8 +241,13 @@ describe("DestinationView", () => {
 	});
 
 	it("says what Play here does, where it opens a list", () => {
-		show(state(), capabilities(), { playHereNote: "Choose this iPhone." });
-		expect(screen.getByText("Choose this iPhone.")).toBeTruthy();
+		const { view } = show(state(), capabilities(), { playHereNote: "Choose this iPhone." });
+		expect(screen.getByText("Choose this iPhone.").tagName).toBe("P");
+		const button = screen.getByRole("button", { name: /^Play here/ });
+		expect(button.nextElementSibling).toHaveTextContent("Choose this iPhone.");
+		view.unmount();
+		show();
+		expect(screen.getByRole("button", { name: /^Play here/ }).nextElementSibling).toBeNull();
 	});
 
 	it("has no Play here where there's none", () => {
@@ -293,11 +271,45 @@ describe("DestinationView", () => {
 		await waitFor(() => expect(on.onFailed).toHaveBeenLastCalledWith("late", true));
 	});
 
-	it("uses the touch layout, with play in the middle and no volume slider", () => {
+	it("uses the touch layout, with play in the middle and the volume slider", () => {
 		show(state(), capabilities(), { touchLayout: true });
 		expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
-		expect(screen.queryByRole("slider", { name: "Volume" })).toBeNull();
+		expect(screen.getByRole("slider", { name: "Volume" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "Mute" })).toBeTruthy();
+	});
+
+	it("makes every control big enough to tap on a touch screen", () => {
+		show(state(), capabilities(), { touchLayout: true });
+		const controls = screen.getByRole("button", { name: "Stop" }).closest(".contents");
+		expect(controls).toHaveClass(
+			"pointer-coarse:[&_button]:min-h-11",
+			"pointer-coarse:[&_button]:min-w-11"
+		);
+		expect(screen.getByRole("button", { name: /^Play here/ })).toHaveClass(
+			"pointer-coarse:min-h-11"
+		);
+	});
+
+	it("has no Play in the middle while it opens", () => {
+		const { set } = show(state({ status: "opening" }), capabilities(), { touchLayout: true });
+		expect(screen.queryByRole("button", { name: "Play" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+		set(state({ status: "paused" }));
+		expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
+	});
+
+	it("unmutes to the level it had, and shows which", () => {
+		const { destination, set } = show(state({ volume: 30 }));
+		const mute = screen.getByRole("button", { name: "Mute" });
+		expect(mute.querySelector(".lucide-volume-2")).not.toBeNull();
+		fireEvent.click(mute);
+		expect(destination.setVolume).toHaveBeenLastCalledWith(0);
+		set(state({ volume: 0 }));
+		const unmute = screen.getByRole("button", { name: "Unmute" });
+		expect(unmute.querySelector(".lucide-volume-x")).not.toBeNull();
+		expect(unmute.querySelector(".lucide-volume-2")).toBeNull();
+		fireEvent.click(unmute);
+		expect(destination.setVolume).toHaveBeenLastCalledWith(30);
 	});
 
 	it("has no button in the middle while it plays where it can't pause", () => {

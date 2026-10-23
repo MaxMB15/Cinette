@@ -8,6 +8,7 @@ vi.mock("@/lib/tauri", () => ({ remoteCatalog: vi.fn() }));
 
 import { remoteCatalog, type CatalogQuery } from "@/lib/tauri";
 import { RemoteCatalog, PAGE, SEARCH_DELAY_MS, episodeLabel, groupName } from "./RemoteCatalog";
+import { deferred } from "@/test/deferred";
 import { createCinetteDestination, type CatalogItem } from "@/lib/cinette-destination";
 import type { Link } from "@/lib/remote-control";
 
@@ -359,6 +360,37 @@ describe("RemoteCatalog", () => {
 			"Living Room couldn't play BBC One."
 		);
 		expect(onPlayed, "it stays on the catalog").not.toHaveBeenCalled();
+	});
+
+	it("opens the player for the last pick only, and not after the catalog closed", async () => {
+		answer({
+			[groups("live")]: { items: [item("UK", "UK")], next: null },
+			[groupItems("UK")]: {
+				items: [item("live-1", "BBC One"), item("live-2", "BBC Two")],
+				next: null,
+			},
+		});
+		const first = deferred<number>();
+		const second = deferred<number>();
+		send.mockImplementationOnce(() => first.promise).mockImplementationOnce(
+			() => second.promise
+		);
+		const onPlayed = vi.fn();
+		const view = render(<RemoteCatalog link={link()} onPlayed={onPlayed} />);
+		fireEvent.click(await screen.findByRole("button", { name: "UK" }));
+		fireEvent.click(await screen.findByRole("button", { name: /BBC One/ }));
+		fireEvent.click(screen.getByRole("button", { name: /BBC Two/ }));
+		await act(async () => first.reject("not_found"));
+		expect(screen.queryByRole("alert"), "a replaced pick says nothing").toBeNull();
+		await act(async () => second.resolve(1));
+		expect(onPlayed).toHaveBeenCalledOnce();
+
+		const late = deferred<number>();
+		send.mockImplementationOnce(() => late.promise);
+		fireEvent.click(screen.getByRole("button", { name: /BBC One/ }));
+		view.unmount();
+		await act(async () => late.resolve(1));
+		expect(onPlayed).toHaveBeenCalledOnce();
 	});
 
 	it("shows a logo where there is one", async () => {

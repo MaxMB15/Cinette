@@ -94,6 +94,15 @@ export const RemoteCatalog = ({
 	// Which view a page of "Load more" belongs to; a newer one drops it.
 	const shownRef = useRef({});
 	const viewRef = useLatestRef(view);
+	// The latest item picked; one a newer pick replaced, or that answers
+	// after the catalog closed, opens nothing.
+	const pickRef = useRef<object | null>(null);
+	useEffect(
+		() => () => {
+			pickRef.current = null;
+		},
+		[]
+	);
 	const connected = link.phase.phase === "connected";
 
 	const searchRef = useLatestRef(search);
@@ -155,9 +164,17 @@ export const RemoteCatalog = ({
 
 	const play = (item: CatalogItem) => {
 		setMessage(null);
-		link.destination
-			.load({ kind: "remote", itemId: item.id, title: item.name })
-			.then(onPlayed, () => setMessage(`${link.name} couldn't play ${item.name}.`));
+		const pick = {};
+		pickRef.current = pick;
+		link.destination.load({ kind: "remote", itemId: item.id, title: item.name }).then(
+			() => {
+				if (pickRef.current === pick) onPlayed();
+			},
+			() => {
+				if (pickRef.current === pick)
+					setMessage(`${link.name} couldn't play ${item.name}.`);
+			}
+		);
 	};
 
 	const choose = (item: CatalogItem) => {

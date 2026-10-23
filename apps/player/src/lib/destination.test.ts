@@ -12,10 +12,10 @@ import {
 	UnsupportedError,
 	type LocalPlayerReport,
 	type DestinationSummary,
-	type PlaybackCapabilities,
 	type PlaybackState,
 } from "./destination";
 import type { Channel, PolledMpvState } from "./types";
+import { playbackCapabilities, playbackState } from "@/test/destination-fixtures";
 
 const mpvState = (over: Partial<PolledMpvState> = {}): PolledMpvState => ({
 	isPlaying: false,
@@ -206,21 +206,8 @@ describe("UnsupportedError", () => {
 });
 
 describe("positionNow", () => {
-	const state = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
-		status: "playing",
-		item: null,
-		position: 600,
-		positionAt: 1000,
-		duration: 5400,
-		volume: 40,
-		subtitles: [],
-		subtitleId: null,
-		audio: [],
-		audioId: null,
-		connection: "connected",
-		error: null,
-		...patch,
-	});
+	const state = (patch: Partial<PlaybackState> = {}) =>
+		playbackState({ item: null, positionAt: 1000, ...patch });
 
 	it("moves on with the time since the receiver said, while it plays", () => {
 		expect(positionNow(state(), 3000)).toBe(602);
@@ -238,33 +225,10 @@ describe("positionNow", () => {
 	});
 });
 
-const tvState = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
-	status: "playing",
-	item: { title: "A Film", contentType: "movie", ref: "mv1" },
-	position: 600,
-	positionAt: 1000,
-	duration: 5400,
-	volume: 40,
-	subtitles: [],
-	subtitleId: null,
-	audio: [],
-	audioId: null,
-	connection: "connected",
-	error: null,
-	...patch,
-});
-
-const tvCaps = (patch: Partial<PlaybackCapabilities> = {}): PlaybackCapabilities => ({
-	seek: true,
-	pause: true,
-	volume: "absolute",
-	subtitles: "none",
-	externalSubtitles: false,
-	audioTracks: false,
-	resumeAt: true,
-	catalog: false,
-	...patch,
-});
+/** A movie whose position was read at 1 s. */
+const tvState = (patch: Partial<PlaybackState> = {}) =>
+	playbackState({ positionAt: 1000, ...patch });
+const tvCaps = playbackCapabilities;
 
 describe("destinationControls", () => {
 	it("shows a playing item with its position now, and every control it has", () => {
@@ -325,11 +289,12 @@ describe("destinationControls", () => {
 		).toBeNull();
 	});
 
-	it("is over when lost, failed, at the end, or idle with its item, and then offers nothing", () => {
+	it("is over when lost, failed, at the end, in error, or idle with its item, and then offers nothing", () => {
 		for (const patch of [
 			{ connection: "lost" as const },
 			{ error: { code: "failed" as const } },
 			{ status: "ended" as const },
+			{ status: "error" as const },
 			{ status: "idle" as const },
 		]) {
 			expect(destinationControls(tvState(patch), tvCaps(), 0)).toMatchObject({

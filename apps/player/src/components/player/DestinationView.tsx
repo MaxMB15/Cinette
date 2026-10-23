@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -66,6 +66,11 @@ export const DestinationView = ({
 		const timer = setInterval(() => setNow(performance.now()), 1000);
 		return () => clearInterval(timer);
 	}, [state.status]);
+	// The level Unmute goes back to.
+	const lastVolume = useRef(50);
+	useEffect(() => {
+		if (state.volume > 0) lastVolume.current = state.volume;
+	}, [state.volume]);
 	const controls = destinationControls(state, caps, now);
 	const line = destinationStatus(state, name, failure);
 	const resumeAt = caps.resumeAt && state.duration > 0 ? controls.player.position : 0;
@@ -73,18 +78,30 @@ export const DestinationView = ({
 		void command().catch((error: unknown) => onFailed(error, seeking));
 	const seekTo = (to: number) =>
 		run(() => destination.seek(Math.min(Math.max(0, to), state.duration)), true);
+	const select = "max-w-full rounded bg-white/10 px-2 py-1 text-sm pointer-coarse:min-h-11";
 
 	return (
 		<div className="absolute inset-0 z-30 bg-black text-white" role="region" aria-label={label}>
-			<div className="absolute inset-x-0 top-0 flex flex-col items-center gap-3 px-6 pt-[calc(4rem+env(safe-area-inset-top))] text-center">
-				<Icon className="h-12 w-12 text-white/70" aria-hidden />
-				<div className="min-w-0 max-w-full">
-					<p className="text-lg font-medium break-words">
-						{controls.over ? "Stopped on " : "Playing on "}
+			{/* Above the middle row of controls, and scrolling rather than
+			    running into it on a short screen. */}
+			<div className="absolute inset-x-0 top-0 bottom-1/2 mb-12 flex flex-col items-center justify-end gap-3 overflow-y-auto pt-[calc(4rem+env(safe-area-inset-top))] pl-[max(1.5rem,env(safe-area-inset-left))] pr-[max(1.5rem,env(safe-area-inset-right))] text-center">
+				<Icon
+					className="h-12 w-12 shrink-0 text-white/70 [@media(height<30rem)]:hidden"
+					aria-hidden
+				/>
+				<div className="w-full min-w-0">
+					<p className="truncate text-lg font-medium" title={name}>
+						{!state.item
+							? "Nothing playing on "
+							: controls.over
+								? "Stopped on "
+								: "Playing on "}
 						<bdi>{name}</bdi>
 					</p>
 					{state.item && (
-						<p className="text-sm text-white/60 break-words">{state.item.title}</p>
+						<p className="truncate text-sm text-white/60" title={state.item.title}>
+							{state.item.title}
+						</p>
 					)}
 				</div>
 				{line && (
@@ -93,10 +110,10 @@ export const DestinationView = ({
 					</p>
 				)}
 				{!controls.over && (caps.subtitles === "select" || caps.audioTracks) && (
-					<div className="flex flex-wrap justify-center gap-2">
+					<div className="flex max-w-full flex-wrap justify-center gap-2">
 						{caps.subtitles === "select" && (
 							<select
-								className="rounded bg-white/10 px-2 py-1 text-sm pointer-coarse:min-h-11"
+								className={select}
 								aria-label="Subtitles"
 								// Stryker disable next-line StringLiteral: A select whose value matches no option shows its first, which is "No subtitles", the option "" picks.
 								value={state.subtitleId ?? ""}
@@ -114,7 +131,7 @@ export const DestinationView = ({
 						)}
 						{caps.audioTracks && (
 							<select
-								className="rounded bg-white/10 px-2 py-1 text-sm pointer-coarse:min-h-11"
+								className={select}
 								aria-label="Audio"
 								// Stryker disable next-line StringLiteral: No audio option has an empty id, so any string selects none of them.
 								value={state.audioId ?? ""}
@@ -133,6 +150,7 @@ export const DestinationView = ({
 					<>
 						<Button
 							variant="secondary"
+							className="shrink-0 pointer-coarse:min-h-11"
 							onClick={(e) =>
 								onPlayHere(resumeAt, e.currentTarget.getBoundingClientRect())
 							}
@@ -143,27 +161,39 @@ export const DestinationView = ({
 					</>
 				)}
 			</div>
-			<Controls
-				state={controls.player}
-				visible
-				touchLayout={touchLayout}
-				hideCenterControls={controls.over}
-				onPlay={() => run(destination.play)}
-				onPause={controls.pause ? () => run(destination.pause) : undefined}
-				onStop={onStop}
-				onSeek={seekTo}
-				skip={controls.seek ? skip : undefined}
-				onSkip={(seconds) => seekTo(positionNow(state, performance.now()) + seconds)}
-				onVolumeChange={
-					controls.volume
-						? (volume) => run(() => destination.setVolume(volume))
-						: undefined
-				}
-				maxVolume={100}
-				showVolumeSlider={!touchLayout}
-				onPrevEpisode={onPrevEpisode}
-				onNextEpisode={onNextEpisode}
-			/>
+			{/* Nothing to drive until something plays there. Every button is
+			    big enough to tap on a touch screen. */}
+			{state.item && (
+				<div className="contents pointer-coarse:[&_button]:min-h-11 pointer-coarse:[&_button]:min-w-11">
+					<Controls
+						state={controls.player}
+						visible
+						touchLayout={touchLayout}
+						hideCenterControls={controls.over || state.status === "opening"}
+						onPlay={() => run(destination.play)}
+						onPause={controls.pause ? () => run(destination.pause) : undefined}
+						onStop={onStop}
+						onSeek={seekTo}
+						skip={controls.seek ? skip : undefined}
+						onSkip={(seconds) =>
+							seekTo(positionNow(state, performance.now()) + seconds)
+						}
+						onVolumeChange={
+							controls.volume
+								? (volume) => run(() => destination.setVolume(volume))
+								: undefined
+						}
+						onToggleMute={() =>
+							run(() =>
+								destination.setVolume(state.volume > 0 ? 0 : lastVolume.current)
+							)
+						}
+						maxVolume={100}
+						onPrevEpisode={onPrevEpisode}
+						onNextEpisode={onNextEpisode}
+					/>
+				</div>
+			)}
 		</div>
 	);
 };

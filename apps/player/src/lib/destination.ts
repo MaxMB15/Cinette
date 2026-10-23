@@ -106,6 +106,7 @@ export const destinationControls = (
 		state.connection === "lost" ||
 		state.error !== null ||
 		state.status === "ended" ||
+		state.status === "error" ||
 		(state.status === "idle" && state.item !== null);
 	const seek = !over && capabilities.seek && state.duration > 0;
 	return {

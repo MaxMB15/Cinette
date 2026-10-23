@@ -51,6 +51,7 @@ import { makeEpisode, makeMovie, makeNewsChannel, makeOmdb } from "@/test/detail
 import { deferred } from "@/test/deferred";
 import { installPointerEvent } from "@/test/pointer-event";
 import { makeSegment } from "@/test/segments";
+import { fakeDestination, playbackCapabilities, playbackState } from "@/test/destination-fixtures";
 import { getMountedPlayer } from "@/lib/remote-target";
 import { saveProgressNow } from "@/lib/player-progress";
 import { PlayerView } from "./VideoPlayer";
@@ -3704,53 +3705,27 @@ describe("remote control", () => {
 });
 
 describe("AirPlay", () => {
-	const tvState = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
-		status: "playing",
-		item: { title: "The Lantern Keeper", contentType: "movie", ref: "mv1" },
-		position: 600,
-		positionAt: performance.now(),
-		duration: 5400,
-		volume: 100,
-		subtitles: [{ id: "0", label: "English" }],
-		subtitleId: null,
-		audio: [
-			{ id: "0", label: "Main" },
-			{ id: "1", label: "Commentary" },
-		],
-		audioId: "0",
-		connection: "connected",
-		error: null,
-		...patch,
-	});
+	const tvState = (patch: Partial<PlaybackState> = {}) =>
+		playbackState({
+			item: { title: "The Lantern Keeper", contentType: "movie", ref: "mv1" },
+			volume: 100,
+			subtitles: [{ id: "0", label: "English" }],
+			audio: [
+				{ id: "0", label: "Main" },
+				{ id: "1", label: "Commentary" },
+			],
+			audioId: "0",
+			...patch,
+		});
 
 	const tv = () => ({
-		id: "airplay:tv",
-		kind: "airplay" as const,
-		name: "Living Room TV",
-		catalog: { kind: "local" as const },
+		...fakeDestination(
+			"airplay",
+			"Living Room TV",
+			tvState(),
+			playbackCapabilities({ volume: "none", subtitles: "select", audioTracks: true })
+		),
 		notPicked: false,
-		capabilities: {
-			seek: true,
-			pause: true,
-			volume: "none" as const,
-			subtitles: "select" as const,
-			externalSubtitles: false,
-			audioTracks: true,
-			resumeAt: true,
-			catalog: false,
-		},
-		route: vi.fn(),
-		load: vi.fn(),
-		play: vi.fn(async () => {}),
-		pause: vi.fn(async () => {}),
-		seek: vi.fn(async () => {}),
-		setVolume: vi.fn(),
-		selectSubtitle: vi.fn(async () => {}),
-		selectAudio: vi.fn(async () => {}),
-		stop: vi.fn(),
-		// One state until a test sets another, as a destination keeps it.
-		getState: vi.fn<() => PlaybackState>().mockReturnValue(tvState()),
-		subscribe: vi.fn(() => () => {}),
 		dispose: vi.fn(),
 	});
 
@@ -4096,6 +4071,48 @@ describe("AirPlay", () => {
 		expect(screen.getByText("Couldn't move the stream on the TV.")).toBeTruthy();
 	});
 
+	it("says nothing when a control other than a seek fails, which the TV shows", async () => {
+		await openItem(lanternKeeper());
+		const destination = tv();
+		destination.pause.mockRejectedValueOnce(new Error("gone"));
+		act(() => fakeAirPlay.set({ destination, state: tvState() }));
+		const panel = screen.getByRole("region", { name: "AirPlay" });
+		fireEvent.click(within(panel).getByRole("button", { name: "Pause" }));
+		await flush();
+		expect(destination.pause).toHaveBeenCalled();
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("keeps Back over the TV's view on a phone, and leaves the title to the view", async () => {
+		setUpTouchScreen("mobile");
+		await openItem(lanternKeeper());
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		const back = screen.getByRole("button", { name: "Back" });
+		const bar = back.parentElement!;
+		expect(bar).toHaveClass("z-40");
+		expect(bar).not.toHaveTextContent("The Lantern Keeper");
+		fireEvent.click(back);
+		await flush();
+		expect(screen.getByText("Channel list")).toBeTruthy();
+	});
+
+	it("gives the view the player's touch layout and skip lengths", async () => {
+		writeSkipInterval("back", 5);
+		await openItem(lanternKeeper());
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		const panel = screen.getByRole("region", { name: "AirPlay" });
+		expect(within(panel).getByRole("button", { name: "Skip back 5 seconds" })).toBeTruthy();
+		cleanup();
+		setUpTouchScreen();
+		await openItem(lanternKeeper());
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		// On touch, Play and Pause sit in the middle, with the skips beside them.
+		const touch = screen.getByRole("region", { name: "AirPlay" });
+		expect(
+			within(touch).getByRole("button", { name: "Pause" }).closest(".pointer-events-none")
+		).toBeTruthy();
+	});
+
 	it("plays a paused TV from the keyboard", async () => {
 		await openItem(lanternKeeper());
 		const destination = {
@@ -4185,21 +4202,11 @@ describe("AirPlay", () => {
 });
 
 describe("Google Cast", () => {
-	const castState = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
-		status: "playing",
-		item: { title: "The Lantern Keeper", contentType: "movie", ref: "mv1" },
-		position: 600,
-		positionAt: performance.now(),
-		duration: 5400,
-		volume: 40,
-		subtitles: [],
-		subtitleId: null,
-		audio: [],
-		audioId: null,
-		connection: "connected",
-		error: null,
-		...patch,
-	});
+	const castState = (patch: Partial<PlaybackState> = {}) =>
+		playbackState({
+			item: { title: "The Lantern Keeper", contentType: "movie", ref: "mv1" },
+			...patch,
+		});
 
 	const receiver = (id: string, name: string, available = true) => ({
 		id,
@@ -4210,32 +4217,7 @@ describe("Google Cast", () => {
 	});
 
 	const tv = () => ({
-		id: "cast:tv",
-		kind: "cast" as const,
-		name: "Hotel TV",
-		catalog: { kind: "local" as const },
-		capabilities: {
-			seek: true,
-			pause: true,
-			volume: "absolute" as const,
-			subtitles: "none" as const,
-			externalSubtitles: false,
-			audioTracks: false,
-			resumeAt: true,
-			catalog: false,
-		},
-		route: vi.fn(),
-		load: vi.fn(),
-		play: vi.fn(async () => {}),
-		pause: vi.fn(async () => {}),
-		seek: vi.fn(async () => {}),
-		setVolume: vi.fn(async () => {}),
-		selectSubtitle: vi.fn(),
-		selectAudio: vi.fn(),
-		stop: vi.fn(async () => {}),
-		// One state until a test sets another, as a destination keeps it.
-		getState: vi.fn<() => PlaybackState>().mockReturnValue(castState()),
-		subscribe: vi.fn(() => () => {}),
+		...fakeDestination("cast", "Hotel TV", castState()),
 		receive: vi.fn(),
 		closedReason: vi.fn(() => null),
 	});
@@ -4434,9 +4416,10 @@ describe("Google Cast", () => {
 		expect(panel).toHaveTextContent("Stopped on Hotel TV");
 		expect(within(panel).queryByRole("button", { name: "Play" })).toBeNull();
 		expect(within(panel).getByRole("button", { name: "Play here from 10:00" })).toBeTruthy();
-		// Idle with nothing loaded yet is still casting.
+		// Idle with nothing loaded yet is still casting, with nothing to drive.
 		act(() => fakeCast.set({ state: castState({ status: "idle", item: null }) }));
-		expect(panel).toHaveTextContent("Playing on Hotel TV");
+		expect(panel).toHaveTextContent("Nothing playing on Hotel TV");
+		expect(within(panel).queryByRole("button", { name: "Stop" })).toBeNull();
 	});
 
 	it("plays here again from where the receiver was", async () => {
@@ -4532,6 +4515,18 @@ describe("Google Cast", () => {
 		fireEvent.keyDown(within(panel).getByRole("slider", { name: "Seek" }), { key: "End" });
 		await flush();
 		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("says in its own words why the receiver stopped", async () => {
+		await openItem(lanternKeeper());
+		act(() =>
+			fakeCast.set({
+				destination: tv() as unknown as CastDestination,
+				state: castState({ error: { code: "failed", message: "unreachable" } }),
+			})
+		);
+		const panel = screen.getByRole("region", { name: "Google Cast" });
+		expect(within(panel).getByRole("status")).toHaveTextContent("Couldn't reach Hotel TV.");
 	});
 
 	it("shows no panel for a receiver whose state hasn't come yet", async () => {
@@ -4950,6 +4945,31 @@ describe("another Cinette device", () => {
 		// A rename there shows here.
 		act(() => fakeRemote.set(linkTo(undefined, "Study Mac").link));
 		expect(panel()).toHaveTextContent("Playing on Study Mac");
+	});
+
+	it("stops what played here when it starts controlling another device", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 900, 5400) });
+		fakeMpv.actions.stop.mockClear();
+		vi.mocked(tauri.savePlaybackPosition).mockClear();
+		act(() => fakeRemote.set(linkTo().link));
+		await flush();
+		expect(fakeMpv.actions.stop).toHaveBeenCalledTimes(1);
+		expect(tauri.savePlaybackPosition).toHaveBeenCalled();
+		// Not again while the same link stays.
+		act(() => fakeRemote.set({ ...fakeRemote.get()!, name: "Study Mac" }));
+		await flush();
+		expect(fakeMpv.actions.stop).toHaveBeenCalledTimes(1);
+	});
+
+	it("says it couldn't reach the device when a key's control fails", async () => {
+		renderPlayer(null);
+		await flush();
+		const { link, send } = linkTo();
+		send.mockRejectedValue("unreachable");
+		act(() => fakeRemote.set(link));
+		await press(" ");
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
 	});
 
 	it("shows while the link reconnects, and not before it connects", async () => {
