@@ -163,7 +163,7 @@ fn read_device_name() -> jni::errors::Result<Option<String>> {
             .call_static_method(
                 jni_str!("android/provider/Settings$Global"),
                 jni_str!("getString"),
-                jni_sig!("(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;"),
+                jni_sig!((android.content.ContentResolver, java.lang.String) -> java.lang.String),
                 &[JValue::from(&resolver), JValue::from(&key)],
             )?
             .l()?;
