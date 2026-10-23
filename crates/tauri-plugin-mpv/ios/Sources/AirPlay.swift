@@ -58,6 +58,10 @@ final class AirPlayHost: NSObject, AVRoutePickerViewDelegate {
   private var ended = false
   private var failed = false
   private var legible: AVMediaSelectionGroup?
+  /// The legible group's options AVPlayer can play, which the player lists
+  /// and picks from by their place in this list. The group can also hold
+  /// ones it can't, which would show nothing on the TV.
+  private var subtitles: [AVMediaSelectionOption] = []
   private var audible: AVMediaSelectionGroup?
   private var lastReport: String?
 
@@ -158,6 +162,7 @@ final class AirPlayHost: NSObject, AVRoutePickerViewDelegate {
     ended = false
     failed = false
     legible = nil
+    subtitles = []
     audible = nil
     lastReport = nil
 
@@ -263,6 +268,9 @@ final class AirPlayHost: NSObject, AVRoutePickerViewDelegate {
         let audible = try? await asset.loadMediaSelectionGroup(for: .audible)
         guard let self, item === self.player?.currentItem else { return }
         self.legible = legible
+        self.subtitles = legible.map {
+          AVMediaSelectionGroup.playableMediaSelectionOptions(from: $0.options)
+        } ?? []
         self.audible = audible
         self.sendReport()
       }
@@ -285,7 +293,7 @@ final class AirPlayHost: NSObject, AVRoutePickerViewDelegate {
 
   func selectLegible(_ index: Int) {
     guard let item = player?.currentItem, let group = legible else { return }
-    let option = group.options.indices.contains(index) ? group.options[index] : nil
+    let option = subtitles.indices.contains(index) ? subtitles[index] : nil
     item.select(option, in: group)
     sendReport()
   }
@@ -391,9 +399,9 @@ final class AirPlayHost: NSObject, AVRoutePickerViewDelegate {
       report["error"] = detail
     }
     if let group = legible {
-      report["subtitles"] = group.options.map(track)
+      report["subtitles"] = subtitles.map(track)
       if let selected = item.currentMediaSelection.selectedMediaOption(in: group),
-        let index = group.options.firstIndex(of: selected)
+        let index = subtitles.firstIndex(of: selected)
       {
         report["subtitle"] = index
       }
