@@ -17,7 +17,7 @@ use std::net::IpAddr;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use mvp_core::cast::message::{LoadRequest, StreamType};
+use mvp_core::cast::message::{LoadRequest, StreamType, TextTrack};
 use mvp_core::cast::session::{Session, PING_INTERVAL, SILENCE_LIMIT};
 use mvp_core::convert::{matroska_copies, pick_audio, AudioPlan, Plan, VideoPlan, CAST_AUDIO};
 use mvp_core::models::channel::Channel;
@@ -32,10 +32,10 @@ use tokio::sync::mpsc;
 
 use super::link::{drive, CastUpdate, Command};
 use super::tls;
-use super::CastReceivers;
+use super::{CastReceivers, Subtitle};
 use crate::commands::AppState;
 use crate::convert::{Conversion, ConvertError, Ended};
-use crate::lan_server::{route_to, NoRoute};
+use crate::lan_server::{route_to, LanServer, NoRoute};
 use crate::streams::{StreamsState, REFUSED};
 
 /// The event that carries each [`CastUpdate`], with its receiver's id.
@@ -106,6 +106,31 @@ pub enum CastAction {
     Volume {
         level: f64,
     },
+    /// Shows the subtitle the load gave, or hides it.
+    Tracks {
+        on: bool,
+    },
+}
+
+/// The most WebVTT a load takes, many times a film's subtitles.
+pub const SUBTITLE_LIMIT: usize = 2 * 1024 * 1024;
+
+/// The receiver's id for the subtitle.
+const SUBTITLE_TRACK: i64 = 1;
+
+/// The name the subtitle is served as.
+const SUBTITLE_FILE: &str = "subtitles.vtt";
+
+/// How a load starts, beside the item and its route.
+pub struct LoadOptions {
+    /// Where to start, in seconds, for an item with a length.
+    pub start_at: Option<f64>,
+    /// It starts the cast's stream again by itself.
+    pub restart: bool,
+    /// Something on this computer just let go of the provider's stream.
+    pub freed: bool,
+    /// Shown from the start. A live channel's cast leaves it out.
+    pub subtitle: Option<Subtitle>,
 }
 
 #[derive(Serialize, Clone)]
@@ -128,6 +153,9 @@ struct Active {
     local: Option<IpAddr>,
     /// The converter serving the receiver, for a converted route.
     conversion: Option<Conversion>,
+    /// The server for a direct route's subtitle. A converted route's
+    /// converter serves its own.
+    subtitles: Option<LanServer>,
     /// The plan the converter follows, which a seek or a resume of the
     /// same item reuses. It lasts only as long as this cast, since a
     /// channel's tracks can change between casts.
@@ -459,9 +487,11 @@ where
     };
     let mut old = active.take();
     // A new connection to the same receiver goes on with its cast.
-    let (conversion, plan) = match old.as_mut() {
-        Some(old) if old.receiver_id == receiver_id => (old.conversion.take(), old.plan.take()),
-        _ => (None, None),
+    let (conversion, plan, subtitles) = match old.as_mut() {
+        Some(old) if old.receiver_id == receiver_id => {
+            (old.conversion.take(), old.plan.take(), old.subtitles.take())
+        }
+        _ => (None, None, None),
     };
     *active = Some(Active {
         receiver_id: receiver_id.to_string(),
@@ -471,6 +501,7 @@ where
         local,
         conversion,
         plan,
+        subtitles,
     });
     drop(active);
     match old {
@@ -749,8 +780,8 @@ async fn start_conversion<R: Runtime>(
         })
 }
 
-/// Plays `channel` on `receiver_id` the way `route` says, from `start_at`
-/// seconds for an item with a length. Connects first when needed.
+/// Plays `channel` on `receiver_id` the way `route` says, started as
+/// `options` say. Connects first when needed.
 ///
 /// The receiver's conversion, if any, stops before this asks the provider
 /// for anything, since many accounts allow one connection. The receiver
@@ -759,20 +790,33 @@ async fn start_conversion<R: Runtime>(
 /// a stop for the same receiver makes this one give up wherever it is, with
 /// [`SUPERSEDED`], dropping what it started.
 ///
-/// Rejects with `notFound`, `unreachable`, `refused`, `streamUnreachable`,
-/// `noConverter`, `noEncoder`, `unsupported`, `noRoute`, `converterFailed`,
-/// `stale` or `superseded`, or, for a direct HLS route, `notPlaylist` or
-/// `cors`, after which the frontend routes the item again without that
-/// format.
+/// A subtitle goes to the receiver from this computer: from the converter's
+/// server, or from one of the cast's own for a direct route.
+///
+/// Rejects with `subtitleTooLarge`, `notFound`, `unreachable`, `refused`,
+/// `streamUnreachable`, `noConverter`, `noEncoder`, `unsupported`, `noRoute`,
+/// `converterFailed`, `stale` or `superseded`, or, for a direct HLS route,
+/// `notPlaylist` or `cors`, after which the frontend routes the item again
+/// without that format.
 pub async fn load<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,
     channel: &Channel,
     route: CastRoute,
-    start_at: Option<f64>,
-    restart: bool,
-    freed_here: bool,
+    options: LoadOptions,
 ) -> Result<(), String> {
+    let LoadOptions {
+        start_at,
+        restart,
+        freed: freed_here,
+        subtitle,
+    } = options;
+    if subtitle
+        .as_ref()
+        .is_some_and(|s| s.vtt.len() > SUBTITLE_LIMIT)
+    {
+        return Err("subtitleTooLarge".into());
+    }
     let state = app.state::<CastPlayback>();
     // Starting a stream again goes on with the cast it belongs to, and
     // never opens one: a cast that ended, or went to another receiver,
@@ -850,12 +894,7 @@ pub async fn load<R: Runtime>(
             audio,
             ..
         } => {
-            let receiver = app
-                .state::<CastReceivers>()
-                .registry()
-                .get(receiver_id)
-                .map(|r| r.addr)
-                .ok_or("notFound")?;
+            let receiver = receiver_addr(app, receiver_id)?;
             let made_for = |known: &KnownPlan| {
                 known.channel_id == channel.id
                     && known.generation == generation
@@ -941,6 +980,23 @@ pub async fn load<R: Runtime>(
             plan_used = Some(known);
         }
     }
+    // A live channel's cast shows no subtitle, as this computer's player.
+    let subtitle = subtitle.filter(|_| !live);
+    let mut subtitles = match (&subtitle, &conversion) {
+        (Some(_), None) => Some(
+            LanServer::start(receiver_addr(app, receiver_id)?)
+                .await
+                .map_err(|_| "noRoute")?,
+        ),
+        _ => None,
+    };
+    let server = subtitles
+        .as_ref()
+        .or(conversion.as_ref().map(|(started, _)| &started.server));
+    if let (Some(subtitle), Some(server)) = (subtitle, server) {
+        request.text_tracks = vec![serve_subtitle(server, subtitle)];
+        request.active_track_ids = vec![SUBTITLE_TRACK];
+    }
     let sent = async {
         // A restart whose cast ended while it started stays out of the
         // way, rather than open a cast the user just ended.
@@ -970,6 +1026,7 @@ pub async fn load<R: Runtime>(
             active.conversion = Some(started);
         }
         active.plan = plan_used;
+        active.subtitles = subtitles.take();
         Ok(())
     }
     .await;
@@ -981,6 +1038,29 @@ pub async fn load<R: Runtime>(
         started.stop().await;
     }
     sent
+}
+
+/// The address of the receiver `receiver_id`, or `notFound`.
+fn receiver_addr<R: Runtime>(app: &AppHandle<R>, receiver_id: &str) -> Result<IpAddr, String> {
+    app.state::<CastReceivers>()
+        .registry()
+        .get(receiver_id)
+        .map(|r| r.addr)
+        .ok_or_else(|| "notFound".to_string())
+}
+
+/// Serves `subtitle` from `server`, as the receiver's track for it.
+fn serve_subtitle(server: &LanServer, subtitle: Subtitle) -> TextTrack {
+    server
+        .files
+        .put(SUBTITLE_FILE, "text/vtt", subtitle.vtt.into_bytes());
+    TextTrack {
+        id: SUBTITLE_TRACK,
+        url: server.url(SUBTITLE_FILE),
+        content_type: "text/vtt".into(),
+        name: subtitle.name,
+        language: subtitle.language,
+    }
 }
 
 /// Drops the plan of the cast on `receiver_id`, if it has one.
@@ -1079,6 +1159,9 @@ pub fn control(state: &CastPlayback, receiver_id: &str, action: CastAction) -> R
         CastAction::Pause => Command::Pause,
         CastAction::Seek { to } => Command::Seek(to),
         CastAction::Volume { level } => Command::Volume(level),
+        CastAction::Tracks { on } => {
+            Command::Tracks(if on { vec![SUBTITLE_TRACK] } else { Vec::new() })
+        }
     };
     commands
         .send(command)

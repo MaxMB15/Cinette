@@ -718,7 +718,8 @@ describe("backend commands", () => {
 					{ via: "direct", generation: 3, source: 1, container: "hls-ts" },
 					30,
 					true,
-					true
+					true,
+					{ vtt: "WEBVTT\n", name: "English", language: "en" }
 				),
 			"cast_load",
 			{
@@ -728,6 +729,7 @@ describe("backend commands", () => {
 				startAt: 30,
 				restart: true,
 				freed: true,
+				subtitle: { vtt: "WEBVTT\n", name: "English", language: "en" },
 			},
 		],
 		[

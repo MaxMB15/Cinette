@@ -39,6 +39,22 @@ mod tls_tests;
 
 use receivers::{ReceiverList, Registry};
 
+/// A subtitle for the receiver to show, which the frontend wrote as
+/// WebVTT. Only Linux and macOS cast.
+///
+/// Its cue times count on the stream the receiver gets. A direct route
+/// keeps the item's own times. A converted stream starts at 0 where the load
+/// starts, so its cues come `start_at` earlier, and those that end before 0
+/// are left out. It's served as given.
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+pub struct Subtitle {
+    pub vtt: String,
+    pub name: String,
+    pub language: Option<String>,
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::discovery::Event;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -270,7 +286,11 @@ pub fn hold_cast_receivers<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) {
 /// `restart` when it starts the cast's stream again by itself, which
 /// rejects with `notConnected` once that cast has ended. `freed` when
 /// something on this computer just let go of the provider's stream, such as
-/// its own player.
+/// its own player. `subtitle`, which a live channel leaves out, is shown
+/// from the start, with its cues timed as [`Subtitle`] says.
+// The frontend names each argument, so they stay apart rather than in one
+// struct.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn cast_load<R: Runtime>(
     app: AppHandle<R>,
@@ -280,29 +300,37 @@ pub async fn cast_load<R: Runtime>(
     start_at: Option<f64>,
     restart: bool,
     freed: bool,
+    subtitle: Option<Subtitle>,
 ) -> Result<(), String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let route = serde_json::from_value(route).map_err(|e| e.to_string())?;
-        playback::load(
-            &app,
-            &receiver_id,
-            &channel,
+        let options = playback::LoadOptions {
+            start_at,
+            restart,
+            freed,
+            subtitle,
+        };
+        playback::load(&app, &receiver_id, &channel, route, options).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (
+            app,
+            receiver_id,
+            channel,
             route,
             start_at,
             restart,
             freed,
-        )
-        .await
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = (app, receiver_id, channel, route, start_at, restart, freed);
+            subtitle,
+        );
         Err(UNSUPPORTED.into())
     }
 }
 
-/// Play, pause, seek or set the volume on the receiver being cast to.
+/// Play, pause, seek, set the volume, or show or hide the subtitle on the
+/// receiver being cast to.
 #[tauri::command]
 pub fn cast_control<R: Runtime>(
     app: AppHandle<R>,

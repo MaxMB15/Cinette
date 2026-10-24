@@ -669,7 +669,19 @@ export type CastAction =
 	| { action: "play" }
 	| { action: "pause" }
 	| { action: "seek"; to: number }
-	| { action: "volume"; level: number };
+	| { action: "volume"; level: number }
+	/** Shows the subtitle the load gave, or hides it. */
+	| { action: "tracks"; on: boolean };
+
+/** A subtitle for a Cast receiver to show, written as WebVTT. Its cue
+ *  times count on the stream the receiver gets: a direct route keeps the
+ *  item's own, and a converted stream starts at 0 at the load's `startAt`,
+ *  so its cues come that much earlier, without those that end before 0. */
+export interface CastSubtitle {
+	vtt: string;
+	name: string;
+	language: string | null;
+}
 
 /** What a Cast receiver reports, as `cast://update` carries it. */
 export type CastUpdate =
@@ -715,10 +727,12 @@ export type CastUpdate =
 export const CAST_UPDATE_EVENT = "cast://update";
 
 /**
- * Play `channel` on a Cast receiver, connecting first when needed. Rejects
- * with `notFound`, `unreachable`, `refused`, `streamUnreachable`, `noConverter`,
- * `noEncoder`, `unsupported`, `noRoute`, `converterFailed`, `stale` or
- * `superseded`, or, for a direct HLS route, `notPlaylist` or `cors`.
+ * Play `channel` on a Cast receiver, connecting first when needed, with
+ * `subtitle` shown from the start unless it's a live channel. Rejects
+ * with `subtitleTooLarge`, `notFound`, `unreachable`, `refused`,
+ * `streamUnreachable`, `noConverter`, `noEncoder`, `unsupported`, `noRoute`,
+ * `converterFailed`, `stale` or `superseded`, or, for a direct HLS route,
+ * `notPlaylist` or `cors`.
  * `restart` when the cast starts its stream again by itself: it never
  * opens a cast, and rejects with `notConnected` once the cast has ended.
  */
@@ -728,8 +742,10 @@ export const castLoad = (
 	route: CastRoute,
 	startAt: number | undefined,
 	restart: boolean,
-	freed: boolean
-): Promise<void> => invoke("cast_load", { receiverId, channel, route, startAt, restart, freed });
+	freed: boolean,
+	subtitle?: CastSubtitle
+): Promise<void> =>
+	invoke("cast_load", { receiverId, channel, route, startAt, restart, freed, subtitle });
 
 /** Rejects with `notConnected` when nothing is cast to that receiver. */
 export const castControl = (receiverId: string, action: CastAction): Promise<void> =>

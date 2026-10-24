@@ -31,6 +31,8 @@ pub enum Command {
     Seek(f64),
     /// 0 to 1.
     Volume(f64),
+    /// The media's tracks to show. Empty hides them all.
+    Tracks(Vec<i64>),
     /// Stops the media and keeps the cast, so the receiver lets go of the
     /// stream.
     StopMedia,
@@ -235,6 +237,7 @@ fn apply(session: &mut Session, command: Command, emit: &mut impl FnMut(CastUpda
         Command::Pause => single(session.pause()),
         Command::Seek(seconds) => single(session.seek(seconds)),
         Command::Volume(level) => single(session.set_volume(level)),
+        Command::Tracks(ids) => single(session.set_tracks(&ids)),
         Command::StopMedia => single(session.stop_media()),
         Command::Stop => Ok(session.stop()),
     };
