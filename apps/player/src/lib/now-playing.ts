@@ -9,7 +9,7 @@
  */
 
 import { SUPERSEDED, airplayBlockedMessage, airplayProgress } from "./airplay";
-import type { PlaybackDestination, PlaybackState } from "./destination";
+import type { ExternalSubtitle, PlaybackDestination, PlaybackState } from "./destination";
 import { blockerText, tvFailureMessage } from "./device-picker";
 import {
 	EMPTY_PROGRESS,
@@ -36,6 +36,8 @@ export interface SendOptions {
 	/** The route the picker already worked out for this TV, if it did. */
 	decision?: RouteDecision;
 	startAt?: number;
+	/** Shown from the start, on a TV that shows the player's subtitles. */
+	subtitle?: ExternalSubtitle | null;
 	/** Asks before this device converts the stream. A no sends nothing. */
 	confirm?: (keep: "on" | "onScreen") => Promise<boolean>;
 	/** Stops this device's player, since many accounts allow one connection
@@ -288,15 +290,17 @@ export const createNowPlaying = ({
 		// TV, or this TV for the route. A TV that only switches items closes
 		// its own. The TV asks again if the provider still counts it.
 		const freed = !switching || released;
-		return target.load(item, { startAt: opts.startAt, route, freed }).then(
-			() => ({ ok: true }) as const,
-			(error: unknown): Sent => {
-				// The backend says a newer load or a stop came, which says for itself.
-				if (!newest() || error === SUPERSEDED) return overtaken;
-				if (!switching) void stop().catch(() => {});
-				return { ok: false, why: "failed", error, switching };
-			}
-		);
+		return target
+			.load(item, { startAt: opts.startAt, route, freed, subtitle: opts.subtitle })
+			.then(
+				() => ({ ok: true }) as const,
+				(error: unknown): Sent => {
+					// The backend says a newer load or a stop came, which says for itself.
+					if (!newest() || error === SUPERSEDED) return overtaken;
+					if (!switching) void stop().catch(() => {});
+					return { ok: false, why: "failed", error, switching };
+				}
+			);
 	};
 
 	return {

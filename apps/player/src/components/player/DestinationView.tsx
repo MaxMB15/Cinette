@@ -36,6 +36,10 @@ interface DestinationViewProps {
 	onNextEpisode?: () => void;
 	/** Words an error the destination reports, where it has its own words. */
 	failure?: (message: string) => string;
+	/** Opens the player's subtitles, for a destination that shows them. */
+	onSubtitles?: () => void;
+	/** Whether a subtitle is picked, which the subtitles button shows. */
+	hasSubtitles?: boolean;
 }
 
 /**
@@ -57,6 +61,8 @@ export const DestinationView = ({
 	onPrevEpisode,
 	onNextEpisode,
 	failure,
+	onSubtitles,
+	hasSubtitles,
 }: DestinationViewProps) => {
 	const state = useSyncExternalStore(destination.subscribe, destination.getState);
 	const caps = destination.capabilities;
@@ -196,6 +202,8 @@ export const DestinationView = ({
 						maxVolume={100}
 						onPrevEpisode={onPrevEpisode}
 						onNextEpisode={onNextEpisode}
+						onSubtitles={caps.externalSubtitles ? onSubtitles : undefined}
+						hasSubtitles={hasSubtitles}
 					/>
 				</div>
 			)}

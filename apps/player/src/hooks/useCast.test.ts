@@ -553,7 +553,8 @@ describe("useCast", () => {
 				expect.anything(),
 				undefined,
 				false,
-				false
+				false,
+				undefined
 			);
 		});
 
@@ -655,7 +656,8 @@ describe("useCast", () => {
 			600,
 			false,
 			// This device's player just let go of the stream.
-			true
+			true,
+			undefined
 		);
 		expect(result.current.destination?.id).toBe("cast:tv");
 		expect(result.current.state?.status).toBe("opening");
@@ -807,7 +809,8 @@ describe("useCast", () => {
 				undefined,
 				false,
 				// It let go of the stream for the route, so it's freed.
-				true
+				true,
+				undefined
 			);
 			expect(result.current.destination?.id).toBe("cast:tv");
 		});
@@ -920,7 +923,8 @@ describe("useCast", () => {
 			expect.anything(),
 			undefined,
 			false,
-			true
+			true,
+			undefined
 		);
 	});
 

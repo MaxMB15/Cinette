@@ -31,7 +31,7 @@ import { convertWarning, tvFailureMessage } from "@/lib/device-picker";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { remoteItem, type CatalogItem } from "@/lib/cinette-destination";
-import type { PlaybackDestination } from "@/lib/destination";
+import type { ExternalSubtitle, PlaybackDestination } from "@/lib/destination";
 import { usePublishRemoteState } from "@/hooks/useRemoteTarget";
 import { setProgressSaver } from "@/lib/player-progress";
 import { useLatestRef } from "@/hooks/useLatestRef";
@@ -473,6 +473,27 @@ export const PlayerView = () => {
 	// Google Cast from a computer.
 	const cast = useCast(castsFrom(platform));
 	const castRef = useLatestRef(cast);
+	/** The subtitle picked, for a cast to show. Cues always come with the
+	 *  entry they were read from, and a file the overlay can't read has none. */
+	const externalSubtitle = useMemo((): ExternalSubtitle | null => {
+		if (selectedSubtitleEntry === null) return null;
+		const { releaseName, languageCode } = selectedSubtitleEntry;
+		return {
+			cues: subtitleCues,
+			delay: subtitleDelay,
+			name: releaseName ?? languageCode,
+			language: languageCode,
+		};
+	}, [subtitleCues, subtitleDelay, selectedSubtitleEntry]);
+	const externalSubtitleRef = useLatestRef(externalSubtitle);
+	// A cast follows each change to it. The page opening isn't one, so a cast
+	// that plays on keeps what it shows.
+	const shownSubtitle = useRef(externalSubtitle);
+	useEffect(() => {
+		if (shownSubtitle.current === externalSubtitle) return;
+		shownSubtitle.current = externalSubtitle;
+		castRef.current.destination?.setExternalSubtitle(externalSubtitle);
+	}, [castRef, externalSubtitle]);
 	// AirPlay video on iOS and macOS.
 	const mac = platform === "macos";
 	const airplay = useAirPlay(airplaysFrom(platform), mac);
@@ -529,6 +550,11 @@ export const PlayerView = () => {
 				return nowPlaying
 					.send(tv, ch, {
 						startAt: startPos,
+						// Another load of the same item shows what it showed.
+						subtitle:
+							ch.id === activeChannelRef.current?.id
+								? externalSubtitleRef.current
+								: null,
 						confirm: tv.converted?.()
 							? undefined
 							: (keep) =>
@@ -577,8 +603,18 @@ export const PlayerView = () => {
 			apply?.();
 			return loaded;
 		},
-		// Stryker disable next-line ArrayDeclaration: mpv's load is the one useMpv keeps with useCallback, recordEnd and rememberLoadedUrl only read refs, castRef and airplayRef are refs, and confirmCast and mac never change.
-		[mpv, rememberLoadedUrl, recordEnd, castRef, airplayRef, confirmCast, mac]
+		// Stryker disable next-line ArrayDeclaration: mpv's load is the one useMpv keeps with useCallback, recordEnd and rememberLoadedUrl only read refs, castRef, airplayRef, activeChannelRef and externalSubtitleRef are refs, and confirmCast and mac never change.
+		[
+			mpv,
+			rememberLoadedUrl,
+			recordEnd,
+			castRef,
+			airplayRef,
+			activeChannelRef,
+			externalSubtitleRef,
+			confirmCast,
+			mac,
+		]
 	);
 
 	/**
@@ -1551,6 +1587,7 @@ export const PlayerView = () => {
 		cast
 			.send(receiverId, channel, {
 				startAt: sendFrom(channel),
+				subtitle: externalSubtitle,
 				stopLocal,
 			})
 			.then((why) => setNotice(afterCast(why)));
@@ -1624,6 +1661,8 @@ export const PlayerView = () => {
 			icon={Cast}
 			failure={(message) => tvFailureMessage(castTv.name, message)}
 			{...episodes}
+			hasSubtitles={selectedSubtitleId !== null}
+			onSubtitles={canShowSubtitles ? () => setShowSubtitlePicker((v) => !v) : undefined}
 			onPlayHere={async (position) => {
 				// The receiver lets go of the stream before mpv opens it, since
 				// many accounts allow one connection at a time.
