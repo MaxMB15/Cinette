@@ -33,7 +33,7 @@
 		"tailwind-merge": "^3.7.0"
 	},
 	"devDependencies": {
-		"@babel/core": "^7.29.7",
+		"@babel/core": "^8.0.7",
 		"@rolldown/plugin-babel": "^0.2.4",
 		"@stryker-mutator/core": "10.0.0",
 		"@stryker-mutator/vitest-runner": "10.0.0",
