@@ -437,6 +437,10 @@ describe("Controls seek bar", () => {
 			volume: () => screen.getByRole("slider", { name: "Volume" }),
 			root,
 			track,
+			/** The slider's parent, which follows the pointer and takes the release. */
+			wrapper: () => root().parentElement!,
+			/** The time shown over the pointer, after the slider. */
+			pointerTime: () => root().nextElementSibling as HTMLElement | null,
 			valueNow: () => Number(thumb().getAttribute("aria-valuenow")),
 			percent: (style: string) => Number(/(-?[\d.]+)%/.exec(style)?.[1]),
 			thumbLeft: () => thumb().parentElement!.style.left,
@@ -484,16 +488,16 @@ describe("Controls seek bar", () => {
 		vi.restoreAllMocks();
 	});
 
-	/** Gives the bar a width of 1000px, so clientX 500 is the middle. */
-	const withWidth = (root: HTMLElement) =>
+	/** Gives the bar a width of 1000px from `left`, so clientX `left + 500` is the middle. */
+	const withWidth = (root: HTMLElement, left = 0) =>
 		vi.spyOn(root, "getBoundingClientRect").mockReturnValue({
-			left: 0,
-			right: 1000,
+			left,
+			right: left + 1000,
 			width: 1000,
 			top: 0,
 			bottom: 16,
 			height: 16,
-			x: 0,
+			x: left,
 			y: 0,
 			toJSON: () => ({}),
 		});
@@ -905,6 +909,104 @@ describe("Controls seek bar", () => {
 			tabTo(bar.thumb());
 			fireEvent.keyDown(bar.thumb(), { key: "ArrowRight" });
 			expect(bar.onSeek).toHaveBeenCalledWith(201);
+		});
+	});
+
+	describe("time over the pointer", () => {
+		/** A bar 1000px wide, 100px from the left, so clientX 350 is a quarter of the way. */
+		const renderWideBar = (overrides: Partial<PlayerState> = {}) => {
+			const bar = renderSeekBar(overrides);
+			withWidth(bar.root(), 100);
+			withWidth(bar.wrapper(), 100);
+			return bar;
+		};
+		const move = (target: Element, clientX: number, init: PointerEventInit = {}) =>
+			fireEvent.pointerMove(target, { pointerId: 1, clientX, ...init });
+
+		it("shows the time under a mouse over the bar until it leaves", () => {
+			const bar = renderWideBar();
+			expect(bar.pointerTime()).toBeNull();
+
+			move(bar.track(), 350);
+			const time = bar.pointerTime()!;
+			expect(time).toHaveTextContent("7:30");
+			// The thumb already tells screen readers the position.
+			expect(time).toHaveAttribute("aria-hidden", "true");
+			expect(time.style.left).toBe("25%");
+			// Centered on the pointer unless that would take it past an end.
+			expect(time.style.translate).toBe("clamp(-25cqw, -50%, -100% + 75cqw)");
+
+			move(bar.track(), 600);
+			expect(bar.pointerTime()).toHaveTextContent("15:00");
+			expect(bar.pointerTime()!.style.left).toBe("50%");
+
+			fireEvent.pointerLeave(bar.wrapper(), { pointerId: 1 });
+			expect(bar.pointerTime()).toBeNull();
+		});
+
+		it("shows the whole second a press there seeks to", () => {
+			// A quarter of the way is 450.5 seconds, which the slider rounds up.
+			const bar = renderWideBar({ duration: 1802 });
+			move(bar.track(), 350);
+			expect(bar.pointerTime()).toHaveTextContent("7:31");
+			press(bar.track(), { clientX: 350 });
+			release(bar.track(), { clientX: 350 });
+			expect(bar.onSeek).toHaveBeenCalledWith(451);
+		});
+
+		it("stops at the ends while a drag goes past them, and keeps the time inside the bar", () => {
+			// The last whole second rounds up past the end, where the slider stops.
+			const bar = renderWideBar({ duration: 1800.6 });
+			press(bar.track(), { clientX: 600 });
+
+			move(bar.track(), 20);
+			expect(bar.pointerTime()).toHaveTextContent("0:00");
+			expect(bar.pointerTime()!.style.left).toBe("0%");
+			expect(bar.pointerTime()!.style.translate).toBe("clamp(0cqw, -50%, -100% + 100cqw)");
+
+			move(bar.track(), 1300);
+			expect(bar.pointerTime()).toHaveTextContent("30:00");
+			expect(bar.pointerTime()!.style.left).toBe("100%");
+			expect(bar.pointerTime()!.style.translate).toBe("clamp(-100cqw, -50%, -100% + 0cqw)");
+
+			release(bar.track(), { clientX: 1300 });
+			expect(bar.onSeek).toHaveBeenCalledWith(1800.6);
+		});
+
+		it("follows only the finger pressing the bar, and goes when it lifts", () => {
+			const bar = renderWideBar();
+			const touch = { pointerType: "touch" };
+			press(bar.track(), { ...touch, clientX: 600 });
+			move(bar.track(), 350, touch);
+			expect(bar.pointerTime()).toHaveTextContent("7:30");
+
+			// A second finger on the bar neither moves the time nor takes it away.
+			const second = { ...touch, pointerId: 2, isPrimary: false };
+			press(bar.track(), { ...second, clientX: 850 });
+			move(bar.track(), 850, second);
+			release(bar.track(), { ...second, clientX: 850 });
+			fireEvent.pointerLeave(bar.wrapper(), second);
+			expect(bar.pointerTime()).toHaveTextContent("7:30");
+
+			// A touch leaves the bar as it lifts.
+			release(bar.track(), { ...touch, clientX: 350 });
+			fireEvent.pointerLeave(bar.wrapper(), { ...touch, pointerId: 1 });
+			expect(bar.pointerTime()).toBeNull();
+		});
+
+		it("goes when the stream changes or the bar goes away under the pointer", () => {
+			const bar = renderWideBar();
+			move(bar.track(), 350);
+			// No leave arrives from a bar that's gone.
+			bar.rerender({ duration: 0 });
+			bar.rerender({ duration: 1800 });
+			expect(bar.pointerTime()).toBeNull();
+
+			withWidth(bar.wrapper(), 100);
+			move(bar.track(), 350);
+			expect(bar.pointerTime()).toHaveTextContent("7:30");
+			bar.rerender({ currentUrl: "http://example.com/next.mkv" });
+			expect(bar.pointerTime()).toBeNull();
 		});
 	});
 });
