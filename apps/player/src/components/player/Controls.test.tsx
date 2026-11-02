@@ -944,6 +944,20 @@ describe("Controls seek bar", () => {
 			expect(bar.pointerTime()).toBeNull();
 		});
 
+		it("draws the time in the event that moved the pointer", () => {
+			const bar = renderWideBar();
+			// Outside act(), React would render the move in a later task.
+			const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+			const inAct = env.IS_REACT_ACT_ENVIRONMENT;
+			env.IS_REACT_ACT_ENVIRONMENT = false;
+			onTestFinished(() => void (env.IS_REACT_ACT_ENVIRONMENT = inAct));
+
+			bar.track().dispatchEvent(
+				new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientX: 350 })
+			);
+			expect(bar.pointerTime()).toHaveTextContent("7:30");
+		});
+
 		it("shows the whole second a press there seeks to", () => {
 			// A quarter of the way is 450.5 seconds, which the slider rounds up.
 			const bar = renderWideBar({ duration: 1802 });

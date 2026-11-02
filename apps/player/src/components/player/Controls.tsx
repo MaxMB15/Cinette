@@ -27,6 +27,7 @@ import { describeSource } from "@/lib/sources";
 import type { PlayerState } from "@/lib/types";
 import type { SkipIntervals } from "@/lib/player-prefs";
 import { useState, useEffect, useRef } from "react";
+import { flushSync } from "react-dom";
 import { useChanged } from "@/hooks/useChanged";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import { CenterControls } from "./CenterControls";
@@ -202,7 +203,10 @@ export const Controls = ({
 	const trackPointer = (e: React.PointerEvent<HTMLElement>) => {
 		if (isOtherPointer(e)) return;
 		const { left, width } = e.currentTarget.getBoundingClientRect();
-		setPointerAt(Math.min(Math.max((e.clientX - left) / width, 0), 1));
+		const at = Math.min(Math.max((e.clientX - left) / width, 0), 1);
+		// React renders a pointer move in a later task, which can paint the
+		// time a frame behind the pointer. Rendering it now keeps them together.
+		flushSync(() => setPointerAt(at));
 	};
 	const leaveBar = (e: React.PointerEvent) => {
 		if (!isOtherPointer(e)) setPointerAt(null);
