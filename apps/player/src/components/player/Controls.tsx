@@ -27,6 +27,7 @@ import { describeSource } from "@/lib/sources";
 import type { PlayerState } from "@/lib/types";
 import type { SkipIntervals } from "@/lib/player-prefs";
 import { useState, useEffect, useRef } from "react";
+import { flushSync } from "react-dom";
 import { useChanged } from "@/hooks/useChanged";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import { CenterControls } from "./CenterControls";
@@ -132,6 +133,8 @@ export const Controls = ({
 	);
 	// Where the bar shows during a drag. Playback carries on underneath.
 	const [dragPos, setDragPos] = useState<number | null>(null);
+	// The pointer over the seek bar, as a fraction of its width.
+	const [pointerAt, setPointerAt] = useState<number | null>(null);
 	const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
 	const hasSourceChoice = !!onSelectSource && (sources?.length ?? 0) > 1;
 
@@ -154,10 +157,14 @@ export const Controls = ({
 	const hasDuration = state.duration > 0;
 	// A new stream starts from its own position, and a drag that began on the
 	// last one doesn't seek it. When the bar goes away mid-drag, its release
-	// never arrives.
+	// never arrives, and when it goes away under the pointer, neither does the
+	// pointer leaving it.
 	const urlChanged = useChanged(state.currentUrl);
 	const durationChanged = useChanged(hasDuration);
-	if (urlChanged || durationChanged) setDragPos(null);
+	if (urlChanged || durationChanged) {
+		setDragPos(null);
+		setPointerAt(null);
+	}
 	useEffect(() => {
 		const press = pressRef.current;
 		if (press) pressRef.current = hasDuration ? { ...press, to: null, dropped: true } : null;
@@ -185,6 +192,30 @@ export const Controls = ({
 	};
 
 	const shownPos = dragPos ?? state.position;
+
+	// The time over the pointer follows a mouse or trackpad over the bar, and a
+	// finger or pen dragging it. While one pointer presses the bar, others
+	// don't move it.
+	const isOtherPointer = (e: React.PointerEvent): boolean => {
+		const press = pressRef.current;
+		return press !== null && press.pointerId !== e.pointerId;
+	};
+	const trackPointer = (e: React.PointerEvent<HTMLElement>) => {
+		if (isOtherPointer(e)) return;
+		const { left, width } = e.currentTarget.getBoundingClientRect();
+		const at = Math.min(Math.max((e.clientX - left) / width, 0), 1);
+		// React renders a pointer move in a later task, which can paint the
+		// time a frame behind the pointer. Rendering it now keeps them together.
+		flushSync(() => setPointerAt(at));
+	};
+	const leaveBar = (e: React.PointerEvent) => {
+		if (!isOtherPointer(e)) setPointerAt(null);
+	};
+	// The slider maps the bar's width onto the duration, then rounds to its
+	// whole-second steps without passing the end, so this is where a press
+	// that far along the bar seeks to.
+	const timeAt = (fraction: number): number =>
+		Math.min(Math.round(fraction * state.duration), state.duration);
 
 	const paused = state.isPaused || !state.isPlaying;
 	const skipButtons = skip && onSkip ? { skip, onSkip } : null;
@@ -214,6 +245,9 @@ export const Controls = ({
 					<div className="mb-3">
 						{/* The release is handled here, after the slider's own handlers. */}
 						<div
+							className="@container relative"
+							onPointerMove={trackPointer}
+							onPointerLeave={leaveBar}
 							onPointerUp={(e) => endPress(e, true)}
 							// A canceled touch doesn't seek.
 							onPointerCancel={(e) => endPress(e, false)}
@@ -229,6 +263,22 @@ export const Controls = ({
 								aria-label="Seek"
 								aria-valuetext={`${formatTime(shownPos)} of ${formatTime(state.duration)}`}
 							/>
+							{pointerAt !== null && (
+								<div
+									aria-hidden
+									className="pointer-events-none absolute bottom-full mb-3 rounded bg-black/90 px-2 py-1 text-xs font-medium text-white tabular-nums"
+									// Centered over the pointer, and kept inside the bar
+									// near its ends. `cqw` is a hundredth of the bar's
+									// width, and a percentage in `translate` is the
+									// label's own width.
+									style={{
+										left: `${pointerAt * 100}%`,
+										translate: `clamp(${-pointerAt * 100}cqw, -50%, ${(1 - pointerAt) * 100}cqw - 100%)`,
+									}}
+								>
+									{formatTime(timeAt(pointerAt))}
+								</div>
+							)}
 						</div>
 						<div className="flex justify-between text-xs text-white/60 mt-1">
 							<span>{formatTime(shownPos)}</span>
