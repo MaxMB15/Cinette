@@ -104,6 +104,9 @@ export const SubtitlePicker = ({
 	const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const holdStartRef = useRef<number>(0);
 	const holdDirectionRef = useRef<1 | -1>(1);
+	// Whether the delay stepped since the last press, so the click after it knows.
+	// Stryker disable next-line BooleanLiteral: a click with a press count always follows a press, which sets it first.
+	const steppedRef = useRef(false);
 	// The hold timer outlives the render that started it, so it reads the delay
 	// from here. Each step writes an absolute value, so a stale one would repeat.
 	const delayRef = useRef(subtitleDelay);
@@ -156,12 +159,15 @@ export const SubtitlePicker = ({
 	}, []);
 
 	// A release outside the window, or switching apps mid-hold, sends the button
-	// no mouseup, so the window's mouseup and blur end the hold too.
+	// no pointerup, so the window's pointerup and blur end the hold too. The
+	// browser cancels a touch it takes over, such as to scroll the panel.
 	useEffect(() => {
-		window.addEventListener("mouseup", clearHoldTimer);
+		window.addEventListener("pointerup", clearHoldTimer);
+		window.addEventListener("pointercancel", clearHoldTimer);
 		window.addEventListener("blur", clearHoldTimer);
 		return () => {
-			window.removeEventListener("mouseup", clearHoldTimer);
+			window.removeEventListener("pointerup", clearHoldTimer);
+			window.removeEventListener("pointercancel", clearHoldTimer);
 			window.removeEventListener("blur", clearHoldTimer);
 			clearHoldTimer();
 		};
@@ -251,6 +257,7 @@ export const SubtitlePicker = ({
 	const stepDelay = (delta: number) => {
 		const next = Math.round((delayRef.current + delta) * 10) / 10;
 		delayRef.current = next;
+		steppedRef.current = true;
 		onDelayChange?.(next);
 	};
 
@@ -264,22 +271,27 @@ export const SubtitlePicker = ({
 		}, interval);
 	};
 
-	const startHold = (e: React.MouseEvent, direction: 1 | -1) => {
-		// Only the main button holds. A right click opens the menu and never sends mouseup.
+	// Pointer events, unlike mouse events, start the hold as soon as a finger
+	// touches the button. A finger that starts to scroll the panel can land on
+	// a button too, so a touch steps once held or when it lifts, not on the press.
+	const startHold = (e: React.PointerEvent, direction: 1 | -1) => {
+		// Only the main button holds. A right click opens the menu and never sends pointerup.
 		if (e.button !== 0) return;
 		clearHoldTimer();
 		holdDirectionRef.current = direction;
 		holdStartRef.current = Date.now();
-		stepDelay(direction * getDelayStep(0));
+		steppedRef.current = false;
+		if (e.pointerType === "mouse") stepDelay(direction * getDelayStep(0));
 		scheduleNextStep(0);
 	};
 
 	const stopHold = () => clearHoldTimer();
 
-	// A mouse press already stepped in startHold. A click with no pointer press
-	// behind it comes from Enter, Space or a screen reader, so step once here.
-	const stepOnKeyboardClick = (e: React.MouseEvent, direction: 1 | -1) => {
-		if (e.detail === 0) stepDelay(direction * getDelayStep(0));
+	// A mouse press steps in startHold, and so does a held finger. A tap steps
+	// here, as does a click with no press behind it, which comes from Enter,
+	// Space or a screen reader.
+	const stepOnClick = (e: React.MouseEvent, direction: 1 | -1) => {
+		if (e.detail === 0 || !steppedRef.current) stepDelay(direction * getDelayStep(0));
 	};
 
 	// ─── Helpers ────────────────────────────────────────────────────────────
@@ -368,10 +380,10 @@ export const SubtitlePicker = ({
 							<div className="flex items-center gap-2">
 								<button
 									className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-xs select-none"
-									onMouseDown={(e) => startHold(e, -1)}
-									onMouseUp={stopHold}
-									onMouseLeave={stopHold}
-									onClick={(e) => stepOnKeyboardClick(e, -1)}
+									onPointerDown={(e) => startHold(e, -1)}
+									onPointerUp={stopHold}
+									onPointerLeave={stopHold}
+									onClick={(e) => stepOnClick(e, -1)}
 									aria-label="Decrease subtitle delay"
 								>
 									−
@@ -381,17 +393,19 @@ export const SubtitlePicker = ({
 								</span>
 								<button
 									className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-xs select-none"
-									onMouseDown={(e) => startHold(e, 1)}
-									onMouseUp={stopHold}
-									onMouseLeave={stopHold}
-									onClick={(e) => stepOnKeyboardClick(e, 1)}
+									onPointerDown={(e) => startHold(e, 1)}
+									onPointerUp={stopHold}
+									onPointerLeave={stopHold}
+									onClick={(e) => stepOnClick(e, 1)}
 									aria-label="Increase subtitle delay"
 								>
 									+
 								</button>
 							</div>
 							<p className="text-[10px] text-white/30">
-								Hold for faster · ←/→ keys for ±0.1s
+								Hold for faster
+								{/* A phone or tablet usually has no arrow keys. */}
+								<span className="pointer-coarse:hidden"> · ←/→ keys for ±0.1s</span>
 							</p>
 						</div>
 
@@ -401,8 +415,11 @@ export const SubtitlePicker = ({
 								Position
 							</div>
 							<p className="text-[10px] text-white/40 leading-relaxed">
-								Drag the subtitle text on screen, or use ↑ ↓ ← → arrow keys to
-								reposition.
+								Drag the subtitle text on screen
+								<span className="pointer-coarse:hidden">
+									, or use ↑ ↓ ← → arrow keys to reposition
+								</span>
+								.
 							</p>
 						</div>
 					</div>
@@ -410,7 +427,14 @@ export const SubtitlePicker = ({
 			)}
 
 			{/* ── Main subtitle list panel ── */}
-			<div className={cn(panelClass, "w-80 max-h-[60vh] overflow-y-auto")}>
+			{/* A portrait phone has room for one panel, so the settings take the list's place. */}
+			<div
+				className={cn(
+					panelClass,
+					"w-80 max-h-[60vh] overflow-y-auto",
+					showSettings && "max-sm:hidden"
+				)}
+			>
 				{/* Header */}
 				<div className="flex items-center justify-between px-3 py-2.5 border-b border-white/10 sticky top-0 bg-black/90 backdrop-blur-xs z-10">
 					<span className="font-semibold text-xs tracking-wide uppercase text-white/70">

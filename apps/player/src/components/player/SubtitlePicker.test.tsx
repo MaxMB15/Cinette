@@ -8,6 +8,7 @@ import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { useSubtitleNudge } from "@/hooks/useSubtitleNudge";
 import { DEFAULT_SUBTITLE_POSITION } from "@/lib/subtitle-position";
 import { deferred } from "@/test/deferred";
+import { installPointerEvent } from "@/test/pointer-event";
 import type { SubtitleEntry, SubtitleSearchResult } from "@/lib/types";
 import { SubtitlePicker, type SubtitlePick } from "./SubtitlePicker";
 
@@ -114,6 +115,8 @@ const openSettings = () => {
 };
 
 describe("SubtitlePicker delay buttons", () => {
+	installPointerEvent();
+
 	beforeEach(() => {
 		vi.useFakeTimers();
 	});
@@ -128,7 +131,7 @@ describe("SubtitlePicker delay buttons", () => {
 		openSettings();
 		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
 
-		fireEvent.mouseDown(plus);
+		fireEvent.pointerDown(plus);
 		expect(screen.getByText("+0.1s")).toBeInTheDocument();
 
 		act(() => {
@@ -136,7 +139,7 @@ describe("SubtitlePicker delay buttons", () => {
 		});
 		expect(screen.getByText("+0.3s")).toBeInTheDocument();
 
-		fireEvent.mouseUp(plus);
+		fireEvent.pointerUp(plus);
 		act(() => {
 			vi.advanceTimersByTime(1000);
 		});
@@ -148,11 +151,11 @@ describe("SubtitlePicker delay buttons", () => {
 		openSettings();
 		const minus = screen.getByRole("button", { name: "Decrease subtitle delay" });
 
-		fireEvent.mouseDown(minus);
+		fireEvent.pointerDown(minus);
 		act(() => {
 			vi.advanceTimersByTime(200);
 		});
-		fireEvent.mouseLeave(minus);
+		fireEvent.pointerLeave(minus);
 		expect(screen.getByText("-0.2s")).toBeInTheDocument();
 	});
 
@@ -164,15 +167,22 @@ describe("SubtitlePicker delay buttons", () => {
 		// Enter and Space fire a click with no press count and no mousedown.
 		fireEvent.click(plus, { detail: 0 });
 		expect(screen.getByText("+0.1s")).toBeInTheDocument();
+
+		// A mouse press before it doesn't change that.
+		fireEvent.pointerDown(plus);
+		fireEvent.pointerUp(plus);
+		fireEvent.click(plus, { detail: 1 });
+		fireEvent.click(plus, { detail: 0 });
+		expect(screen.getByText("+0.3s")).toBeInTheDocument();
 	});
 
-	it("does not step twice for a mouse click", () => {
+	it("does not step twice for a click", () => {
 		render(<Harness />);
 		openSettings();
 		const minus = screen.getByRole("button", { name: "Decrease subtitle delay" });
 
-		fireEvent.mouseDown(minus);
-		fireEvent.mouseUp(minus);
+		fireEvent.pointerDown(minus);
+		fireEvent.pointerUp(minus);
 		fireEvent.click(minus, { detail: 1 });
 		expect(screen.getByText("-0.1s")).toBeInTheDocument();
 	});
@@ -182,7 +192,7 @@ describe("SubtitlePicker delay buttons", () => {
 		openSettings();
 		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
 
-		fireEvent.mouseDown(plus, { button: 2 });
+		fireEvent.pointerDown(plus, { button: 2 });
 		act(() => {
 			vi.advanceTimersByTime(1000);
 		});
@@ -194,11 +204,11 @@ describe("SubtitlePicker delay buttons", () => {
 		openSettings();
 		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
 
-		fireEvent.mouseDown(plus);
-		fireEvent.mouseDown(plus);
+		fireEvent.pointerDown(plus);
+		fireEvent.pointerDown(plus);
 		expect(screen.getByText("+0.2s")).toBeInTheDocument();
 
-		fireEvent.mouseUp(plus);
+		fireEvent.pointerUp(plus);
 		act(() => {
 			vi.advanceTimersByTime(1000);
 		});
@@ -210,12 +220,81 @@ describe("SubtitlePicker delay buttons", () => {
 		openSettings();
 		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
 
-		fireEvent.mouseDown(plus);
+		fireEvent.pointerDown(plus);
 		fireEvent.blur(window);
 		act(() => {
 			vi.advanceTimersByTime(1000);
 		});
 		expect(screen.getByText("+0.1s")).toBeInTheDocument();
+	});
+
+	it("steps once for a tap, when the finger lifts", () => {
+		render(<Harness />);
+		openSettings();
+		const minus = screen.getByRole("button", { name: "Decrease subtitle delay" });
+
+		fireEvent.pointerDown(minus, { pointerType: "touch" });
+		expect(screen.getByText("0.0s")).toBeInTheDocument();
+		fireEvent.pointerUp(minus, { pointerType: "touch" });
+		fireEvent.click(minus, { detail: 1 });
+		expect(screen.getByText("-0.1s")).toBeInTheDocument();
+	});
+
+	it("keeps stepping while a finger holds the button", () => {
+		render(<Harness />);
+		openSettings();
+		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
+
+		fireEvent.pointerDown(plus, { pointerType: "touch" });
+		act(() => {
+			vi.advanceTimersByTime(400);
+		});
+		expect(screen.getByText("+0.2s")).toBeInTheDocument();
+
+		// The click after a hold doesn't add a step.
+		fireEvent.pointerUp(plus, { pointerType: "touch" });
+		fireEvent.click(plus, { detail: 1 });
+		expect(screen.getByText("+0.2s")).toBeInTheDocument();
+	});
+
+	it("stops the hold on a release anywhere in the window", () => {
+		render(<Harness />);
+		openSettings();
+		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
+
+		fireEvent.pointerDown(plus);
+		fireEvent.pointerUp(window);
+		act(() => {
+			vi.advanceTimersByTime(1000);
+		});
+		expect(screen.getByText("+0.1s")).toBeInTheDocument();
+	});
+
+	it("doesn't step when the browser takes the touch over to scroll", () => {
+		render(<Harness />);
+		openSettings();
+		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
+
+		fireEvent.pointerDown(plus, { pointerType: "touch" });
+		fireEvent.pointerCancel(window);
+		act(() => {
+			vi.advanceTimersByTime(1000);
+		});
+		expect(screen.getByText("0.0s")).toBeInTheDocument();
+	});
+
+	it("stops listening for the end of a hold once it closes", () => {
+		const added = vi.spyOn(window, "addEventListener");
+		const removed = vi.spyOn(window, "removeEventListener");
+		const { unmount } = render(<Harness />);
+		const listener = added.mock.calls.find(([type]) => type === "pointerup")?.[1];
+		expect(listener).toBeTypeOf("function");
+		unmount();
+		for (const type of ["pointerup", "pointercancel", "blur"]) {
+			expect(removed).toHaveBeenCalledWith(type, listener);
+		}
+		added.mockRestore();
+		removed.mockRestore();
 	});
 });
 
