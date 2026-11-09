@@ -165,7 +165,7 @@ jobs:
       # share one. Only a run on dev saves it, from the app's first shard. The
       # app builds most of what the plugin and mvp-core build.
       - name: Rust cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
           shared-key: mutants-all
@@ -189,7 +189,7 @@ jobs:
           pnpm run build:desktop
 
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
 
