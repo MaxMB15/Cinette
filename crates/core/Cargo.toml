@@ -31,7 +31,7 @@ snow = { version = "0.10", default-features = false, features = ["use-chacha20po
 # The same hash and curve snow uses, for device ids, the verification code and
 # the public half of a saved key.
 blake2 = { version = "0.10", default-features = false }
-curve25519-dalek = { version = "4.1", default-features = false }
+curve25519-dalek = { version = "5.0", default-features = false }
 # The converter's unguessable paths.
 getrandom = "0.3"
 # Clears the logins of providers sent to another device from memory once
