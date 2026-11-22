@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated October 22, 2026. This policy covers Cinette, formerly called Max Video Player, on macOS, Linux, iPhone and iPad, and on Android, including Android TV and Fire TV.
+Last updated November 22, 2026. This policy covers Cinette, formerly called Max Video Player, on macOS, Linux, iPhone and iPad, and on Android, including Android TV and Fire TV.
 
 The developer of Cinette receives no data from the app. The app has no accounts, ads or analytics, and no server of its own. Your data stays on your device, unless you copy it to another of your devices yourself. The app sends data only to the services and devices listed under "Who the app talks to", and only when you use a feature that needs one. The one exception is remote control, which announces the device on your local network so your other devices running Cinette can find it, as "Remote control and transfers" explains.
 
@@ -43,7 +43,7 @@ The app connects to these, and only when it needs them:
 - An AirPlay TV you pick, on iPhone, iPad and Mac. The app gives the TV the stream's address, login included, so the TV plays it straight from your provider. When the TV can't play a stream as it is, the iPhone or Mac converts it and serves it to the TV over your local network instead. Then the TV gets only an address on your device, with a random part that changes each time, and only devices on that network can reach it.
 - A Google Cast device you pick, such as a Chromecast or a TV with Chromecast built in, on macOS and Linux. From the first time you open the player until the app quits, the app looks for Cast devices on your local network. When you cast, the app gives the device the stream's address, login included, so the device plays it straight from your provider. It also sends the name of what's playing, and the address of its logo when that address has no login in it. The device plays the stream in Google's Default Media Receiver, which it loads from Google. When the device can't play a stream as it is, or when you turn on Stream through this computer in Settings, the computer converts it and serves it to the device over your local network instead. Then the device gets only an address on the computer, with a random part that changes each time, and only that device can reach it.
 - Your other devices running Cinette on the same local network, for remote control and to copy your history or providers from one to another. "Remote control and transfers" says what they exchange.
-- GitHub, on macOS and Linux only, to check for a new version when the app starts and every two hours after that, and to download it.
+- GitHub, on macOS and Linux, and on Android in the app installed from GitHub's releases page, to check for a new version when the app starts and every two hours after that, and to download it. The app from Google Play or the Amazon Appstore leaves updates to that store.
 
 Each of these sees your IP address and what the app sends it, and handles that under its own terms and privacy policy:
 
