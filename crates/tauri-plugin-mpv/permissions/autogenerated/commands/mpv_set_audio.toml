@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-mpv-set-audio"
+description = "Enables the mpv_set_audio command without any pre-configured scope."
+commands.allow = ["mpv_set_audio"]
+
+[[permission]]
+identifier = "deny-mpv-set-audio"
+description = "Denies the mpv_set_audio command without any pre-configured scope."
+commands.deny = ["mpv_set_audio"]

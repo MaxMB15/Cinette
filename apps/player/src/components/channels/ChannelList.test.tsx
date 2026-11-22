@@ -16,6 +16,7 @@ import type {
 } from "@/lib/types";
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
 import { formatHHMM } from "@/lib/epg-window";
+import { recordingChannel } from "@/lib/recordings";
 import { makeChannel, makeDownload, makeHistoryEntry } from "@/test/channel-fixtures";
 import { deferred } from "@/test/deferred";
 import { answerFrom } from "@/test/guide-answers";
@@ -1919,16 +1920,37 @@ describe("ChannelList downloads tab", () => {
 				seriesChannelId: "xs-1",
 			}),
 		];
-		tauri.getXtreamSeriesEpisodes.mockRejectedValue(new Error("offline"));
+		const offline = new Error("offline");
+		tauri.getXtreamSeriesEpisodes.mockRejectedValue(offline);
 		tauri.getCachedSeriesEpisodes.mockResolvedValue([episodeOf("xs-1", 1)]);
 		await renderList();
 		await openTab("Downloads");
 
 		fireEvent.click(screen.getByText("Harbor Lights"));
 		const dialog = await screen.findByRole("dialog", { name: "Episodes of Harbor Lights" });
-		expect(warn).toHaveBeenCalled();
+		expect(warn).toHaveBeenCalledWith(
+			"[ChannelList] live episode fetch failed, using cache:",
+			offline
+		);
 		expect(tauri.getCachedSeriesEpisodes).toHaveBeenCalledWith("xs-1");
 		expect(within(dialog).getByText("Episode Harbor Lights S01E01")).toBeInTheDocument();
+	});
+
+	it("lists the episodes that only arrived after the list first showed", async () => {
+		state.channels = [hl1];
+		state.downloads = [
+			makeDownload({ id: "d2", channelId: "hl-1", kind: "episode", seriesChannelId: "hl-1" }),
+		];
+		const { rerender } = await renderList();
+		await openTab("Downloads");
+
+		state.channels = [hl1, hl2];
+		rerender(<ChannelList />);
+		await flush();
+		fireEvent.click(screen.getByText(hl1.name));
+
+		const dialog = await screen.findByRole("dialog", { name: "Episodes of Harbor Lights" });
+		expect(within(dialog).getAllByRole("button", { name: /^Episode/ })).toHaveLength(2);
 	});
 
 	it("uses the saved episode list when the live one comes back empty", async () => {
@@ -2038,6 +2060,73 @@ describe("ChannelList history tab", () => {
 		await playFromHistory(watched("sport", "Sport One", "live"));
 		expect(state.navigate).toHaveBeenCalledWith("/player", {
 			state: { url: sport.url, channelName: "Sport One", channel: sport },
+		});
+	});
+
+	it("plays a live channel that only arrived after the list first showed", async () => {
+		state.channels = [];
+		tauri.getWatchHistory.mockResolvedValue([watched("sport", "Sport One", "live")]);
+		saveBrowseTab("history");
+		const { rerender } = await renderList();
+
+		state.channels = [sport];
+		rerender(<ChannelList />);
+		await flush();
+		fireEvent.click(screen.getByRole("button", { name: /^Sport One/ }));
+		await flush();
+
+		expect(playedWith()?.[1].state.channel).toBe(sport);
+	});
+
+	describe("for a recording", () => {
+		const recorded = makeHistoryEntry({
+			channelId: "rec-1",
+			channelName: "Recorded Match",
+			contentType: "recording",
+		});
+		const recording = (overrides: Partial<DownloadRecord> = {}) =>
+			makeDownload({
+				id: "r1",
+				channelId: "rec-1",
+				kind: "recording",
+				title: "Recorded Match",
+				...overrides,
+			});
+
+		it("plays it from its file once it has finished", async () => {
+			const rec = recording();
+			state.downloads = [rec];
+			await playFromHistory(recorded);
+
+			const ch = recordingChannel(rec);
+			expect(state.navigate).toHaveBeenCalledExactlyOnceWith("/player", {
+				state: { url: ch.url, channelName: ch.name, channel: ch },
+			});
+		});
+
+		it("doesn't play it while it's still recording", async () => {
+			state.downloads = [recording({ status: "recording" })];
+			await playFromHistory(recorded);
+			expect(state.navigate).not.toHaveBeenCalled();
+		});
+
+		it("doesn't play it once the app no longer has it", async () => {
+			state.downloads = [];
+			await playFromHistory(recorded);
+			expect(state.navigate).not.toHaveBeenCalled();
+		});
+
+		it("doesn't play a finished download of another kind in its place", async () => {
+			state.downloads = [recording({ kind: "movie" })];
+			await playFromHistory(recorded);
+			expect(state.navigate).not.toHaveBeenCalled();
+		});
+
+		it("doesn't look for a live channel with the same id", async () => {
+			state.channels = [makeChannel({ id: "rec-1", contentType: "live" })];
+			state.downloads = [];
+			await playFromHistory(recorded);
+			expect(state.navigate).not.toHaveBeenCalled();
 		});
 	});
 });

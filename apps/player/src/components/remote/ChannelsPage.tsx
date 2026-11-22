@@ -4,15 +4,16 @@
 import { useNavigate } from "react-router";
 import { ChannelList } from "@/components/channels/ChannelList";
 import { RemoteCatalog } from "@/components/remote/RemoteCatalog";
+import { TvBrowse } from "@/components/tv/TvBrowse";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
 import { controlsOthers } from "@/lib/platform";
 
 /**
  * The channels page: this device's channels, or, while another device is
  * the one that plays, that device's catalog, since its ids and channels are
- * its own.
+ * its own. A TV doesn't control others and has its own screens.
  */
-export const ChannelsPage = () => (controlsOthers() ? <ChannelsOrRemote /> : <ChannelList />);
+export const ChannelsPage = () => (controlsOthers() ? <ChannelsOrRemote /> : <TvBrowse />);
 
 const ChannelsOrRemote = () => {
 	const { link } = useRemoteControl();

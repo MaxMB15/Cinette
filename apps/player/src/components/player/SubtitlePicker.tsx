@@ -3,65 +3,21 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Check, LoaderCircle, X, Settings, ArrowLeft } from "lucide-react";
-import {
-	searchSubtitles,
-	downloadSubtitle,
-	readSubtitleFile,
-	mpvSubAdd,
-	mpvSubRemove,
-} from "@/lib/tauri";
-import type { SubtitleEntry, SubtitleSearchResult, SubtitleCue } from "@/lib/types";
-import { parseSrt } from "@/lib/subtitle-parser";
+import type { SubtitleEntry } from "@/lib/types";
 import { getDelayStep, getDelayInterval } from "@/lib/subtitle-delay";
+import {
+	addSubtitleDelay,
+	FONT_FAMILIES,
+	formatSubtitleDelay,
+	stepSubtitleSize,
+} from "@/lib/subtitle-style";
 import { cn } from "@/lib/utils";
 import { hasOpenFocusTrap } from "@/hooks/useFocusTrap";
-
-// ─── Font family options ───────────────────────────────────────────────────
-const FONT_FAMILIES: { label: string; value: string }[] = [
-	{ label: "Default", value: "system-ui, sans-serif" },
-	{ label: "Sans-serif", value: "Arial, Helvetica, sans-serif" },
-	{ label: "Serif", value: "Georgia, 'Times New Roman', serif" },
-	{ label: "Monospace", value: "'Courier New', Courier, monospace" },
-];
+import { useSubtitleSearch, type SubtitleSearchOptions } from "@/hooks/useSubtitleSearch";
 
 // ─── Props ─────────────────────────────────────────────────────────────────
-/** A subtitle choice, which the next one, made by the viewer, replaces. */
-export interface SubtitlePick {
-	/** False once the viewer has picked again. */
-	latest: () => boolean;
-	/**
-	 * The stream to add the subtitles to. Null once the viewer has picked
-	 * again, the page has closed or the player has moved on to another item,
-	 * and while the player starts the item.
-	 */
-	stream: () => string | null;
-	/**
-	 * Called when mpv has added a track it draws for the stream `url`, and the
-	 * player has no stream for the pick any more, as when the page closed.
-	 * Keeps the pick for when the page opens again, and returns false when the
-	 * player can't keep it, as when it has moved on.
-	 */
-	keep: (url: string, entry: SubtitleEntry, rankInLanguage: number) => boolean;
-}
-
-interface SubtitlePickerProps {
-	imdbId: string;
-	season?: number;
-	episode?: number;
-	onClose: () => void;
-	/**
-	 * Called as the viewer picks a subtitle or None. A subtitle that finishes
-	 * downloading once its pick has no stream is dropped.
-	 */
-	startPick: () => SubtitlePick;
-	onSubtitleSelected?: (
-		fileId: number | null,
-		cues?: SubtitleCue[],
-		entry?: SubtitleEntry | null,
-		rankInLanguage?: number
-	) => void;
+interface SubtitlePickerProps extends SubtitleSearchOptions {
 	// State from VideoPlayer (persists across remounts)
-	currentSelectedId?: number | null;
 	currentSelectedEntry?: SubtitleEntry | null;
 	subtitleFontSize?: number;
 	subtitleFontFamily?: string;
@@ -89,13 +45,26 @@ export const SubtitlePicker = ({
 	onDelayChange,
 	onSettingsModeChange,
 }: SubtitlePickerProps) => {
+	const {
+		loading,
+		result,
+		grouped,
+		selectedFileId,
+		downloadingId,
+		error,
+		handleSelect,
+		handleNone,
+	} = useSubtitleSearch({
+		imdbId,
+		season,
+		episode,
+		onClose,
+		startPick,
+		onSubtitleSelected,
+		currentSelectedId,
+	});
+
 	// ── Local UI state ──────────────────────────────────────────────────────
-	const [loading, setLoading] = useState(true);
-	const [result, setResult] = useState<SubtitleSearchResult | null>(null);
-	// Initialise selectedFileId from the prop so checkmark is correct on reopen
-	const [selectedFileId, setSelectedFileId] = useState<number | null>(currentSelectedId);
-	const [downloadingId, setDownloadingId] = useState<number | null>(null);
-	const [error, setError] = useState<string | null>(null);
 	const [showSettings, setShowSettings] = useState(false);
 	const [delayHovered, setDelayHovered] = useState(false);
 
@@ -104,6 +73,9 @@ export const SubtitlePicker = ({
 	const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const holdStartRef = useRef<number>(0);
 	const holdDirectionRef = useRef<1 | -1>(1);
+	// Whether the delay stepped since the last press, so the click after it knows.
+	// Stryker disable next-line BooleanLiteral: a click with a press count always follows a press, which sets it first.
+	const steppedRef = useRef(false);
 	// The hold timer outlives the render that started it, so it reads the delay
 	// from here. Each step writes an absolute value, so a stale one would repeat.
 	const delayRef = useRef(subtitleDelay);
@@ -137,7 +109,7 @@ export const SubtitlePicker = ({
 			e.preventDefault();
 			e.stopPropagation();
 			const delta = e.key === "ArrowRight" ? 0.1 : -0.1;
-			onDelayChange?.(Math.round((subtitleDelay + delta) * 10) / 10);
+			onDelayChange?.(addSubtitleDelay(subtitleDelay, delta));
 		};
 		// The root element hears the key before the document, where the
 		// player's subtitle nudge listens, so stopping it here keeps the
@@ -156,101 +128,25 @@ export const SubtitlePicker = ({
 	}, []);
 
 	// A release outside the window, or switching apps mid-hold, sends the button
-	// no mouseup, so the window's mouseup and blur end the hold too.
+	// no pointerup, so the window's pointerup and blur end the hold too. The
+	// browser cancels a touch it takes over, such as to scroll the panel.
 	useEffect(() => {
-		window.addEventListener("mouseup", clearHoldTimer);
+		window.addEventListener("pointerup", clearHoldTimer);
+		window.addEventListener("pointercancel", clearHoldTimer);
 		window.addEventListener("blur", clearHoldTimer);
 		return () => {
-			window.removeEventListener("mouseup", clearHoldTimer);
+			window.removeEventListener("pointerup", clearHoldTimer);
+			window.removeEventListener("pointercancel", clearHoldTimer);
 			window.removeEventListener("blur", clearHoldTimer);
 			clearHoldTimer();
 		};
 	}, [clearHoldTimer]);
 
-	// ── Search on mount ─────────────────────────────────────────────────────
-	useEffect(() => {
-		searchSubtitles(imdbId, season, episode)
-			.then(setResult)
-			.catch((e) => setError(String(e)))
-			.finally(() => setLoading(false));
-	}, [imdbId, season, episode]);
-
-	// ── Group entries by language ────────────────────────────────────────────
-	const grouped = (result?.languages ?? []).map((lang) => ({
-		lang,
-		entries: result?.entries?.filter((e) => e.languageCode === lang) ?? [],
-	}));
-
-	// ─── Subtitle selection ─────────────────────────────────────────────────
-	const handleSelect = async (entry: SubtitleEntry) => {
-		if (downloadingId !== null) return;
-		const pick = startPick();
-		setDownloadingId(entry.fileId);
-		setError(null);
-		try {
-			const localPath = await downloadSubtitle(entry.fileId);
-			// mpv also reads a file that isn't UTF-8, and draws any file the
-			// overlay can't read. A file that neither can read is an error.
-			const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
-			// The new track takes the place of the one in use, and a failed add
-			// leaves the old one. Nothing is added once the viewer has picked
-			// again, the page has closed or the player has moved on. While the
-			// player starts the item, there's no stream to add it to yet.
-			const url = pick.stream();
-			if (url === null) {
-				if (pick.latest())
-					setError("The video was still starting. Pick the subtitle again.");
-				return;
-			}
-			// Compute rank within this language group for auto-selection on next episode.
-			const langGroup = grouped.find((g) => g.lang === entry.languageCode);
-			const rankInLanguage =
-				langGroup?.entries.findIndex((e) => e.fileId === entry.fileId) ?? 0;
-			const added = mpvSubAdd(localPath, cues.length > 0, url);
-			if (cues.length > 0) added.catch(() => {});
-			else {
-				await added;
-				// mpv draws this track itself. A newer pick replaces it on its
-				// own. mpv took the old track out for it, so when the page
-				// closed during the add, the player keeps this pick for when
-				// the page opens again. When it can't, or the item changed, the
-				// track comes out again, so it doesn't show over the subtitles
-				// the player keeps.
-				if (!pick.latest()) return;
-				if (pick.stream() === null) {
-					if (pick.keep(url, entry, rankInLanguage)) return;
-					await mpvSubRemove(-1, url).catch(() => {});
-					return;
-				}
-			}
-			setSelectedFileId(entry.fileId);
-			onSubtitleSelected?.(entry.fileId, cues, entry, rankInLanguage);
-			onClose();
-		} catch (e) {
-			console.error("[SubtitlePicker] subtitle load error:", e);
-			if (pick.latest()) setError("Failed to load subtitle. Try another.");
-		} finally {
-			if (pick.latest()) setDownloadingId(null);
-		}
-	};
-
-	// None also drops a subtitle still downloading, and frees the list to
-	// pick another. An add already on its way to mpv runs first, so the
-	// remove takes its track out too. None only shows once the search found
-	// subtitles, so a message then is about an earlier pick, and goes.
-	const handleNone = () => {
-		startPick();
-		setDownloadingId(null);
-		setSelectedFileId(null);
-		setError(null);
-		mpvSubRemove(-1).catch(() => {});
-		onSubtitleSelected?.(null, [], null, undefined);
-	};
-
 	// ─── Hold-to-accelerate delay buttons ──────────────────────────────────
 	const stepDelay = (delta: number) => {
-		const next = Math.round((delayRef.current + delta) * 10) / 10;
+		const next = addSubtitleDelay(delayRef.current, delta);
 		delayRef.current = next;
+		steppedRef.current = true;
 		onDelayChange?.(next);
 	};
 
@@ -264,28 +160,27 @@ export const SubtitlePicker = ({
 		}, interval);
 	};
 
-	const startHold = (e: React.MouseEvent, direction: 1 | -1) => {
-		// Only the main button holds. A right click opens the menu and never sends mouseup.
+	// Pointer events, unlike mouse events, start the hold as soon as a finger
+	// touches the button. A finger that starts to scroll the panel can land on
+	// a button too, so a touch steps once held or when it lifts, not on the press.
+	const startHold = (e: React.PointerEvent, direction: 1 | -1) => {
+		// Only the main button holds. A right click opens the menu and never sends pointerup.
 		if (e.button !== 0) return;
 		clearHoldTimer();
 		holdDirectionRef.current = direction;
 		holdStartRef.current = Date.now();
-		stepDelay(direction * getDelayStep(0));
+		steppedRef.current = false;
+		if (e.pointerType === "mouse") stepDelay(direction * getDelayStep(0));
 		scheduleNextStep(0);
 	};
 
 	const stopHold = () => clearHoldTimer();
 
-	// A mouse press already stepped in startHold. A click with no pointer press
-	// behind it comes from Enter, Space or a screen reader, so step once here.
-	const stepOnKeyboardClick = (e: React.MouseEvent, direction: 1 | -1) => {
-		if (e.detail === 0) stepDelay(direction * getDelayStep(0));
-	};
-
-	// ─── Helpers ────────────────────────────────────────────────────────────
-	const formatDelay = (d: number) => {
-		if (d === 0) return "0.0s";
-		return d > 0 ? `+${d.toFixed(1)}s` : `${d.toFixed(1)}s`;
+	// A mouse press steps in startHold, and so does a held finger. A tap steps
+	// here, as does a click with no press behind it, which comes from Enter,
+	// Space or a screen reader.
+	const stepOnClick = (e: React.MouseEvent, direction: 1 | -1) => {
+		if (e.detail === 0 || !steppedRef.current) stepDelay(direction * getDelayStep(0));
 	};
 
 	const panelClass =
@@ -333,7 +228,9 @@ export const SubtitlePicker = ({
 								<div className="flex items-center gap-2">
 									<button
 										onClick={() =>
-											onFontSizeChange?.(Math.max(12, subtitleFontSize - 2))
+											onFontSizeChange?.(
+												stepSubtitleSize(subtitleFontSize, -1)
+											)
 										}
 										className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white text-xs font-bold"
 										aria-label="Smaller subtitles"
@@ -345,7 +242,9 @@ export const SubtitlePicker = ({
 									</span>
 									<button
 										onClick={() =>
-											onFontSizeChange?.(Math.min(40, subtitleFontSize + 2))
+											onFontSizeChange?.(
+												stepSubtitleSize(subtitleFontSize, 1)
+											)
 										}
 										className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white text-sm font-bold"
 										aria-label="Larger subtitles"
@@ -368,30 +267,32 @@ export const SubtitlePicker = ({
 							<div className="flex items-center gap-2">
 								<button
 									className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-xs select-none"
-									onMouseDown={(e) => startHold(e, -1)}
-									onMouseUp={stopHold}
-									onMouseLeave={stopHold}
-									onClick={(e) => stepOnKeyboardClick(e, -1)}
+									onPointerDown={(e) => startHold(e, -1)}
+									onPointerUp={stopHold}
+									onPointerLeave={stopHold}
+									onClick={(e) => stepOnClick(e, -1)}
 									aria-label="Decrease subtitle delay"
 								>
 									−
 								</button>
 								<span className="flex-1 text-center text-white/80 text-xs tabular-nums">
-									{formatDelay(subtitleDelay)}
+									{formatSubtitleDelay(subtitleDelay)}
 								</span>
 								<button
 									className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-xs select-none"
-									onMouseDown={(e) => startHold(e, 1)}
-									onMouseUp={stopHold}
-									onMouseLeave={stopHold}
-									onClick={(e) => stepOnKeyboardClick(e, 1)}
+									onPointerDown={(e) => startHold(e, 1)}
+									onPointerUp={stopHold}
+									onPointerLeave={stopHold}
+									onClick={(e) => stepOnClick(e, 1)}
 									aria-label="Increase subtitle delay"
 								>
 									+
 								</button>
 							</div>
 							<p className="text-[10px] text-white/30">
-								Hold for faster · ←/→ keys for ±0.1s
+								Hold for faster
+								{/* A phone or tablet usually has no arrow keys. */}
+								<span className="pointer-coarse:hidden"> · ←/→ keys for ±0.1s</span>
 							</p>
 						</div>
 
@@ -401,8 +302,11 @@ export const SubtitlePicker = ({
 								Position
 							</div>
 							<p className="text-[10px] text-white/40 leading-relaxed">
-								Drag the subtitle text on screen, or use ↑ ↓ ← → arrow keys to
-								reposition.
+								Drag the subtitle text on screen
+								<span className="pointer-coarse:hidden">
+									, or use ↑ ↓ ← → arrow keys to reposition
+								</span>
+								.
 							</p>
 						</div>
 					</div>
@@ -410,7 +314,14 @@ export const SubtitlePicker = ({
 			)}
 
 			{/* ── Main subtitle list panel ── */}
-			<div className={cn(panelClass, "w-80 max-h-[60vh] overflow-y-auto")}>
+			{/* A portrait phone has room for one panel, so the settings take the list's place. */}
+			<div
+				className={cn(
+					panelClass,
+					"w-80 max-h-[60vh] overflow-y-auto",
+					showSettings && "max-sm:hidden"
+				)}
+			>
 				{/* Header */}
 				<div className="flex items-center justify-between px-3 py-2.5 border-b border-white/10 sticky top-0 bg-black/90 backdrop-blur-xs z-10">
 					<span className="font-semibold text-xs tracking-wide uppercase text-white/70">

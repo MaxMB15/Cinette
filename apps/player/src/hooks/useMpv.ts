@@ -13,7 +13,12 @@ import {
 	mpvSetVolume,
 	mpvGetState,
 } from "@/lib/tauri";
-import { readHwdecEnabled, readVolumePreference, writeVolumePreference } from "@/lib/player-prefs";
+import {
+	readBackBufferMib,
+	readHwdecEnabled,
+	readVolumePreference,
+	writeVolumePreference,
+} from "@/lib/player-prefs";
 import { isOpeningStream } from "@/lib/stream-opening";
 import { createChangeTracker } from "@/lib/change-tracker";
 import { useLatestRef } from "@/hooks/useLatestRef";
@@ -30,6 +35,7 @@ const DEFAULT_STATE: PolledMpvState = {
 	reachedEnd: false,
 	waiting: false,
 	fallbackActive: false,
+	buffered: null,
 	positionAt: 0,
 };
 
@@ -141,6 +147,7 @@ export const useMpv = () => {
 						fallbackActive: loads.isStale(loadMark)
 							? prev.fallbackActive
 							: s.fallbackActive,
+						buffered: s.buffered ?? null,
 					};
 				});
 			})
@@ -378,9 +385,16 @@ export const useMpv = () => {
 				reachedEnd: false,
 				waiting: false,
 				fallbackActive: false,
+				buffered: null,
 			}));
 			try {
-				await mpvLoad(url, startPos, readHwdecEnabled(), keepSubtitles);
+				await mpvLoad(
+					url,
+					startPos,
+					readHwdecEnabled(),
+					keepSubtitles,
+					readBackBufferMib()
+				);
 				const userVolume = userVolumeRef.current;
 				if (userVolume !== 100) {
 					try {

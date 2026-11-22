@@ -82,3 +82,38 @@ export const findEpisode = (episodes: Channel[], id: string, name: string): Chan
 	if (!merged) return exact ?? null;
 	return exact ? withSource(merged, exact.url) : merged;
 };
+
+/**
+ * What follows the show and the S01E01 in an episode's name. Xtream servers often
+ * repeat both in the title, as in "Show S01E03 Show - S01E03 - Title", so this
+ * goes by the last code.
+ */
+const afterCode = (name: string): string =>
+	name.replace(/^.*\bS\d{1,3}\s*E\d+[\s:._-]*/i, "").trim();
+
+/** An episode's name without the show and the S01E01 before it. */
+export const episodeTitle = (name: string): string => afterCode(name) || name;
+
+/** The episode's own title, or "" when it has none past a name like "Episode 3". */
+const ownTitle = (name: string): string => {
+	const title = afterCode(name);
+	return /^ep(isode)?\s*\d+$/i.test(title) ? "" : title;
+};
+
+/** An episode's row in a list: "3 Title", or "Episode 3" when it has no title of its own. */
+export const episodeLabel = ({ name, episode }: Pick<Channel, "name" | "episode">): string => {
+	if (episode == null) return afterCode(name) || name;
+	const title = ownTitle(name);
+	return title ? `${episode} ${title}` : `Episode ${episode}`;
+};
+
+/**
+ * An episode's heading: "S2 E5 · Title", or "S2 E5" when it has no title of
+ * its own. Without the numbers, it's the title, or the whole name.
+ */
+export const episodeHeading = (name: string, season?: number, episode?: number): string => {
+	if (season == null || episode == null) return afterCode(name) || name;
+	const title = ownTitle(name);
+	const code = `S${season} E${episode}`;
+	return title ? `${code} \u00b7 ${title}` : code;
+};

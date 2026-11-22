@@ -19,6 +19,7 @@ const mpvState = (over: Partial<PolledMpvState> = {}): PolledMpvState => ({
 	reachedEnd: false,
 	waiting: false,
 	fallbackActive: false,
+	buffered: null,
 	positionAt: 0,
 	...over,
 });

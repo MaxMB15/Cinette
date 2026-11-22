@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render } from "@testing-library/react";
 import { useRef } from "react";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
-import { keepsArrow, moveFocus } from "./tv-focus";
+import { focusTvFirstColumn, focusTvStart, keepsArrow, moveFocus } from "./tv-focus";
 
 /** Gives `el` a box, since jsdom lays nothing out. */
 const place = (el: HTMLElement, left: number, top: number, width = 100, height = 40) => {
@@ -21,6 +21,15 @@ const button = (name: string, left: number, top: number, parent: HTMLElement = d
 	return el;
 };
 
+/** A list on screen, which the D-pad sees whole, whichever row of it has the focus. */
+const list = (left: number, top: number, width: number, height: number) => {
+	const el = document.createElement("div");
+	el.setAttribute("data-tv-list", "");
+	document.body.appendChild(el);
+	place(el, left, top, width, height);
+	return el;
+};
+
 const input = (type: string) => {
 	const el = document.createElement("input");
 	el.type = type;
@@ -29,11 +38,46 @@ const input = (type: string) => {
 
 describe("keepsArrow", () => {
 	it("leaves Left and Right to a text field's caret, and Up and Down to the D-pad", () => {
-		for (const type of ["text", "search", "url", "email", "password", "number", "tel"]) {
+		for (const type of ["text", "search", "url", "password", "tel"]) {
+			const field = input(type);
+			field.value = "abc";
+			field.setSelectionRange(1, 1);
+			expect(keepsArrow(field, "left")).toBe(true);
+			expect(keepsArrow(field, "right")).toBe(true);
+			expect(keepsArrow(field, "up")).toBe(false);
+			expect(keepsArrow(field, "down")).toBe(false);
+		}
+	});
+
+	it("gives the D-pad the press once the caret can't go further that way", () => {
+		const field = input("search");
+		expect(keepsArrow(field, "left")).toBe(false);
+		expect(keepsArrow(field, "right")).toBe(false);
+		field.value = "abc";
+		field.setSelectionRange(0, 0);
+		expect(keepsArrow(field, "left")).toBe(false);
+		expect(keepsArrow(field, "right")).toBe(true);
+		field.setSelectionRange(3, 3);
+		expect(keepsArrow(field, "left")).toBe(true);
+		expect(keepsArrow(field, "right")).toBe(false);
+	});
+
+	it("looks at the end of what's selected when the press goes right", () => {
+		const field = input("search");
+		field.value = "abc";
+		field.setSelectionRange(1, 3);
+		expect(keepsArrow(field, "right")).toBe(false);
+		expect(keepsArrow(field, "left")).toBe(true);
+		field.setSelectionRange(0, 2);
+		expect(keepsArrow(field, "right")).toBe(true);
+		expect(keepsArrow(field, "left")).toBe(false);
+	});
+
+	it("leaves Left and Right to a field that doesn't say where its caret is", () => {
+		for (const type of ["email", "number"]) {
 			expect(keepsArrow(input(type), "left")).toBe(true);
 			expect(keepsArrow(input(type), "right")).toBe(true);
 			expect(keepsArrow(input(type), "up")).toBe(false);
-			expect(keepsArrow(input(type), "down")).toBe(false);
 		}
 	});
 
@@ -115,6 +159,20 @@ describe("moveFocus", () => {
 
 		expect(moveFocus("up")).toBe(true);
 		expect(document.activeElement).toBe(a);
+	});
+
+	it("passes over a first control that isn't shown when nothing has focus", () => {
+		place(button("hidden", 0, 0), 0, 0, 0, 0);
+		const shown = button("shown", 0, 100);
+
+		expect(moveFocus("down")).toBe(true);
+		expect(document.activeElement).toBe(shown);
+	});
+
+	it("gives false on a page with nothing shown to focus", () => {
+		place(button("hidden", 0, 0), 0, 0, 0, 0);
+		expect(moveFocus("down")).toBe(false);
+		expect(document.activeElement).toBe(document.body);
 	});
 
 	it("gives false on a page with nothing to focus", () => {
@@ -236,5 +294,193 @@ describe("moveFocus", () => {
 
 		expect(moveFocus("up")).toBe(true);
 		expect(document.activeElement).toBe(getByText("only"));
+	});
+
+	it("starts at the row the screen marks when nothing has focus", () => {
+		button("first", 0, 0);
+		const marked = button("marked", 0, 50);
+		marked.setAttribute("data-tv-start", "");
+
+		expect(moveFocus("up")).toBe(true);
+		expect(document.activeElement).toBe(marked);
+	});
+
+	it("starts at the open modal's marked row, not the page's, when nothing has focus", () => {
+		const behind = button("behind", 0, 0);
+		behind.setAttribute("data-tv-start", "");
+		const Modal = () => {
+			const ref = useRef<HTMLDivElement>(null);
+			useFocusTrap(ref);
+			return (
+				<div ref={ref}>
+					<button>first</button>
+					<button data-tv-start="">marked</button>
+				</div>
+			);
+		};
+		const { getByText } = render(<Modal />);
+		place(getByText("first"), 0, 0);
+		place(getByText("marked"), 0, 50);
+		getByText("first").blur();
+
+		expect(moveFocus("down")).toBe(true);
+		expect(document.activeElement).toBe(getByText("marked"));
+	});
+
+	it("reaches a list beside the focus wherever the list's active row is", () => {
+		const side = button("side", 0, 0);
+		const row = button("row", 200, 300, list(200, 0, 100, 400));
+		button("further", 400, 0);
+		side.focus();
+
+		expect(moveFocus("right")).toBe(true);
+		expect(document.activeElement).toBe(row);
+	});
+
+	it("leaves a list from the whole list, wherever its active row is", () => {
+		const row = button("row", 0, 300, list(0, 0, 100, 400));
+		const level = button("level with the list", 200, 0);
+		button("level with the row", 400, 300);
+		row.focus();
+
+		expect(moveFocus("right")).toBe(true);
+		expect(document.activeElement).toBe(level);
+	});
+
+	it("moves into a list's row that holds controls before it leaves the list", () => {
+		const row = document.createElement("div");
+		row.tabIndex = 0;
+		list(0, 0, 100, 400).appendChild(row);
+		place(row, 0, 300);
+		const inside = button("inside", 50, 300, row);
+		button("beside", 200, 300);
+		row.focus();
+
+		expect(moveFocus("right")).toBe(true);
+		expect(document.activeElement).toBe(inside);
+	});
+});
+
+describe("focusTvStart", () => {
+	afterEach(() => {
+		document.body.innerHTML = "";
+	});
+
+	it("focuses the row the screen marks", () => {
+		button("first", 0, 0);
+		const marked = button("marked", 0, 50);
+		marked.setAttribute("data-tv-start", "");
+
+		expect(focusTvStart(document)).toBe(true);
+		expect(document.activeElement).toBe(marked);
+	});
+
+	it("focuses the first control of a screen with no mark", () => {
+		const first = button("first", 0, 0);
+		button("second", 0, 50);
+
+		expect(focusTvStart(document)).toBe(true);
+		expect(document.activeElement).toBe(first);
+	});
+
+	it("looks only inside what it's given", () => {
+		button("outside", 0, 0);
+		const scope = document.createElement("div");
+		document.body.appendChild(scope);
+		const inside = button("inside", 0, 50, scope);
+
+		expect(focusTvStart(scope)).toBe(true);
+		expect(document.activeElement).toBe(inside);
+	});
+
+	it("leaves the screen where it is, so its first scroll can't jump", () => {
+		const first = button("first", 0, 0);
+		const focus = vi.spyOn(first, "focus");
+
+		focusTvStart(document);
+
+		expect(focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+	});
+
+	it("says so when nothing can take the focus", () => {
+		expect(focusTvStart(document)).toBe(false);
+		expect(document.activeElement).toBe(document.body);
+	});
+});
+
+describe("focusTvFirstColumn", () => {
+	/** A page beside the rail, which ends at 80. */
+	const page = () => {
+		const el = document.createElement("div");
+		document.body.appendChild(el);
+		place(el, 80, 0, 1200, 720);
+		return el;
+	};
+
+	/** A list in `scope` with one row the D-pad can reach. */
+	const column = (scope: HTMLElement, left: number, name: string) => {
+		const el = list(left, 0, 200, 600);
+		scope.appendChild(el);
+		return button(name, left, 300, el);
+	};
+
+	afterEach(() => {
+		document.body.innerHTML = "";
+	});
+
+	it("goes to the column beside the rail, past a start further right", () => {
+		const scope = page();
+		const group = column(scope, 100, "group");
+		column(scope, 400, "channel").setAttribute("data-tv-start", "");
+
+		expect(focusTvFirstColumn(scope)).toBe(true);
+		expect(document.activeElement).toBe(group);
+	});
+
+	it("takes the column's start over a control above it", () => {
+		const scope = page();
+		button("field", 100, 0, scope);
+		const key = button("key", 100, 50, scope);
+		key.setAttribute("data-tv-start", "");
+
+		focusTvFirstColumn(scope);
+
+		expect(document.activeElement).toBe(key);
+	});
+
+	it("takes the column's first control when it has no start", () => {
+		const scope = page();
+		const first = button("first", 100, 50, scope);
+		button("second", 100, 0, scope);
+
+		focusTvFirstColumn(scope);
+
+		expect(document.activeElement).toBe(first);
+	});
+
+	it("passes over a control that isn't laid out", () => {
+		const scope = page();
+		button("hidden", 0, 0, scope);
+		const shown = button("shown", 300, 0, scope);
+
+		focusTvFirstColumn(scope);
+
+		expect(document.activeElement).toBe(shown);
+	});
+
+	it("looks only inside what it's given, and leaves the screen where it is", () => {
+		button("outside", 100, 0);
+		const scope = page();
+		const inside = button("inside", 300, 0, scope);
+		const focus = vi.spyOn(inside, "focus");
+
+		focusTvFirstColumn(scope);
+
+		expect(focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+	});
+
+	it("says so when nothing can take the focus", () => {
+		expect(focusTvFirstColumn(page())).toBe(false);
+		expect(document.activeElement).toBe(document.body);
 	});
 });

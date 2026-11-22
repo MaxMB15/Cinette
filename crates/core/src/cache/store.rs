@@ -10,7 +10,7 @@ use crate::iptv::skip_segments::SourceTimes;
 use crate::iptv::whatson::WhatsonData;
 use crate::iptv::xtream;
 use crate::models::channel::Channel;
-use crate::models::playlist::{Provider, ProviderType};
+use crate::models::playlist::{ContentCounts, Provider, ProviderType};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Result as SqlResult};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -1030,6 +1030,26 @@ impl CacheStore {
         })?.collect::<SqlResult<Vec<_>>>()?;
         enrich_stale_series(&mut channels);
         Ok(channels)
+    }
+
+    /// How many live channels, movies and shows a provider has. A show counts
+    /// once, however many of its episodes the playlist lists.
+    pub fn content_counts(&self, provider_id: &str) -> Result<ContentCounts, CacheError> {
+        let counts = self.conn.query_row(
+            "SELECT COUNT(*) FILTER (WHERE content_type = 'live'),
+                    COUNT(*) FILTER (WHERE content_type = 'movie'),
+                    COUNT(DISTINCT COALESCE(series_title, name)) FILTER (WHERE content_type = 'series')
+             FROM channels WHERE provider_id = ?1",
+            params![provider_id],
+            |row| {
+                Ok(ContentCounts {
+                    live: row.get(0)?,
+                    movies: row.get(1)?,
+                    series: row.get(2)?,
+                })
+            },
+        )?;
+        Ok(counts)
     }
 
     pub fn get_all_channels(&self) -> Result<Vec<Channel>, CacheError> {
@@ -2447,6 +2467,39 @@ mod tests {
         let p1_channels = store.get_channels("p1").unwrap();
         assert_eq!(p1_channels.len(), 1);
         assert_eq!(p1_channels[0].id, "ch1");
+    }
+
+    #[test]
+    fn content_counts_counts_each_kind_and_each_show_once() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "P1")).unwrap();
+        store.upsert_provider(&make_provider("p2", "P2")).unwrap();
+        let of_kind = |id: &str, name: &str, kind: &str, show: Option<&str>| Channel {
+            content_type: kind.into(),
+            series_title: show.map(Into::into),
+            ..make_channel(id, name, "G")
+        };
+        store
+            .save_channels(
+                "p1",
+                &[
+                    of_kind("live1", "News", "live", None),
+                    of_kind("live2", "Sport", "live", None),
+                    of_kind("live3", "Music", "live", None),
+                    of_kind("film1", "Sintel", "movie", None),
+                    of_kind("film2", "Tears of Steel", "movie", None),
+                    of_kind("ep1", "Ice Road S01E01", "series", Some("Ice Road")),
+                    of_kind("ep2", "Ice Road S01E02", "series", Some("Ice Road")),
+                    of_kind("show", "Thaw", "series", None),
+                    of_kind("rec", "News 18:00", "recording", None),
+                ],
+            )
+            .unwrap();
+        store.save_channels("p2", &[of_kind("other", "Other", "live", None)]).unwrap();
+
+        let counts = store.content_counts("p1").unwrap();
+        assert_eq!(counts, ContentCounts { live: 3, movies: 2, series: 2 });
+        assert_eq!(store.content_counts("none").unwrap(), ContentCounts::default());
     }
 
     #[test]

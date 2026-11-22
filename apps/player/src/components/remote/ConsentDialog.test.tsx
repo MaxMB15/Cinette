@@ -98,6 +98,20 @@ describe("ConsentDialog", () => {
 		);
 	});
 
+	it("answers nothing when a stray OK lands right as it opens", async () => {
+		await shown();
+		ask();
+
+		const focused = screen.getByRole("heading", { name: QUESTION });
+		expect(focused).toHaveFocus();
+		fireEvent.keyDown(focused, { key: "Enter" });
+		fireEvent.keyUp(focused, { key: "Enter" });
+		fireEvent.click(focused);
+
+		expect(remoteAnswerConsent).not.toHaveBeenCalled();
+		expect(screen.getByRole("heading", { name: QUESTION })).toBeInTheDocument();
+	});
+
 	it("asks about a transfer from a device in control, with the same code", async () => {
 		await shown();
 		ask(4, 30_000, { kind: "providers", providers: [{ name: "Home", kind: "xtream" }] });

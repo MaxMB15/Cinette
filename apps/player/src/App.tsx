@@ -2,13 +2,14 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState } from "react";
-import { Routes, Route } from "react-router";
+import { Navigate, Routes, Route } from "react-router";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { AppLayout } from "./components/AppLayout";
 import { PlayerView } from "./components/player/VideoPlayer";
 import { ChannelsPage } from "./components/remote/ChannelsPage";
 import { PlaylistManager } from "./components/playlist/PlaylistManager";
 import { Settings } from "./components/settings/Settings";
+import { TvSettings } from "./components/tv/TvSettings";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { SplashScreen } from "./components/SplashScreen";
 import { DonationPopup } from "./components/DonationPopup";
@@ -86,8 +87,26 @@ const AppRoutes = ({ updateState }: AppRoutesProps) => {
 				<Route element={<AppLayout />}>
 					<Route path="/" element={<ChannelsPage />} />
 					<Route path="/player" element={<PlayerView />} />
-					<Route path="/playlists" element={<PlaylistManager />} />
-					<Route path="/settings" element={<Settings updateState={updateState} />} />
+					<Route
+						path="/playlists"
+						element={
+							controlsOthers() ? (
+								<PlaylistManager />
+							) : (
+								<Navigate to="/settings" replace />
+							)
+						}
+					/>
+					<Route
+						path="/settings"
+						element={
+							controlsOthers() ? (
+								<Settings updateState={updateState} />
+							) : (
+								<TvSettings />
+							)
+						}
+					/>
 				</Route>
 			</Routes>
 

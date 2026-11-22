@@ -19,6 +19,9 @@ Allows all MPV player and AirPlay commands
 - `allow-mpv-set-sub-delay`
 - `allow-mpv-set-media-info`
 - `allow-mpv-set-skip-intervals`
+- `allow-mpv-get-tracks`
+- `allow-mpv-set-audio`
+- `allow-mpv-set-speed`
 - `allow-airplay-set-detection`
 - `allow-airplay-choose`
 - `allow-airplay-get-route`
@@ -354,6 +357,32 @@ Denies the mpv_get_state command without any pre-configured scope.
 <tr>
 <td>
 
+`mpv:allow-mpv-get-tracks`
+
+</td>
+<td>
+
+Enables the mpv_get_tracks command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-mpv-get-tracks`
+
+</td>
+<td>
+
+Denies the mpv_get_tracks command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `mpv:allow-mpv-load`
 
 </td>
@@ -458,6 +487,32 @@ Denies the mpv_seek command without any pre-configured scope.
 <tr>
 <td>
 
+`mpv:allow-mpv-set-audio`
+
+</td>
+<td>
+
+Enables the mpv_set_audio command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-mpv-set-audio`
+
+</td>
+<td>
+
+Denies the mpv_set_audio command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `mpv:allow-mpv-set-bounds`
 
 </td>
@@ -529,6 +584,32 @@ Enables the mpv_set_skip_intervals command without any pre-configured scope.
 <td>
 
 Denies the mpv_set_skip_intervals command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-mpv-set-speed`
+
+</td>
+<td>
+
+Enables the mpv_set_speed command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-mpv-set-speed`
+
+</td>
+<td>
+
+Denies the mpv_set_speed command without any pre-configured scope.
 
 </td>
 </tr>

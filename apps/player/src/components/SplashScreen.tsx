@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { useEffect, useRef, useState } from "react";
 import { Download, RefreshCw } from "lucide-react";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 import type { SplashScreenState, SplashStep, StepStatus } from "@/hooks/useSplashScreen";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import { openUrl } from "@/lib/openUrl";
-import { isMobilePlatform } from "@/lib/platform";
+import { getPlatform, isMobilePlatform } from "@/lib/platform";
 // The bundled app icon itself, so the start screen can never drift from it.
 import appIcon from "../../src-tauri/icons/128x128@2x.png";
 import bmcQr from "@/assets/bmc-qr.png";
 
 const BMC_URL = "https://buymeacoffee.com/MaxMB15";
+
+/** The least a TV shows this screen, so the QR code doesn't flash past on a quick start. */
+export const TV_SPLASH_HOLD_MS = 4000;
 
 interface SplashScreenProps {
 	splash: SplashScreenState;
@@ -19,12 +24,36 @@ interface SplashScreenProps {
 
 export const SplashScreen = ({ splash, updateState }: SplashScreenProps) => {
 	const { steps, allDone, progress, update, hasProviders, dismiss } = splash;
-	// App Store rules don't allow a donation link, so the mobile apps leave out
-	// the support panel.
-	const showSupport = !isMobilePlatform();
+	const tv = getPlatform() === "tv";
+	// App Store rules don't allow a donation link, so the phone and tablet apps
+	// leave out the support panel.
+	const showSupport = tv || !isMobilePlatform();
+	const trapRef = useRef<HTMLDivElement>(null);
+	// A TV has nothing to do here and every press is a chore, so it moves on by
+	// itself. The app store updates it, so there's no update to offer. The trap
+	// keeps the remote's presses from reaching the page behind.
+	useFocusTrap(trapRef);
+	const [held, setHeld] = useState(false);
+	useEffect(
+		() => {
+			if (!tv) return;
+			const timer = setTimeout(() => setHeld(true), TV_SPLASH_HOLD_MS);
+			return () => clearTimeout(timer);
+		},
+		// Stryker disable next-line ArrayDeclaration: the platform never changes, so the effect runs once with or without it.
+		[tv]
+	);
+	const moveOn = tv && allDone && held;
+	useEffect(() => {
+		if (moveOn) dismiss();
+	}, [moveOn, dismiss]);
 
 	return (
-		<div className="fixed inset-0 z-50 flex bg-background pt-safe pb-safe pl-safe pr-safe">
+		<div
+			ref={tv ? trapRef : undefined}
+			tabIndex={tv ? -1 : undefined}
+			className="fixed inset-0 z-50 flex bg-background pt-safe pb-safe pl-safe pr-safe focus:outline-hidden"
+		>
 			<LeftPanel
 				steps={steps}
 				allDone={allDone}
@@ -34,7 +63,7 @@ export const SplashScreen = ({ splash, updateState }: SplashScreenProps) => {
 				onDismiss={dismiss}
 				updateState={updateState}
 			/>
-			{showSupport && <RightPanel />}
+			{showSupport && <RightPanel pressable={!tv} />}
 		</div>
 	);
 };
@@ -81,8 +110,9 @@ const LeftPanel = ({
 
 			{/* Content area */}
 			<div className="w-full max-w-sm flex flex-col gap-6">
+				{/* A TV moves on by itself, to a page that says what to do next. */}
 				{!hasProviders ? (
-					<div className="text-center space-y-2">
+					<div className="text-center space-y-2 tv:hidden">
 						<p className="text-base font-semibold">Welcome to Cinette</p>
 						<p className="text-sm text-muted-foreground leading-relaxed">
 							Add a playlist in the Playlists tab to get started.
@@ -140,7 +170,7 @@ const LeftPanel = ({
 				)}
 
 				{/* Action row */}
-				<div className="flex items-center justify-center gap-3 pt-2">
+				<div className="flex items-center justify-center gap-3 pt-2 tv:hidden">
 					{allDone && update ? (
 						<>
 							<button
@@ -245,7 +275,11 @@ const StepIcon = ({ status }: { status: StepStatus }) => {
 
 // ── Right panel ───────────────────────────────────────────────────────────
 
-const RightPanel = () => {
+/**
+ * On a TV the panel looks the same but has nothing to press: a TV may have no
+ * browser to open, and this screen moves on by itself, so the QR code is the way in.
+ */
+const RightPanel = ({ pressable }: { pressable: boolean }) => {
 	return (
 		<div className="w-80 flex flex-col items-center justify-center gap-5 px-8 bg-card border-l border-border">
 			{/* Header */}
@@ -258,6 +292,7 @@ const RightPanel = () => {
 			{/* QR code */}
 			<button
 				type="button"
+				disabled={!pressable}
 				onClick={() => openUrl(BMC_URL)}
 				className="w-40 rounded-xl overflow-hidden border border-border hover:border-primary transition-colors"
 				aria-label="Scan to donate via Buy Me a Coffee"
@@ -268,6 +303,7 @@ const RightPanel = () => {
 			{/* Support button */}
 			<button
 				type="button"
+				disabled={!pressable}
 				onClick={() => openUrl(BMC_URL)}
 				className="w-full bg-[#5F7FFF] hover:bg-[#4a6cf0] text-white font-semibold py-3 rounded-xl transition-colors text-sm"
 			>

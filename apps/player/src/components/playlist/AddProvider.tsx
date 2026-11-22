@@ -24,6 +24,10 @@ import { XtreamFields } from "./XtreamFields";
 
 type M3uMode = "url" | "file";
 
+/** What a provider is called when the user gives no name. */
+export const M3U_DEFAULT_NAME = "M3U Playlist";
+export const XTREAM_DEFAULT_NAME = "Xtream Provider";
+
 const M3U_MODES: SegmentedOption<M3uMode>[] = [
 	{ value: "url", label: "URL", icon: <Link className="h-3.5 w-3.5" /> },
 	{ value: "file", label: "File", icon: <FileText className="h-3.5 w-3.5" /> },
@@ -132,10 +136,10 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 					await onAddM3uFile(name || fileName || "M3U File", filePath);
 					clearFile();
 				} else {
-					await onAddM3u(name || "M3U Playlist", url);
+					await onAddM3u(name || M3U_DEFAULT_NAME, url);
 				}
 			} else {
-				await onAddXtream(name || "Xtream Provider", url, username, password);
+				await onAddXtream(name || XTREAM_DEFAULT_NAME, url, username, password);
 			}
 			setName("");
 			setUrl("");

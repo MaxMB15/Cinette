@@ -3,7 +3,7 @@
 
 //! The engine against a real, headless mpv playing generated local files.
 
-use super::{MediaInfo, MpvEngine, PlayerState};
+use super::{ListedTrack, MediaInfo, MpvEngine, PlayerState};
 use crate::test_support::{
     after_seconds, headless, wait_for, wait_for_position, wait_until, wav, y4m, Hook, MediaDir,
     Reply, Server, POSITION_SLACK,
@@ -137,6 +137,9 @@ fn every_command_needs_a_player() {
     assert_eq!(engine.sub_remove(-1), missing);
     assert_eq!(engine.restore_subtitles("/subs/en.srt", true, 0.0), missing);
     assert_eq!(engine.set_sub_delay(0.5), missing);
+    assert_eq!(engine.set_audio(2), missing);
+    assert_eq!(engine.set_speed(1.5), missing);
+    assert!(engine.tracks().is_empty());
     assert_eq!(
         engine.loadfile("http://example.test/live.ts", None),
         missing
@@ -153,6 +156,7 @@ fn every_command_needs_a_player() {
     assert_eq!(state.volume, 100.0);
     assert!(!state.is_playing && !state.is_paused);
     assert!(!state.playback_started && !state.open_failed);
+    assert_eq!(state.buffered, None);
     // Nothing has played, so the audio check waits for a later poll.
     assert_eq!(state.position, 0.0);
     assert!(!engine.audio_logged_playing);
@@ -834,6 +838,65 @@ fn reports_what_the_item_is_made_of() {
     assert_eq!(info.audio_codec, None);
     assert!(!info.interlaced);
     assert!(!info.hdr);
+}
+
+#[test]
+fn lists_the_audio_tracks_and_switches_between_them() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let dub = media.file("dub.wav", &wav(10));
+    let mut engine = engine(&[("pause", "yes")]);
+    start(&mut engine, &path, None);
+    // `auto` adds the track without playing it.
+    mpv(&engine)
+        .command("audio-add", &[&dub, "auto", "Commentary", "en"])
+        .unwrap();
+    let tracks = wait_for("the added track", || {
+        let tracks = engine.tracks();
+        (tracks.len() == 2).then_some(tracks)
+    });
+    let first = ListedTrack {
+        id: 1,
+        kind: "audio".into(),
+        codec: Some("pcm_s16le".into()),
+        selected: true,
+        channels: Some(1),
+        ..ListedTrack::default()
+    };
+    assert_eq!(tracks[0], first);
+    assert_eq!(tracks[1].id, 2);
+    assert!(!tracks[1].selected);
+    assert_eq!(tracks[1].language.as_deref(), Some("en"));
+    assert_eq!(tracks[1].title.as_deref(), Some("Commentary"));
+
+    engine.set_audio(2).unwrap();
+    assert_eq!(mpv(&engine).get_property::<String>("aid").unwrap(), "2");
+    wait_until("the second track to play", || {
+        engine.tracks().iter().map(|t| t.selected).eq([false, true])
+    });
+}
+
+#[test]
+fn sets_the_speed() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let mut engine = engine(&[("pause", "yes")]);
+    start(&mut engine, &path, None);
+    engine.set_speed(1.5).unwrap();
+    assert_eq!(mpv(&engine).get_property::<f64>("speed").unwrap(), 1.5);
+}
+
+#[test]
+fn reports_what_the_cache_holds() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    // mpv caches network streams. A local file needs it asked for.
+    let mut engine = engine(&[("pause", "yes"), ("cache", "yes")]);
+    start(&mut engine, &path, None);
+    let [start, end] = wait_for("the whole file in the cache", || {
+        engine.get_state().buffered.filter(|[_, end]| *end > 9.0)
+    });
+    assert!(start <= 0.0 && end <= 10.0 + POSITION_SLACK, "{start} to {end}");
 }
 
 #[test]

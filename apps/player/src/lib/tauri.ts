@@ -9,8 +9,10 @@ import type { CommandOutcome, RemoteCommand, RemotePlayerState } from "@/lib/rem
 import type { ConverterSupport, PlayingInfo, StreamFormats } from "@/lib/route-profiles";
 import type {
 	MpvPlayerState,
+	MpvTrack,
 	Channel,
 	Provider,
+	ContentCounts,
 	EpgProgram,
 	EpgSearchResult,
 	OmdbData,
@@ -47,16 +49,25 @@ const inOrder = (run: () => Promise<void>): Promise<void> => {
 /**
  * Starts `url` in a new player. `keepSubtitles` carries the subtitle file the
  * last one added, and its delay, over to it. Set it only when the same item
- * loads again, as for a retry or another source.
+ * loads again, as for a retry or another source. `backBufferMib` is how much
+ * of the stream behind the position it keeps, on Android, which keeps its
+ * own amount without one.
  */
 export const mpvLoad = (
 	url: string,
 	startPos?: number,
 	hwdec = true,
-	keepSubtitles = false
+	keepSubtitles = false,
+	backBufferMib?: number
 ): Promise<void> =>
 	inOrder(() =>
-		invoke("plugin:mpv|mpv_load", { url, startPos: startPos ?? null, hwdec, keepSubtitles })
+		invoke("plugin:mpv|mpv_load", {
+			url,
+			startPos: startPos ?? null,
+			hwdec,
+			keepSubtitles,
+			backBufferMib: backBufferMib ?? null,
+		})
 	);
 
 export const mpvPlay = (): Promise<void> => invoke("plugin:mpv|mpv_play");
@@ -75,6 +86,17 @@ export const mpvGetState = (): Promise<MpvPlayerState> => invoke("plugin:mpv|mpv
 
 /** The playing item's container and codecs, for deciding how to cast it. */
 export const mpvGetMediaInfo = (): Promise<PlayingInfo> => invoke("plugin:mpv|mpv_get_media_info");
+
+/** The tracks of what plays, of every kind. */
+export const mpvGetTracks = (): Promise<MpvTrack[]> => invoke("plugin:mpv|mpv_get_tracks");
+
+/** Plays audio track `id`, from `mpvGetTracks`. */
+export const mpvSetAudio = (id: number): Promise<void> =>
+	invoke("plugin:mpv|mpv_set_audio", { id });
+
+/** Plays `speed` times as fast, until the next load. */
+export const mpvSetSpeed = (speed: number): Promise<void> =>
+	invoke("plugin:mpv|mpv_set_speed", { speed });
 
 export const mpvSetVisible = (visible: boolean): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_visible", { visible });
@@ -109,6 +131,10 @@ export const loadXtreamProvider = (
 ): Promise<Channel[]> => invoke("load_xtream_provider", { name, url, username, password });
 
 export const getProviders = (): Promise<Provider[]> => invoke("get_providers");
+
+/** How many live channels, movies and shows a provider has. A show counts once. */
+export const getContentCounts = (providerId: string): Promise<ContentCounts> =>
+	invoke("get_content_counts", { providerId });
 
 /** What this computer's bundled ffmpeg can convert for a receiver. */
 export const getConverterSupport = (): Promise<ConverterSupport> => invoke("get_converter_support");

@@ -180,6 +180,37 @@ fn assert_updated_since(provider: &Provider, since: chrono::DateTime<chrono::Utc
     assert!(since <= updated && updated <= chrono::Utc::now(), "{saved}");
 }
 
+/// Settings shows how much each provider has, counted from its own channels.
+#[tokio::test]
+async fn content_counts_are_each_providers_own() {
+    let app = TestApp::new();
+    let film = Channel {
+        content_type: "movie".into(),
+        ..channel("f1", "Sintel", "http://example.test/f1")
+    };
+    let home = provider("p1", ProviderType::M3u, "http://example.test/home.m3u");
+    let work = provider("p2", ProviderType::M3u, "http://example.test/work.m3u");
+    add_provider(
+        &app,
+        &home,
+        &[channel("a", "News", "http://example.test/a"), film],
+    );
+    add_provider(
+        &app,
+        &work,
+        &[channel("b", "Sport", "http://example.test/b")],
+    );
+
+    let counts = get_content_counts(app.state(), "p1".into()).await.unwrap();
+
+    let expected = ContentCounts {
+        live: 1,
+        movies: 1,
+        series: 0,
+    };
+    assert_eq!(counts, expected);
+}
+
 #[tokio::test]
 async fn a_playlist_from_a_url_is_saved_with_its_guide_address() {
     let app = TestApp::new();

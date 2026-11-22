@@ -40,8 +40,10 @@ export interface ApiKeyState {
 	 */
 	dirty: boolean;
 	setValue: (value: string) => void;
-	save: () => Promise<void>;
-	test: () => Promise<void>;
+	/** Saves `text`, or the text in the field. */
+	save: (text?: string) => Promise<void>;
+	/** Checks `text`, or the text in the field. */
+	test: (text?: string) => Promise<void>;
 }
 
 /** How long Saved or Removed shows before the button goes back to normal. */
@@ -124,74 +126,80 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		setSaveStatus((status) => (status === "saving" ? status : "idle"));
 	}, []);
 
-	const save = useCallback(async () => {
-		if (saving.current) return;
-		saving.current = true;
-		const key = value.trim();
-		const started = generation.current;
-		clearTimer();
-		setSaveStatus("saving");
-		// Whether the field still shows this service and the text that was saved.
-		// When it moved to another service, only Saving needs to go.
-		const forService = () => shown.current === service;
-		const forText = () => forService() && generation.current === started;
-		// Not a finally, which the React Compiler can't compile yet.
-		let failed = false;
-		try {
-			await service.save(key);
-			savedFor.current = service;
-		} catch {
-			failed = true;
-		}
-		saving.current = false;
-		if (failed) {
-			setSaveStatus(forText() ? "error" : "idle");
-			return;
-		}
-		if (forService()) {
-			setSaved(key);
-			setLoadFailed(false);
-		}
-		if (forText()) {
-			setValueState(key);
-			// The status line says the key saved, which a check result would
-			// cover up. The saved key can be checked again.
-			setTestStatus("idle");
-			setSaveStatus(key ? "saved" : "removed");
-			timer.current = setTimeout(() => setSaveStatus("idle"), SAVED_MS);
-		} else {
-			setSaveStatus("idle");
-		}
-		// The key is saved either way, so a listener that throws doesn't make
-		// the save look failed.
-		if (service.onSaved) {
+	const save = useCallback(
+		async (text?: string) => {
+			if (saving.current) return;
+			saving.current = true;
+			const key = (text ?? value).trim();
+			const started = generation.current;
+			clearTimer();
+			setSaveStatus("saving");
+			// Whether the field still shows this service and the text that was saved.
+			// When it moved to another service, only Saving needs to go.
+			const forService = () => shown.current === service;
+			const forText = () => forService() && generation.current === started;
+			// Not a finally, which the React Compiler can't compile yet.
+			let failed = false;
 			try {
-				service.onSaved(key);
-			} catch (e) {
-				console.error("Couldn't report the saved key", e);
+				await service.save(key);
+				savedFor.current = service;
+			} catch {
+				failed = true;
 			}
-		}
-	}, [service, value]);
+			saving.current = false;
+			if (failed) {
+				setSaveStatus(forText() ? "error" : "idle");
+				return;
+			}
+			if (forService()) {
+				setSaved(key);
+				setLoadFailed(false);
+			}
+			if (forText()) {
+				setValueState(key);
+				// The status line says the key saved, which a check result would
+				// cover up. The saved key can be checked again.
+				setTestStatus("idle");
+				setSaveStatus(key ? "saved" : "removed");
+				timer.current = setTimeout(() => setSaveStatus("idle"), SAVED_MS);
+			} else {
+				setSaveStatus("idle");
+			}
+			// The key is saved either way, so a listener that throws doesn't make
+			// the save look failed.
+			if (service.onSaved) {
+				try {
+					service.onSaved(key);
+				} catch (e) {
+					console.error("Couldn't report the saved key", e);
+				}
+			}
+		},
+		[service, value]
+	);
 
-	const test = useCallback(async () => {
-		const key = value.trim();
-		if (!key || testStatus === "testing") return;
-		const started = generation.current;
-		setTestStatus("testing");
-		// Promise callbacks in place of a try, which the React Compiler can't
-		// compile with the ternary. Starting from a promise catches a check
-		// that throws before it returns one, as the try did.
-		const result = await Promise.resolve()
-			.then(() => service.test(key))
-			.then(
-				(valid): KeyTestStatus => (valid ? "valid" : "invalid"),
-				(): KeyTestStatus => "unreachable"
-			);
-		// An edit already cleared Testing, and the new text may have a check of
-		// its own on the way.
-		if (generation.current !== started) return;
-		setTestStatus(shown.current === service ? result : "idle");
-	}, [service, value, testStatus]);
+	const test = useCallback(
+		async (text?: string) => {
+			const key = (text ?? value).trim();
+			if (!key || testStatus === "testing") return;
+			const started = generation.current;
+			setTestStatus("testing");
+			// Promise callbacks in place of a try, which the React Compiler can't
+			// compile with the ternary. Starting from a promise catches a check
+			// that throws before it returns one, as the try did.
+			const result = await Promise.resolve()
+				.then(() => service.test(key))
+				.then(
+					(valid): KeyTestStatus => (valid ? "valid" : "invalid"),
+					(): KeyTestStatus => "unreachable"
+				);
+			// An edit already cleared Testing, and the new text may have a check of
+			// its own on the way.
+			if (generation.current !== started) return;
+			setTestStatus(shown.current === service ? result : "idle");
+		},
+		[service, value, testStatus]
+	);
 
 	return {
 		value,

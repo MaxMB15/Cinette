@@ -2,9 +2,10 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { act, render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { platform as osPlatform } from "@tauri-apps/plugin-os";
-import { SplashScreen } from "./SplashScreen";
+import { SplashScreen, TV_SPLASH_HOLD_MS } from "./SplashScreen";
+import { hasOpenFocusTrap } from "@/hooks/useFocusTrap";
 import type { SplashScreenState, SplashStep } from "@/hooks/useSplashScreen";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import { openUrl } from "@/lib/openUrl";
@@ -193,5 +194,112 @@ describe("SplashScreen", () => {
 		expect(screen.queryByText("Support Cinette")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Buy me a coffee" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Get Started →" })).toBeEnabled();
+	});
+
+	describe("on a TV", () => {
+		beforeEach(() => {
+			vi.mocked(osPlatform).mockReturnValue("android");
+			window.__CINETTE_TV__ = true;
+			vi.useFakeTimers();
+		});
+
+		afterEach(() => {
+			delete window.__CINETTE_TV__;
+			vi.useRealTimers();
+		});
+
+		const wait = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+
+		it("holds the screen for a while when the checks finish at once", () => {
+			const splash = makeSplash();
+			show(splash);
+
+			wait(TV_SPLASH_HOLD_MS - 1);
+			expect(splash.dismiss).not.toHaveBeenCalled();
+			wait(1);
+			expect(splash.dismiss).toHaveBeenCalledOnce();
+		});
+
+		it("holds the screen for 4 seconds", () => {
+			expect(TV_SPLASH_HOLD_MS).toBe(4000);
+		});
+
+		it("waits while the checks are still running, and moves on when they finish", () => {
+			const splash = makeSplash({ allDone: false, progress: 0.25 });
+			const { rerender } = show(splash);
+			wait(TV_SPLASH_HOLD_MS * 2);
+			expect(splash.dismiss).not.toHaveBeenCalled();
+
+			rerender(
+				<SplashScreen
+					splash={{ ...splash, allDone: true }}
+					updateState={makeUpdateState()}
+				/>
+			);
+			expect(splash.dismiss).toHaveBeenCalledOnce();
+		});
+
+		it("doesn't fire its timer after it's gone", () => {
+			const splash = makeSplash();
+			const { unmount } = show(splash);
+			// Counted from here, since another timer can be running under Stryker's test pool.
+			const running = vi.getTimerCount();
+			unmount();
+			expect(vi.getTimerCount()).toBe(running - 1);
+		});
+
+		it("holds the focus so the remote can't reach the page behind", () => {
+			const { container } = show(makeSplash({ allDone: false, progress: 0.25 }));
+			const screenRoot = container.firstElementChild as HTMLElement;
+
+			// Every button is disabled, so the trap focuses the screen itself.
+			expect(screenRoot).toHaveFocus();
+			expect(screenRoot).toHaveAttribute("tabindex", "-1");
+			expect(hasOpenFocusTrap()).toBe(true);
+		});
+
+		it("shows the support panel with the QR code, and nothing in it to press", () => {
+			show(makeSplash({ allDone: false }));
+
+			expect(screen.getByRole("heading", { name: "Support Cinette" })).toBeInTheDocument();
+			expect(screen.getByAltText("Buy Me a Coffee QR code")).toBeInTheDocument();
+			const qr = screen.getByRole("button", { name: "Scan to donate via Buy Me a Coffee" });
+			const coffee = screen.getByRole("button", { name: "Buy me a coffee" });
+			expect(qr).toBeDisabled();
+			expect(coffee).toBeDisabled();
+
+			fireEvent.click(qr);
+			fireEvent.click(coffee);
+			expect(openUrl).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("off a TV", () => {
+		it("waits for a press once the checks finish", () => {
+			vi.useFakeTimers();
+			const splash = makeSplash();
+			show(splash);
+			expect(vi.getTimerCount()).toBe(0);
+			act(() => vi.advanceTimersByTime(TV_SPLASH_HOLD_MS));
+			vi.useRealTimers();
+
+			expect(splash.dismiss).not.toHaveBeenCalled();
+		});
+
+		it("doesn't take the focus or trap the keys", () => {
+			const { container } = show(makeSplash({ update: fakeUpdate() }));
+
+			expect(container.firstElementChild).not.toHaveAttribute("tabindex");
+			expect(hasOpenFocusTrap()).toBe(false);
+			expect(screen.getByRole("button", { name: "Install Update" })).not.toHaveFocus();
+		});
+
+		it("doesn't move on by itself on plain Android either", () => {
+			vi.mocked(osPlatform).mockReturnValue("android");
+			const splash = makeSplash();
+			show(splash);
+
+			expect(splash.dismiss).not.toHaveBeenCalled();
+		});
 	});
 });

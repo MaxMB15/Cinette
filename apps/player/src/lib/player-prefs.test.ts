@@ -19,6 +19,10 @@ import {
 	writeSkipSegmentMode,
 	SKIP_SEGMENT_MODES_EVENT,
 	type SkipSegmentMode,
+	LIVE_REWIND_EVENT,
+	readBackBufferMib,
+	readLiveRewind,
+	writeLiveRewind,
 } from "./player-prefs";
 
 describe("player-prefs", () => {
@@ -144,6 +148,26 @@ describe("player-prefs", () => {
 			writeSkipInterval("back", 8);
 			window.removeEventListener(SKIP_INTERVALS_EVENT, listener);
 			expect(listener).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe("live rewind", () => {
+		it("is 5 minutes, 200 MiB, when never set", () => {
+			expect(readLiveRewind()).toEqual({ minutes: 5 });
+			expect(readBackBufferMib()).toBe(200);
+		});
+
+		it("keeps the lengths Settings offers and nothing else", () => {
+			const listener = vi.fn();
+			window.addEventListener(LIVE_REWIND_EVENT, listener);
+			writeLiveRewind(10);
+			writeLiveRewind(3);
+			window.removeEventListener(LIVE_REWIND_EVENT, listener);
+			expect(listener).toHaveBeenCalledTimes(1);
+			expect(readLiveRewind().minutes).toBe(10);
+			expect(readBackBufferMib()).toBe(400);
+			writeLiveRewind(1);
+			expect(readBackBufferMib()).toBe(40);
 		});
 	});
 

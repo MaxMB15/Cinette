@@ -11,7 +11,7 @@ import babel from "@rolldown/plugin-babel";
 export const NOT_COMPILED: Record<string, string> = {
 	"src/hooks/useMpv.ts": "player: try with finally",
 	"src/components/player/VideoPlayer.tsx": "player: a disabled exhaustive-deps rule",
-	"src/components/player/SubtitlePicker.tsx": "player: try with finally",
+	"src/hooks/useSubtitleSearch.ts": "player: try with finally",
 };
 
 const notCompiled = Object.keys(NOT_COMPILED);

@@ -16,7 +16,8 @@ import type { ConsentAnswer } from "@/lib/tauri";
 export const ARM_MS = 1000;
 
 const BUTTON = cn(
-	"px-4 py-2 text-sm rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+	"px-4 py-2 text-sm rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+	"tv-cursor tv:h-[2.75rem] tv:rounded-[0.5rem] tv:px-[1.25rem] tv:py-0 tv:text-base tv:font-medium tv:focus-visible:ring-0"
 );
 
 /**
@@ -89,37 +90,37 @@ const ConsentPrompt = ({
 			overlayClassName="z-10000"
 			// A long list of providers scrolls inside it, so Deny and Allow stay
 			// on screen, and a TV remote's focus scrolls them into view.
-			className="bg-card border border-border rounded-lg p-5 w-[340px] max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-xl"
+			className="bg-card border border-border rounded-lg p-5 w-[340px] max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-xl tv:w-[34rem] tv:rounded-[0.75rem] tv:border-0 tv:p-[2rem] tv:shadow-none"
 		>
 			{/* Focus starts here rather than on Deny, so a key pressed for the
 			    player behind, like Space, doesn't answer the request. */}
 			<h2
 				id={titleId}
 				tabIndex={0}
-				className="text-base font-semibold mb-1 break-words focus-visible:outline-hidden"
+				className="text-base font-semibold mb-1 break-words focus-visible:outline-hidden tv:text-[1.5rem] tv:leading-[2rem] tv:focus-visible:outline-none!"
 			>
 				{before}
 				<bdi className="font-bold">{request.name}</bdi>
 				{after}
 			</h2>
-			<p className="text-xs text-muted-foreground mb-4 break-words">
+			<p className="text-xs text-muted-foreground mb-4 break-words tv:text-base">
 				{consentBody(deviceTypeName(request.deviceType), request.asked)}
 			</p>
-			<p className="text-3xl font-mono font-semibold tracking-widest text-center mb-1">
+			<p className="text-3xl font-mono font-semibold tracking-widest text-center mb-1 tv:text-[3rem] tv:leading-[3.5rem]">
 				<span aria-hidden>{formatCode(request.code)}</span>
 				<span className="sr-only">Code {request.code.split("").join(" ")}</span>
 			</p>
-			<p className="text-xs text-muted-foreground text-center mb-5">
+			<p className="text-xs text-muted-foreground text-center mb-5 tv:text-[0.875rem]">
 				{left > 0 ? `Expires in ${left} s` : "Expired"}
 			</p>
 			{/* Only the end is read out, not every second of the count. */}
 			<p className="sr-only" aria-live="polite">
 				{left > 0 ? "" : "The request expired."}
 			</p>
-			<div className="flex justify-end gap-2">
+			<div className="flex justify-end gap-2 tv:justify-start tv:gap-[0.75rem]">
 				<button
 					type="button"
-					className={`${BUTTON} hover:bg-accent`}
+					className={`${BUTTON} hover:bg-accent tv:bg-white/10`}
 					onClick={() => answer("deny")}
 				>
 					Deny

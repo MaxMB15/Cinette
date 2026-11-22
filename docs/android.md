@@ -209,29 +209,78 @@ On a TV, `getPlatform()` in `lib/platform.ts` returns `tv` and the app uses
 `window.__CINETTE_TV__`, so it's known on the first render. Other Android devices are
 `android` and get the phone, tablet or desktop layout by size, as iOS does.
 
+The TV has its own screens in `components/tv/`, made for a remote with arrows, OK and
+Back. They aren't the desktop pages made larger.
+
+- **Screens:** each one is a row of lists. Up and Down move in a list, Right goes a
+  level deeper, Left goes a level back, and OK acts. `TvLayout` puts a rail of sections
+  beside the page, and Right from the rail always lands in the page's first column
+  (`focusTvFirstColumn`). Search and Favorites split what they show into live channels,
+  movies and series (`TvKinds`). `TvList` draws the lists, with the active row as its only tab stop,
+  so moving back into a list lands where you left it. Each screen keeps its place in
+  `TvNav.memory`, which outlives the player. Settings is lists as well
+  (`TvSettingsColumns`). Its first column has two groups, each a list under its name: a
+  card for each provider (`useTvProviderSections`), then the app's own sections. Up and
+  Down go on from the end of one group to the next. A provider's card shows its channel
+  count and a dot for whether its last refresh worked, and its rows sit under a summary
+  with its live channels, movies and series (`get_content_counts`). A text entry opens
+  an on-screen keyboard that's part of the page (`TvTextEntry`, `TvKeyboard`). The system keyboard only comes up when OK is
+  pressed on the field above the letters (`TvField`).
 - **D-pad:** the arrows reach the page as arrow keys. `useTvRemote` moves focus to the
   nearest control in the arrow's direction (`lib/tv-focus.ts`, which scores with
   `lib/spatial-nav.ts`), inside the open dialog if there is one. Text fields keep Left
-  and Right for the caret, and sliders keep their own axis. A focused element that
-  holds controls, like the player, is entered from the side the press comes from.
-- **Center:** it's Enter, so it presses the focused control. In the player it skips an
-  intro when the skip button shows, and otherwise plays or pauses.
-- **Player:** Left and Right seek, as on desktop. Up and Down move focus into the
-  controls, since the TV has its own volume, and once a control has focus the arrows
-  move between controls. Any key shows the controls and keeps them up. When they hide
-  with a control focused, the player takes focus back, so Left and Right seek again.
-  While the subtitle settings are open, the arrows move the subtitles instead. That
-  listener is on the document, so it takes the key before `useTvRemote` on the window.
+  and Right while the caret can move that way, and sliders keep their own axis. A
+  focused element that holds controls, like a notice, is entered from the side the press
+  comes from. A held arrow speeds up a one-column list, whose active row then shows how
+  far along it is (`rowsPerPress` in `lib/tv-grid.ts`).
+- **Center:** it's Enter, so it presses the focused control. A held OK counts as one
+  press. With nothing focused, OK goes to the screen's start.
+- **Player:** the video always fills the screen, so there's no full screen button, and
+  no volume slider or shortcut list either. `lib/tv-player-keys.ts` says what each key
+  does while the focus is on the video.
+  - Down shows the row of buttons (`TvControls`, built by `tv-buttons.ts`), and Down
+    again shows the tray under it: source, autoplay, audio, speed, and Download or
+    Record, which stay disabled until the TV has storage. Up shows the same row under
+    the details of what's playing (`TvNowPlaying`). Down from the details, or from the
+    row, hides them again. The tray's options open a list (`TvPickPanel`).
+  - OK plays or pauses. In a movie or episode, Left and Right seek, and Menu or Info
+    opens the details and episodes.
+  - On a live channel, Left and Right seek in what mpv holds. `useLiveSeek` works out
+    where the broadcast is from when the stream reached it, and OK goes live while the
+    bar shows. If what's held doesn't reach live, the channel opens again. Settings >
+    Live rewind sets how much mpv keeps behind the position, through
+    `demuxer-max-back-bytes`. Menu opens the channel list, and only the remote's channel
+    keys change the channel.
+  - The video keeps the focus while the skip prompt shows, so OK skips and Left or Right
+    still seek. Up from the buttons reaches the prompt's other buttons, such as Undo.
+  - A stream that fails doesn't take the focus. OK on the video tries it again.
+  - When a video ends with nothing to play next, the player goes back to where it was
+    opened from, since mpv holds the last frame and Play can't restart it. While another
+    device controls the TV, the player stays and that device chooses what's next.
 - **Back:** `MainActivity.kt` hands it to `window.__cinetteBack`, which sends Escape to
-  the focused element (`lib/tv-back.ts`). Escape already closes the top layer: a
-  dialog, a player panel, full screen, then the player itself. When nothing takes
-  it, Back goes to the home page, and on the home page the app closes. Only the TV
-  layout sets `__cinetteBack`. Without it, on phones and tablets, Back goes back in
-  the page's history as in other Tauri apps, and closes the app when there's none.
-- **Media keys:** play/pause, play, pause, fast forward, rewind, next and previous
-  work in the player.
-- **Size:** `html.tv` in `globals.css` makes every `rem` an eighth larger, and gives
-  the focused element a thick ring.
+  the focused element (`lib/tv-back.ts`). Escape closes the top layer: a dialog, a player
+  panel, then the player itself. On a screen it walks left through the columns to the
+  rail. On the rail it goes to Live TV, and from there the app closes. Only the TV layout
+  sets `__cinetteBack`. Without it, on phones and tablets, Back goes back in the page's
+  history as in other Tauri apps, and closes the app when there's none.
+- **Other keys:** play/pause, play, pause, fast forward, rewind, next and previous work
+  in the player. Channel Up and Down, or Page Up and Down, page through a list. In the
+  player they change the channel or the episode. Guide opens the channel list, and Info
+  shows what's playing. Menu is the key with three lines on a Fire TV remote.
+- **Size:** `html.tv` in `globals.css` sets the root font size to a 64th of the screen's
+  width, so a 16:9 screen is always 64 by 36 `rem`. It uses the width because the system's
+  keyboard can take away height, which would shrink everything while it's open. Screens are
+  laid out in `rem`, and the `tv:` variant restyles a shared component for a TV with classes
+  alone.
+- **Edges:** some TVs crop about 2.5% off each edge. The rail's icons start 1.75 `rem` in,
+  a page's content ends 2 `rem` before the right edge, and panels and the player's controls
+  keep at least 1.75 `rem` too. Lists can run past the bottom edge, since they scroll.
+- **Focus:** a focused row is solid white with dark text (`.tv-cursor`). A list's active
+  row is lightly tinted while the focus is elsewhere. The TV turns `backdrop-filter` off,
+  and its screens use no scaling or shadows, so text stays sharp.
+- **Left out:** the TV has no Manage Categories, Gemini sorting, or donation link, on top
+  of what Android leaves out everywhere. Settings shows links as text with their address,
+  since opening one could send the web view away with no way back.
 
 The launcher shows the banner, `res/drawable-xhdpi/banner.png` at 320×180 and
 `res/drawable-xxxhdpi/banner.png` at 640×360, drawn from `icon.svg` with the name in

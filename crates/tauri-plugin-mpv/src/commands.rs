@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use crate::log_url::origin_for_log;
-use crate::mpv::{MediaInfo, MpvState, PlayerState};
+use crate::mpv::{ListedTrack, MediaInfo, MpvState, PlayerState};
 use tauri::{command, AppHandle, Runtime, State};
 
 #[command]
@@ -13,17 +13,19 @@ pub async fn mpv_load<R: Runtime>(
     start_pos: Option<f64>,
     hwdec: Option<bool>,
     keep_subtitles: Option<bool>,
+    back_buffer_mib: Option<u32>,
 ) -> Result<(), String> {
     let hwdec = hwdec.unwrap_or(true);
     let keep_subtitles = keep_subtitles.unwrap_or(false);
     tracing::info!(
-        "[MPV cmd] load origin={} start_pos={:?} hwdec={} keep_subtitles={}",
+        "[MPV cmd] load origin={} start_pos={:?} hwdec={} keep_subtitles={} back_buffer_mib={:?}",
         origin_for_log(&url),
         start_pos,
         hwdec,
-        keep_subtitles
+        keep_subtitles,
+        back_buffer_mib
     );
-    state.load(&url, start_pos, hwdec, keep_subtitles, &app)?;
+    state.load(&url, start_pos, hwdec, keep_subtitles, back_buffer_mib, &app)?;
     tracing::debug!("[MPV cmd] load complete, state={:?}", state.get_state());
     Ok(())
 }
@@ -184,6 +186,26 @@ pub async fn mpv_get_media_info<R: Runtime>(
     state: State<'_, MpvState>,
 ) -> Result<MediaInfo, String> {
     Ok(state.media_info())
+}
+
+/// The tracks of the item playing, of every kind.
+#[command]
+pub async fn mpv_get_tracks(state: State<'_, MpvState>) -> Result<Vec<ListedTrack>, String> {
+    Ok(state.tracks())
+}
+
+/// Plays audio track `id`, an id `mpv_get_tracks` gave.
+#[command]
+pub async fn mpv_set_audio(state: State<'_, MpvState>, id: i64) -> Result<(), String> {
+    tracing::info!("[MPV cmd] set_audio id={}", id);
+    state.set_audio(id)
+}
+
+/// Plays `speed` times as fast, until the next load.
+#[command]
+pub async fn mpv_set_speed(state: State<'_, MpvState>, speed: f64) -> Result<(), String> {
+    tracing::info!("[MPV cmd] set_speed speed={}", speed);
+    state.set_speed(speed)
 }
 
 #[cfg(test)]

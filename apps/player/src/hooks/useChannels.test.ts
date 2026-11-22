@@ -274,6 +274,7 @@ describe("useChannelsProvider", () => {
 		await waitFor(() => expect(result.current.initialized).toBe(true));
 
 		expect(result.current.error).toContain("network");
+		expect(result.current.loadFailed).toBe(true);
 	});
 
 	it("loadM3u sets loading state and refreshes after", async () => {
@@ -310,6 +311,8 @@ describe("useChannelsProvider", () => {
 
 		expect((caught as Error | null)?.message).toBe("bad playlist");
 		expect(result.current.error).toContain("bad playlist");
+		// The lists are fine. Only the add failed.
+		expect(result.current.loadFailed).toBe(false);
 		expect(result.current.loading).toBe(false);
 	});
 
@@ -454,6 +457,7 @@ describe("useChannelsProvider provider changes", () => {
 		);
 		await waitFor(() => expect(result.current.initialized).toBe(true));
 		expect(result.current.error).toBe("Error: database locked");
+		expect(result.current.loadFailed).toBe(true);
 
 		const again = deferred<never[]>();
 		mockGetAllChannels.mockReturnValueOnce(again.promise);

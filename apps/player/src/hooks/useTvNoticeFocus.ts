@@ -3,6 +3,17 @@
 
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { getPlatform } from "@/lib/platform";
+import { cn } from "@/lib/utils";
+
+/** A notice on a TV: at the top, clear of the player's controls at the bottom. */
+export const TV_NOTICE = cn(
+	"tv:top-[1.25rem] tv:bottom-auto tv:w-max tv:max-w-[48rem] tv:gap-[1rem] tv:rounded-[0.5rem] tv:border-0 tv:px-[1.25rem] tv:py-[0.75rem] tv:text-base tv:shadow-none"
+);
+
+/** A notice's buttons on a TV, with the same cursor as the rest of the screens. */
+export const TV_NOTICE_BUTTON = cn(
+	"tv-cursor tv:min-h-[2.25rem] tv:min-w-[2.25rem] tv:rounded-[0.375rem] tv:bg-transparent tv:text-base tv:text-foreground tv:[&_svg]:size-[1.25rem]"
+);
 
 /**
  * A notice that a TV remote can use. Spread what it returns on the notice's

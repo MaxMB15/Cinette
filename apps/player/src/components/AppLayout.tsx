@@ -3,13 +3,13 @@
 
 import { Outlet, NavLink, useLocation } from "react-router";
 import { usePlatform } from "@/hooks/usePlatform";
-import { useTvRemote } from "@/hooks/useTvRemote";
 import { cn } from "@/lib/utils";
 import { useEffect } from "react";
 import { mpvSetVisible } from "@/lib/tauri";
 import { useFullscreen } from "@/lib/fullscreen-context";
 import { Tv, List, FolderOpen, Settings as SettingsIcon } from "lucide-react";
 import { HistoryImportedNotice } from "@/components/remote/HistoryImportedNotice";
+import { TvLayout } from "@/components/tv/TvLayout";
 import {
 	ControllersBar,
 	DevicesButton,
@@ -153,66 +153,3 @@ const TabBar = ({ hidden }: { hidden: boolean }) => (
 		)}
 	</nav>
 );
-
-/**
- * The layout for a TV, driven by a remote. The D-pad moves focus, so the
- * focused control gets a thick ring that shows from across the room.
- */
-const TvLayout = () => {
-	const { pathname } = useLocation();
-	const isPlayer = pathname === "/player";
-	useTvRemote();
-
-	// As in MainLayout, the video view only shows on the player page.
-	useEffect(() => {
-		mpvSetVisible(isPlayer).catch(() => {});
-	}, [isPlayer]);
-
-	// The TV sizes and focus ring in globals.css.
-	useEffect(
-		() => {
-			const root = document.documentElement;
-			root.classList.add("tv");
-			return () => root.classList.remove("tv");
-		},
-		// Stryker disable next-line ArrayDeclaration: any constant list runs the effect once, as an empty one does.
-		[]
-	);
-
-	return (
-		<div className="flex h-screen overflow-hidden">
-			<aside className="w-24 flex flex-col items-center py-6 gap-3 border-r border-border bg-card/50">
-				{navItems.map(({ to, label, icon: Icon }) => (
-					<NavLink
-						key={to}
-						to={to}
-						className={({ isActive }) =>
-							cn(
-								"flex flex-col items-center justify-center w-20 h-20 rounded-xl text-muted-foreground transition-colors focus:outline-hidden focus:ring-4 focus:ring-primary",
-								isActive
-									? "bg-primary/10 text-primary"
-									: "hover:bg-accent hover:text-accent-foreground"
-							)
-						}
-						tabIndex={0}
-					>
-						<Icon className="h-7 w-7" />
-						<span className="text-sm mt-1">{label}</span>
-					</NavLink>
-				))}
-			</aside>
-			<main className="flex-1 overflow-hidden flex flex-col">
-				{/* Other devices controlling this TV, each with Disconnect.
-				    Settings lists them too, so the player keeps the screen. */}
-				{!isPlayer && <ControllersBar />}
-				{/* What another device sent here. They float over the page,
-				    the player included, and take the focus. */}
-				<ProvidersAddedNotice />
-				<HistoryImportedNotice />
-				<div className="flex-1 min-h-0">
-					<Outlet />
-				</div>
-			</main>
-		</div>
-	);
-};

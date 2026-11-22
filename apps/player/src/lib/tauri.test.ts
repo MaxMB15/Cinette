@@ -109,6 +109,7 @@ describe("mpvLoad arguments", () => {
 			startPos: null,
 			hwdec: true,
 			keepSubtitles: false,
+			backBufferMib: null,
 		});
 	});
 
@@ -119,6 +120,7 @@ describe("mpvLoad arguments", () => {
 			startPos: 125,
 			hwdec: false,
 			keepSubtitles: false,
+			backBufferMib: null,
 		});
 	});
 
@@ -129,6 +131,18 @@ describe("mpvLoad arguments", () => {
 			startPos: null,
 			hwdec: true,
 			keepSubtitles: true,
+			backBufferMib: null,
+		});
+	});
+
+	it("asks for a back buffer when given one", async () => {
+		await mpvLoad("http://example.com/live.ts", undefined, true, false, 200);
+		expect(invoke).toHaveBeenLastCalledWith("plugin:mpv|mpv_load", {
+			url: "http://example.com/live.ts",
+			startPos: null,
+			hwdec: true,
+			keepSubtitles: false,
+			backBufferMib: 200,
 		});
 	});
 });
@@ -178,6 +192,9 @@ describe("backend commands", () => {
 		["mpvSetVolume", () => tauri.mpvSetVolume(80), "plugin:mpv|mpv_set_volume", { volume: 80 }],
 		["mpvGetState", () => tauri.mpvGetState(), "plugin:mpv|mpv_get_state"],
 		["mpvGetMediaInfo", () => tauri.mpvGetMediaInfo(), "plugin:mpv|mpv_get_media_info"],
+		["mpvGetTracks", () => tauri.mpvGetTracks(), "plugin:mpv|mpv_get_tracks"],
+		["mpvSetAudio", () => tauri.mpvSetAudio(2), "plugin:mpv|mpv_set_audio", { id: 2 }],
+		["mpvSetSpeed", () => tauri.mpvSetSpeed(1.5), "plugin:mpv|mpv_set_speed", { speed: 1.5 }],
 		[
 			"mpvSetVisible",
 			() => tauri.mpvSetVisible(false),
@@ -240,6 +257,12 @@ describe("backend commands", () => {
 			{ name: "Xt", url: "http://xt.example", username: "user", password: "secret" },
 		],
 		["getProviders", () => tauri.getProviders(), "get_providers"],
+		[
+			"getContentCounts",
+			() => tauri.getContentCounts("p1"),
+			"get_content_counts",
+			{ providerId: "p1" },
+		],
 		["getConverterSupport", () => tauri.getConverterSupport(), "get_converter_support"],
 		[
 			"getStreamFormats",

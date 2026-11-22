@@ -4,7 +4,7 @@
 import { Controls } from "./Controls";
 import { ConnectionStatusOverlay } from "./ConnectionStatusOverlay";
 import { OpeningIndicator } from "./OpeningIndicator";
-import { SubtitlePicker, type SubtitlePick } from "./SubtitlePicker";
+import { SubtitlePicker } from "./SubtitlePicker";
 import { SubtitleOverlay } from "./SubtitleOverlay";
 import { ResumePrompt } from "./ResumePrompt";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
@@ -59,9 +59,12 @@ import {
 	stopDownload,
 	removeDownload,
 	warmStreamFormats,
+	mpvGetTracks,
+	mpvSetAudio,
+	mpvSetSpeed,
 } from "@/lib/tauri";
 import { parseSrt } from "@/lib/subtitle-parser";
-import type { Channel, SubtitleCue, SubtitleEntry } from "@/lib/types";
+import type { Channel, MpvTrack, SubtitleCue, SubtitleEntry } from "@/lib/types";
 import { useFullscreen } from "@/lib/fullscreen-context";
 import { useLeaveFullscreenOnUnmount } from "@/hooks/useLeaveFullscreenOnUnmount";
 import { useDownloads } from "@/hooks/useDownloads";
@@ -77,7 +80,13 @@ import {
 } from "@/lib/playback";
 import { channelSources, withSource } from "@/lib/sources";
 import { downloadIconState } from "@/lib/download-status";
-import { episodeNeighbors, isSameEpisode, sortEpisodes } from "@/lib/episodes";
+import {
+	episodeHeading,
+	episodeLabel,
+	episodeNeighbors,
+	isSameEpisode,
+	sortEpisodes,
+} from "@/lib/episodes";
 import { seriesTitleOf } from "@/lib/channels";
 import {
 	resolvePlayerHotkey,
@@ -98,13 +107,23 @@ import {
 } from "@/lib/subtitle-session";
 import { formatSkip, formatTime } from "@/lib/format";
 import {
+	LIVE_REWIND_EVENT,
+	readLiveRewind,
 	readSkipIntervals,
 	readSkipSegmentModes,
 	SKIP_INTERVALS_EVENT,
 	SKIP_SEGMENT_MODES_EVENT,
 	type SkipSegmentModes,
 } from "@/lib/player-prefs";
-import { nextSkip, type SkipRun } from "@/lib/skip";
+import { nextSkip, videoBounds, type SkipBounds, type SkipRun } from "@/lib/skip";
+import { LIVE_SLACK, liveEdge } from "@/lib/live-seek";
+import {
+	audioPicks,
+	audioTrackName,
+	sourcePicks,
+	speedLabel,
+	speedPicks,
+} from "@/lib/playback-options";
 import { addWatchedTime } from "@/lib/browse-state";
 import { usePlatform } from "@/hooks/usePlatform";
 import { usePlayerPref } from "@/hooks/usePlayerPref";
@@ -118,6 +137,18 @@ import {
 	isMobilePlatform,
 } from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
+import { zapListFor } from "@/lib/tv-zap";
+import { TvChannelPanel } from "@/components/tv/TvChannelPanel";
+import { TvControls, tvSubtitleTop, type TvBar } from "@/components/tv/TvControls";
+import { TvLiveDetails, TvVideoDetails } from "@/components/tv/TvNowPlaying";
+import { TvPlayerInfo } from "@/components/tv/TvPlayerInfo";
+import { TvResumePrompt } from "@/components/tv/TvResumePrompt";
+import { TvPickPanel } from "@/components/tv/TvPickPanel";
+import { TvSubtitlePanel } from "@/components/tv/TvSubtitlePanel";
+import { hasOpenFocusTrap } from "@/hooks/useFocusTrap";
+import type { SubtitlePick } from "@/hooks/useSubtitleSearch";
+import { useTvPlayer, type TvPlayerPanel } from "@/hooks/useTvPlayer";
+import { useLiveSeek } from "@/hooks/useLiveSeek";
 import { Airplay, Cast, ChevronLeft, MonitorSmartphone, X } from "lucide-react";
 
 /** How long a note about AirPlay or Cast stays up. */
@@ -167,6 +198,10 @@ const LOADED_URL_KEY = "mvp_lastLoadedUrl";
 const MAX_WATCH_STEP_SECONDS = 5;
 /** How long the controls stay up after they appear or the player is clicked or tapped. */
 const CONTROLS_HIDE_MS = 4000;
+/** A TV's viewer is further away and reads the bar for longer. */
+const TV_CONTROLS_HIDE_MS = 6000;
+/** Where the subtitles go while the TV's subtitle panel is open, in percent of the player's width. */
+const TV_SUBTITLE_BESIDE_PANEL = 34;
 /**
  * A poll this close to an episode's end counts as seeing the end coming. Polls
  * come every second, so a hidden window whose polls slow to every few seconds
@@ -229,6 +264,7 @@ export const PlayerView = () => {
 	const [showControls, setShowControls] = useState(true);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [showInfoDrawer, setShowInfoDrawer] = useState(false);
+	const [tvPanel, setTvPanel] = useState<TvPlayerPanel | null>(null);
 	const [activeChannelName, setActiveChannelName] = useState<string | null>(null);
 	const [activeChannel, setActiveChannel] = useState<Channel | null>(null);
 	// Episode list for series navigation — set when navigating from SeriesDetailModal
@@ -239,18 +275,18 @@ export const PlayerView = () => {
 	// its own way back.
 	const { layoutMode, platform } = usePlatform();
 	const showBack = layoutMode === "mobile";
-	// Phones and tablets set the volume with the hardware buttons. An Android
-	// TV box has no touch screen, so it keeps the volume and shortcut
-	// controls for its remote.
+	// Phones and tablets set the volume with the hardware buttons.
 	const touchDevice = isMobilePlatform() && navigator.maxTouchPoints > 0;
 	// A TV is driven by its remote's D-pad.
 	const remote = getPlatform() === "tv";
 	const fullscreenButton = hasFullscreenButton(touchDevice, layoutMode);
+	const ResumeDialog = remote ? TvResumePrompt : ResumePrompt;
 	const [showSubtitlePicker, setShowSubtitlePicker] = useState(false);
 	const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);
 	const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
 	const [selectedSubtitleEntry, setSelectedSubtitleEntry] = useState<SubtitleEntry | null>(null);
-	const [subtitleFontSize, setSubtitleFontSize] = useState(18);
+	// The text is read from across the room on a TV, so it starts larger there.
+	const [subtitleFontSize, setSubtitleFontSize] = useState(remote ? 26 : 18);
 	const [subtitleFontFamily, setSubtitleFontFamily] = useState("system-ui, sans-serif");
 	const [subtitlePos, setSubtitlePos] = useState(DEFAULT_SUBTITLE_POSITION);
 	const [subtitleDelay, setSubtitleDelay] = useState(0);
@@ -688,7 +724,7 @@ export const PlayerView = () => {
 		if (airplay.notPicked) void playHereAgain.current();
 	}, [airplay.notPicked, playHereAgain]);
 	// Other Cinette devices control this player and see what it plays.
-	usePublishRemoteState(playback, activeChannel);
+	const controlledRef = useLatestRef(usePublishRemoteState(playback, activeChannel));
 	// A history transfer saves where this player is before it reads the history.
 	useEffect(
 		() =>
@@ -1140,48 +1176,19 @@ export const PlayerView = () => {
 	// Use refs to avoid stale closures while keeping the effect dependency minimal
 	const nextEpisodeRef = useLatestRef(nextEpisode);
 	const autoplayRef = useLatestRef(autoplay);
-	/** Plays the next episode, when autoplay is on. Only an episode of a
-	 *  series has one. */
+	/** Plays the next episode, when autoplay is on, and says whether it did.
+	 *  Only an episode of a series has one. */
 	const autoplayNext = useCallback(
 		() => {
 			const next = nextEpisodeRef.current;
-			if (autoplayRef.current && next) playEpisode(next);
+			if (!autoplayRef.current || !next) return false;
+			playEpisode(next);
+			return true;
 		},
 		// Stryker disable next-line ArrayDeclaration: The rest are refs, and playEpisode only changes with mpv's state, while an older one starts the episode the same way through mpv's same actions.
 		[playEpisode, autoplayRef, nextEpisodeRef]
 	);
 
-	// Advance when the episode reaches its end, not when it stops near it. A
-	// pause in the last seconds, or the resume prompt pausing the player, leaves
-	// reachedEnd false. At the end, with keep-open=yes, mpv holds the last frame,
-	// paused, so with autoplay off, on a movie or on the last episode the
-	// controls stay up and nothing else needs doing.
-	//
-	// Only an end this player saw coming counts. The ref holds the stream that
-	// a poll last saw in its final seconds and when, and any poll from further
-	// back clears it. Coming back from another page to an episode that ended
-	// there leaves it on the last frame. So does coming back to the app after
-	// iOS held this page's timers in the background for longer than
-	// END_SEEN_WITHIN_MS while mpv played on.
-	const seenNearEndRef = useRef<{ url: string; at: number } | null>(null);
-	useEffect(() => {
-		// A poll can still describe the previous stream after the app loads
-		// another one, such as from the Next episode button near the end.
-		if (!loadedUrl || mpv.state.currentUrl !== loadedUrl) return;
-		const { reachedEnd, position, duration } = mpv.state;
-		if (!reachedEnd) {
-			// useMpv sets a new state on every poll, paused or not, so a long
-			// pause in the last seconds keeps this time fresh.
-			const nearEnd = duration > 0 && duration - position <= END_LEAD_SECONDS;
-			seenNearEndRef.current = nearEnd ? { url: loadedUrl, at: Date.now() } : null;
-			return;
-		}
-		const seen = seenNearEndRef.current;
-		if (!seen || seen.url !== loadedUrl) return;
-		seenNearEndRef.current = null;
-		if (Date.now() - seen.at > END_SEEN_WITHIN_MS) return;
-		autoplayNext();
-	}, [mpv.state, loadedUrl, autoplayNext]);
 	// A TV that reaches the end of an episode goes on through the store,
 	// which plays the next one through this page while it's open, and by
 	// itself once it's closed.
@@ -1197,9 +1204,12 @@ export const PlayerView = () => {
 	const [controlsActivity, setControlsActivity] = useState(0);
 	useEffect(() => {
 		if (!showControls) return;
-		const timer = setTimeout(() => setShowControls(false), CONTROLS_HIDE_MS);
+		const timer = setTimeout(
+			() => setShowControls(false),
+			remote ? TV_CONTROLS_HIDE_MS : CONTROLS_HIDE_MS
+		);
 		return () => clearTimeout(timer);
-	}, [showControls, controlsActivity]);
+	}, [showControls, controlsActivity, remote]);
 
 	const revealControls = useCallback(() => {
 		setShowControls(true);
@@ -1224,9 +1234,15 @@ export const PlayerView = () => {
 		lastSkipRef.current = null;
 	}, [mpv.state.currentUrl]);
 	const skipBy = useCallback(
-		(seconds: number): number => {
+		(seconds: number, bounds?: SkipBounds): number => {
 			const s = mpvStateRef.current;
-			const run = nextSkip(lastSkipRef.current, s.position, s.duration, seconds, Date.now());
+			const run = nextSkip(
+				lastSkipRef.current,
+				s.position,
+				bounds ?? videoBounds(s.duration),
+				seconds,
+				Date.now()
+			);
 			lastSkipRef.current = run;
 			playback.seek(run.target);
 			return run.total;
@@ -1274,7 +1290,8 @@ export const PlayerView = () => {
 	}, [playEpisode, nextEpisodeRef]);
 	// Something open over the prompt holds it, so the player doesn't skip
 	// where the notice and its Undo can't be seen.
-	const skipHeld = showShortcuts || !!pendingResume || showSubtitlePicker || showInfoDrawer;
+	const skipHeld =
+		showShortcuts || !!pendingResume || showSubtitlePicker || showInfoDrawer || !!tvPanel;
 	// A stream that's reconnecting holds the countdown, as a pause does.
 	const videoPlaying = mpv.state.isPlaying && !mpv.state.isPaused && !mpv.reconnecting;
 	const skipping = useSegmentSkipping({
@@ -1292,6 +1309,33 @@ export const PlayerView = () => {
 	});
 	// Enter presses the prompt's button, so only while one is on screen.
 	const skipSegment = !skipHeld && skipButtonShows(skipping, showControls) ? skipping.skip : null;
+
+	// --- Live TV's buffer ---
+	// Each load is a stream of its own, and a reconnect starts the broadcast
+	// over, so neither keeps the last one's place.
+	const liveSeek = useLiveSeek({
+		session: activeIsLive && !mpv.reconnecting ? String(mpv.loadId) : null,
+		playing: videoPlaying,
+		position: mpv.state.position,
+		positionAt: mpv.state.positionAt,
+	});
+	const liveSeekRef = useLatestRef(liveSeek);
+	// Far enough behind that OK goes live.
+	const liveBehind = activeIsLive && liveSeek.behind > LIVE_SLACK;
+	const canSkip = activeIsLive ? !!mpv.state.buffered && !!liveSeek.anchor : seekable;
+	/** Skips back or forward through what a live channel's stream holds, as far as the broadcast. */
+	const seekLive = useCallback(
+		(step: 1 | -1) => {
+			const { buffered } = mpvStateRef.current;
+			const { anchor } = liveSeekRef.current;
+			if (!buffered || !anchor) return;
+			skipBy(step === 1 ? skip.forward : -skip.back, {
+				start: buffered[0],
+				end: Math.min(buffered[1], liveEdge(anchor, performance.now())),
+			});
+		},
+		[mpvStateRef, liveSeekRef, skipBy, skip]
+	);
 
 	const goBack = useCallback(() => {
 		// "default" is the first history entry, so there's nothing to go back to.
@@ -1334,6 +1378,58 @@ export const PlayerView = () => {
 				};
 	const episodesRef = useLatestRef(episodes);
 
+	const handleStop = useCallback(
+		() => {
+			recordEnd();
+			flushProgress();
+			stoppedRef.current = true;
+			mpv.stop();
+			navigate("/");
+		},
+		// Stryker disable next-line ArrayDeclaration: The stop it calls is the one useMpv keeps with useCallback, the path is absolute, and the other two only read refs.
+		[mpv, navigate, flushProgress, recordEnd]
+	);
+
+	// Resumes where the stream broke, not from the start of the movie or episode.
+	const retryStream = useCallback(
+		() => {
+			mpv.reload().catch(() => {});
+		},
+		// Stryker disable next-line ArrayDeclaration: The reload it calls is the one useMpv keeps with useCallback, so the first render's works as well as the last.
+		[mpv]
+	);
+
+	// --- A TV's remote ---
+	const streamFailed = mpv.loadFailed || mpv.openFailed;
+	const tvPlayer = useTvPlayer({
+		channel: activeChannel,
+		channels,
+		// Stryker disable next-line StringLiteral: Only "nav" is ever checked, so any other origin means the same.
+		play: (ch) => void startPlayback(ch, "player"),
+		onChannels: () => setTvPanel("channels"),
+		onEpisode: (step) => (step === -1 ? episodes.onPrevEpisode : episodes.onNextEpisode)?.(),
+		onInfo: () => {
+			if (hasInfo) setShowInfoDrawer(true);
+		},
+		onStop: handleStop,
+		onSeek: seekLive,
+		onActivity: revealControls,
+	});
+	const tvPlayerRef = useLatestRef(tvPlayer);
+
+	/**
+	 * Back to the broadcast: where the stream would have got to, when what it
+	 * holds reaches that far, or else by opening the channel again.
+	 */
+	const goLive = () => {
+		const { buffered } = mpvStateRef.current;
+		// OK only goes live while behind, once the stream has played.
+		const edge = liveEdge(liveSeekRef.current.anchor!, performance.now());
+		if (buffered && edge <= buffered[1] + LIVE_SLACK) seekTo(Math.min(edge, buffered[1]));
+		else tvPlayer.playNow(activeChannel!);
+	};
+	const goLiveRef = useLatestRef(goLive);
+
 	// --- Keyboard ---
 	const flashOsd = useCallback((text: string) => {
 		if (osdTimerRef.current) clearTimeout(osdTimerRef.current);
@@ -1363,11 +1459,22 @@ export const PlayerView = () => {
 			// position/delay handlers — don't let them also seek or change volume.
 			const isArrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key);
 			if (subtitleEditMode && isArrow) return;
-			// The remote is a TV's only way to the controls, so any key shows
-			// them, and each one keeps them up while focus moves between them.
-			if (remote) revealControls();
-			// On a TV the D-pad moves between the controls once one has focus.
-			if (remote && isArrow && isKeyboardFocusedControl(e.target)) return;
+			if (remote) {
+				// A panel over the video keeps its keys, and its list's arrows
+				// bubble up here.
+				if (e.defaultPrevented || hasOpenFocusTrap()) return;
+				// The remote is a TV's only way to the controls, so any key shows
+				// them, and each one keeps them up while focus moves between them.
+				revealControls();
+				// The D-pad moves between the controls once one has focus.
+				if (isArrow && isKeyboardFocusedControl(e.target)) return;
+				if (e.key === "Enter" && streamFailed) {
+					e.preventDefault();
+					retryStream();
+					return;
+				}
+				if (tvPlayerRef.current.handleKey(e)) return;
+			}
 
 			const action = resolvePlayerHotkey(e, skip, remote);
 			if (!action) return;
@@ -1377,10 +1484,13 @@ export const PlayerView = () => {
 			// still presses a button that has focus. Held down, it skips once.
 			if (action.type === "skipSegment") {
 				if (!e.repeat && skipSegment?.()) e.preventDefault();
-				// A remote's center button plays and pauses when there's nothing to skip.
-				else if (!e.repeat && remote) {
+				// A remote's center button plays and pauses when there's nothing to skip,
+				// once there's a stream. A press while one opens would leave it paused.
+				else if (!e.repeat && remote && !mpv.opening) {
 					e.preventDefault();
 					if (mpv.state.isPaused || !mpv.state.isPlaying) playback.play();
+					// The bar says OK goes live while it shows.
+					else if (liveBehind && showControls) goLiveRef.current();
 					else playback.pause();
 				}
 				return;
@@ -1506,16 +1616,14 @@ export const PlayerView = () => {
 			skipSegment,
 			remote,
 			revealControls,
+			streamFailed,
+			retryStream,
+			tvPlayerRef,
+			liveBehind,
+			showControls,
+			goLiveRef,
 		]
 	);
-
-	const handleStop = useCallback(() => {
-		recordEnd();
-		flushProgress();
-		stoppedRef.current = true;
-		mpv.stop();
-		navigate("/");
-	}, [mpv, navigate, flushProgress, recordEnd]);
 
 	// Closing mpv's own window stops playback, like the stop button.
 	const handleStopRef = useLatestRef(handleStop);
@@ -1523,9 +1631,178 @@ export const PlayerView = () => {
 		if (mpv.windowClosedId > 0) handleStopRef.current();
 	}, [mpv.windowClosedId, handleStopRef]);
 
+	// Advance when the episode reaches its end, not when it stops near it. A
+	// pause in the last seconds, or the resume prompt pausing the player, leaves
+	// reachedEnd false. At the end, with keep-open=yes, mpv holds the last frame,
+	// paused, so with autoplay off, on a movie or on the last episode the
+	// controls stay up and nothing else needs doing.
+	//
+	// A TV has no use for a last frame that its remote can't play, so it goes back
+	// to where the video was opened. A device controlling the TV chooses what's
+	// next, and it learns of the end from the state this page keeps reporting.
+	//
+	// Only an end this player saw coming counts. The ref holds the stream that
+	// a poll last saw in its final seconds and when, and any poll from further
+	// back clears it. Coming back from another page to an episode that ended
+	// there leaves it on the last frame. So does coming back to the app after
+	// iOS held this page's timers in the background for longer than
+	// END_SEEN_WITHIN_MS while mpv played on.
+	const seenNearEndRef = useRef<{ url: string; at: number } | null>(null);
+	useEffect(() => {
+		// A poll can still describe the previous stream after the app loads
+		// another one, such as from the Next episode button near the end.
+		if (!loadedUrl || mpv.state.currentUrl !== loadedUrl) return;
+		const { reachedEnd, position, duration } = mpv.state;
+		if (!reachedEnd) {
+			// useMpv sets a new state on every poll, paused or not, so a long
+			// pause in the last seconds keeps this time fresh.
+			const nearEnd = duration > 0 && duration - position <= END_LEAD_SECONDS;
+			seenNearEndRef.current = nearEnd ? { url: loadedUrl, at: Date.now() } : null;
+			return;
+		}
+		const seen = seenNearEndRef.current;
+		if (!seen || seen.url !== loadedUrl) return;
+		seenNearEndRef.current = null;
+		if (Date.now() - seen.at > END_SEEN_WITHIN_MS) return;
+		if (!autoplayNext() && remote && !controlledRef.current) handleStopRef.current();
+	}, [mpv.state, loadedUrl, autoplayNext, remote, controlledRef, handleStopRef]);
+
 	// --- Info drawer episode source ---
 	const episodesForDrawer = sortedEpisodes.length > 0 ? sortedEpisodes : localSeriesEpisodes;
 	const showTitleForDrawer = activeChannel ? seriesTitleOf(activeChannel) : "";
+
+	const tvBarVisible =
+		remote &&
+		(showControls || mpv.state.isPaused || streamFailed) &&
+		!tvPanel &&
+		!showInfoDrawer &&
+		!showSubtitlePicker &&
+		!pendingResume;
+	// The bar comes back on the video's own view after it hides.
+	const tvBarChanged = useChanged(tvBarVisible);
+	if (tvBarChanged && !tvBarVisible && tvPlayer.view !== "none") tvPlayer.setView("none");
+	const tvView = tvBarVisible ? tvPlayer.view : "none";
+
+	// --- A TV's tray ---
+	const liveRewind = usePlayerPref(readLiveRewind, LIVE_REWIND_EVENT);
+	const [audioTracks, setAudioTracks] = useState<MpvTrack[]>([]);
+	const [speed, setSpeed] = useState(1);
+	// Each load is a new mpv, at normal speed and with tracks of its own.
+	const loadChanged = useChanged(mpv.loadId);
+	if (loadChanged) {
+		setAudioTracks([]);
+		setSpeed(1);
+	}
+	useEffect(() => {
+		if (tvView !== "tray") return;
+		let current = true;
+		mpvGetTracks()
+			.then((tracks) => {
+				if (current) setAudioTracks(tracks.filter((t) => t.kind === "audio"));
+			})
+			.catch(() => {});
+		return () => {
+			current = false;
+		};
+	}, [tvView]);
+	const audioTrack = audioTracks.find((t) => t.selected);
+	const pickAudio = (id: number) => {
+		setAudioTracks((tracks) => tracks.map((t) => ({ ...t, selected: t.id === id })));
+		mpvSetAudio(id).catch(() => {});
+	};
+	const pickSpeed = (next: number) => {
+		setSpeed(next);
+		mpvSetSpeed(next).catch(() => {});
+	};
+	/** The list an option in the tray opens. */
+	const tvPickFor = (panel: TvPlayerPanel | null) => {
+		switch (panel) {
+			case "sources":
+				// The tile only shows with a channel that has more than one.
+				return {
+					title: "Source",
+					label: "Sources",
+					picks: sourcePicks(availableSources),
+					current: activeChannel!.url,
+				};
+			case "audio":
+				return {
+					title: "Audio",
+					label: "Audio tracks",
+					picks: audioPicks(audioTracks),
+					current: String(audioTrack?.id),
+				};
+			case "speed":
+				return {
+					title: "Speed",
+					label: "Speeds",
+					picks: speedPicks(),
+					current: String(speed),
+				};
+			default:
+				return null;
+		}
+	};
+	const tvPick = tvPickFor(tvPanel);
+	/** Plays what was picked from that list. */
+	const pickFromTray = (key: string) => {
+		setTvPanel(null);
+		if (tvPanel === "sources") switchSource(key);
+		else if (tvPanel === "audio") pickAudio(Number(key));
+		else pickSpeed(Number(key));
+	};
+	const changeSubtitleDelay = (delay: number) => {
+		setSubtitleDelay(delay);
+		mpvSetSubDelay(delay).catch(() => {});
+	};
+	const subtitleSearch = {
+		season: subtitleSeason,
+		episode: subtitleEpisode,
+		onClose: () => {
+			setShowSubtitlePicker(false);
+			setSubtitleEditMode(false);
+		},
+		startPick: () => followSubtitlePick(true),
+		onSubtitleSelected: (
+			id: number | null,
+			cues?: SubtitleCue[],
+			entry?: SubtitleEntry | null,
+			rankInLanguage?: number
+		) => {
+			setSelectedSubtitleId(id);
+			// Stryker disable next-line ArrayDeclaration: A cue without times never shows, so an empty list and this one look the same.
+			setSubtitleCues(cues ?? []);
+			setSelectedSubtitleEntry(entry ?? null);
+			if (entry) {
+				setSubtitlePreference({
+					languageCode: entry.languageCode,
+					// The rank always comes with the entry.
+					rankInLanguage: rankInLanguage!,
+				});
+			} else {
+				// User clicked None — clear preference so next episode gets no subtitle.
+				setSubtitlePreference(null);
+			}
+		},
+		currentSelectedId: selectedSubtitleId,
+	};
+
+	// Another source of what's playing switches in place and keeps the position.
+	const playFromInfo = (ch: Channel) => {
+		// The details only open on what's playing.
+		const current = activeChannel!;
+		if (current.contentType === "series" && !isSameEpisode(ch, current)) {
+			playEpisode(ch);
+			return;
+		}
+		setShowInfoDrawer(false);
+		if (current.contentType === "series" || ch.id === current.id) {
+			switchSource(ch.url);
+		} else {
+			// Stryker disable next-line StringLiteral: Only "nav" is ever checked, so any other origin means the same.
+			startPlayback(ch, "player");
+		}
+	};
 
 	// --- Player download control (movies + series episodes only) ---
 	const playerDl = activeChannel ? byChannel.get(activeChannel.id) : undefined;
@@ -1690,10 +1967,63 @@ export const PlayerView = () => {
 		/>
 	) : null;
 
-	// Resumes where the stream broke, not from the start of the movie or episode.
-	const retryStream = () => {
-		mpv.reload().catch(() => {});
+	/** Back from a TV's controls to the video alone. */
+	const leaveTvControls = () => {
+		tvPlayer.setView("none");
+		setShowControls(false);
+		// Stryker disable next-line OptionalChaining: The prompt and the buttons that call this are inside the player, so the ref is set.
+		containerRef.current?.focus();
 	};
+	const tvPaused = mpv.state.isPaused || !mpv.state.isPlaying;
+	const tvHint = streamFailed
+		? `OK tries again.${activeIsLive ? " Menu shows the channels." : ""}`
+		: `${canSkip ? "Left and Right skip. " : ""}Up or Down shows the controls. OK ${
+				tvPaused ? "plays" : liveBehind ? "goes live" : "pauses"
+			}.`;
+	// A channel picked with the channel keys shows before it loads.
+	const tvChannel = tvPlayer.zapTarget ?? activeChannel;
+	const liveEdgeAt = liveSeek.edge;
+	const { buffered } = mpv.state;
+	const tvBar: TvBar =
+		activeIsLive && tvChannel
+			? {
+					kind: "live",
+					channel: tvChannel,
+					behind: liveSeek.behind,
+					buffered:
+						buffered && liveEdgeAt !== null
+							? {
+									from: liveEdgeAt - buffered[0],
+									to: Math.max(0, liveEdgeAt - buffered[1]),
+								}
+							: null,
+					rewind: liveRewind.minutes * 60,
+				}
+			: {
+					kind: "video",
+					position: mpv.state.position,
+					duration: mpv.state.duration,
+					bufferedTo: buffered?.[1] ?? null,
+					speed,
+				};
+	const series = activeChannel?.contentType === "series";
+	const tvDetails =
+		activeIsLive && tvChannel ? (
+			<TvLiveDetails channel={tvChannel} />
+		) : (
+			<TvVideoDetails
+				eyebrow={series ? showTitleForDrawer : undefined}
+				title={
+					series
+						? episodeHeading(activeChannel.name, subtitleSeason, subtitleEpisode)
+						: (activeChannelName ?? "")
+				}
+				logoUrl={activeChannel?.logoUrl}
+				omdbData={mediaDetails.omdbData}
+				whatsonData={mediaDetails.whatsonData}
+				upNext={nextEpisode ? episodeLabel(nextEpisode) : undefined}
+			/>
+		);
 
 	return (
 		<div
@@ -1728,7 +2058,9 @@ export const PlayerView = () => {
 				loadFailed={mpv.loadFailed}
 				openFailed={mpv.openFailed}
 				recentlyRecovered={mpv.recentlyRecovered}
-				onRetry={retryStream}
+				// A TV's viewer retries with OK, since a button here would take the
+				// focus each time they step onto a dead channel.
+				onRetry={remote ? undefined : retryStream}
 				belowTopBar={showBack}
 			/>
 
@@ -1746,7 +2078,8 @@ export const PlayerView = () => {
 						)}
 					</div>
 				)}
-				{!mpv.error &&
+				{!remote &&
+					!mpv.error &&
 					!mpv.opening &&
 					!mpv.state.currentUrl &&
 					!mpv.state.isPlaying &&
@@ -1755,7 +2088,9 @@ export const PlayerView = () => {
 							Select a channel to start watching
 						</p>
 					)}
-				{mpv.opening && <OpeningIndicator key={mpv.loadId} onRetry={retryStream} />}
+				{mpv.opening && (
+					<OpeningIndicator key={mpv.loadId} onRetry={remote ? undefined : retryStream} />
+				)}
 			</div>
 
 			{touchDevice && (
@@ -1770,7 +2105,7 @@ export const PlayerView = () => {
 			{destinationView}
 
 			{/* Over a TV's view too, which has no Back of its own. */}
-			{(activeChannelName || showBack) && (showControls || tv) && (
+			{!remote && (activeChannelName || showBack) && (showControls || tv) && (
 				<div className="absolute top-0 left-0 right-0 z-40 flex items-center gap-1 bg-linear-to-b from-black/60 to-transparent p-4 pt-[calc(1rem+env(safe-area-inset-top))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))]">
 					{showBack && (
 						<button
@@ -1807,8 +2142,14 @@ export const PlayerView = () => {
 					skipping={skipping}
 					controlsVisible={showControls}
 					playing={videoPlaying}
-					held={skipHeld}
-					onFocusLost={() => containerRef.current?.focus()}
+					// The details and the tray fill the corner it sits in.
+					held={skipHeld || tvView === "details" || tvView === "tray"}
+					onFocusLost={() => {
+						// The player's buttons stay open, and take the focus back themselves.
+						// Stryker disable next-line OptionalChaining: The prompt is inside the player, so the ref is set.
+						if (tvView === "none") containerRef.current?.focus();
+					}}
+					onBack={remote ? leaveTvControls : undefined}
 				/>
 			)}
 
@@ -1869,7 +2210,83 @@ export const PlayerView = () => {
 				</p>
 			)}
 
-			{!mpv.fallbackActive && !tv && (
+			{remote && !mpv.fallbackActive && (
+				<TvControls
+					view={tvView}
+					strip={tvBarVisible}
+					hint={tvHint}
+					bar={tvBar}
+					row={{
+						live: activeIsLive,
+						series,
+						paused: tvPaused,
+						retrying: mpv.opening || streamFailed,
+						onRetry: retryStream,
+						onTogglePlay: () => (tvPaused ? playback.play() : playback.pause()),
+						skip: canSkip ? skip : undefined,
+						onSkip: (step) =>
+							activeIsLive
+								? seekLive(step)
+								: skipBy(step === 1 ? skip.forward : -skip.back),
+						atLive: !liveBehind,
+						onZap: tvPlayer.zap,
+						onChannels: () => setTvPanel("channels"),
+						...episodes,
+						onSubtitles: canShowSubtitles
+							? () => setShowSubtitlePicker(true)
+							: undefined,
+						subtitlesOn: selectedSubtitleId !== null,
+						onInfo: hasInfo ? () => setShowInfoDrawer(true) : undefined,
+					}}
+					tiles={{
+						live: activeIsLive,
+						source:
+							availableSources.length > 1
+								? `${availableSources.indexOf(activeChannel!.url) + 1} of ${availableSources.length}`
+								: undefined,
+						onSource: () => setTvPanel("sources"),
+						autoplay: series ? autoplay : undefined,
+						onAutoplayChange: setAutoplay,
+						audio: audioTrack && audioTrackName(audioTrack),
+						onAudio: () => setTvPanel("audio"),
+						speed: activeIsLive ? undefined : speedLabel(speed),
+						onSpeed: () => setTvPanel("speed"),
+					}}
+					details={tvDetails}
+					onViewChange={tvPlayer.setView}
+					onLeave={leaveTvControls}
+					onHide={() => {
+						// Stryker disable next-line OptionalChaining: The buttons are inside the player, so the ref is set.
+						if (!hasOpenFocusTrap()) containerRef.current?.focus();
+					}}
+				/>
+			)}
+			{tvPanel === "channels" && activeChannel && (
+				<TvChannelPanel
+					channels={zapListFor(activeChannel.id, channels)}
+					currentId={(tvPlayer.zapTarget ?? activeChannel).id}
+					onPlay={(ch) => {
+						setTvPanel(null);
+						// The details say what's on, as they do for the channel keys.
+						tvPlayer.setView("details");
+						tvPlayer.playNow(ch);
+					}}
+					onClose={() => setTvPanel(null)}
+				/>
+			)}
+			{tvPick && (
+				<TvPickPanel
+					key={tvPanel}
+					title={tvPick.title}
+					label={tvPick.label}
+					picks={tvPick.picks}
+					current={tvPick.current}
+					onPick={pickFromTray}
+					onClose={() => setTvPanel(null)}
+				/>
+			)}
+
+			{!remote && !mpv.fallbackActive && !tv && (
 				<Controls
 					state={{
 						isPlaying: mpv.state.isPlaying,
@@ -1892,8 +2309,6 @@ export const PlayerView = () => {
 					// or after it fails, and the spinner or the error has the middle
 					// to itself.
 					hideCenterControls={mpv.opening || mpv.openFailed || mpv.loadFailed}
-					// Stryker disable next-line OptionalChaining: the bar only calls this while it's on the page, inside the container, so the ref is never null.
-					onHideWithFocus={remote ? () => containerRef.current?.focus() : undefined}
 					onVolumeChange={playback.setVolume}
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}
@@ -1915,44 +2330,38 @@ export const PlayerView = () => {
 				/>
 			)}
 
-			{showSubtitlePicker && activeImdbId && (
-				<SubtitlePicker
-					imdbId={activeImdbId}
-					season={subtitleSeason}
-					episode={subtitleEpisode}
-					onClose={() => {
-						setShowSubtitlePicker(false);
-						setSubtitleEditMode(false);
-					}}
-					startPick={() => followSubtitlePick(true)}
-					onSubtitleSelected={(id, cues, entry, rankInLanguage) => {
-						setSelectedSubtitleId(id);
-						setSubtitleCues(cues ?? []);
-						setSelectedSubtitleEntry(entry ?? null);
-						if (entry && rankInLanguage !== undefined) {
-							setSubtitlePreference({
-								languageCode: entry.languageCode,
-								rankInLanguage,
-							});
-						} else {
-							// User clicked None — clear preference so next episode gets no subtitle.
-							setSubtitlePreference(null);
-						}
-					}}
-					currentSelectedId={selectedSubtitleId}
-					currentSelectedEntry={selectedSubtitleEntry}
-					subtitleFontSize={subtitleFontSize}
-					subtitleFontFamily={subtitleFontFamily}
-					subtitleDelay={subtitleDelay}
-					onFontSizeChange={setSubtitleFontSize}
-					onFontFamilyChange={setSubtitleFontFamily}
-					onDelayChange={(d) => {
-						setSubtitleDelay(d);
-						mpvSetSubDelay(d).catch(() => {});
-					}}
-					onSettingsModeChange={(active) => setSubtitleEditMode(active)}
-				/>
-			)}
+			{showSubtitlePicker &&
+				activeImdbId &&
+				(remote ? (
+					<TvSubtitlePanel
+						{...subtitleSearch}
+						imdbId={activeImdbId}
+						currentSelectedEntry={selectedSubtitleEntry}
+						style={{
+							fontSize: subtitleFontSize,
+							fontFamily: subtitleFontFamily,
+							delay: subtitleDelay,
+							position: subtitlePos,
+							onFontSizeChange: setSubtitleFontSize,
+							onFontFamilyChange: setSubtitleFontFamily,
+							onDelayChange: changeSubtitleDelay,
+							onPositionChange: setSubtitlePos,
+						}}
+					/>
+				) : (
+					<SubtitlePicker
+						{...subtitleSearch}
+						imdbId={activeImdbId}
+						currentSelectedEntry={selectedSubtitleEntry}
+						subtitleFontSize={subtitleFontSize}
+						subtitleFontFamily={subtitleFontFamily}
+						subtitleDelay={subtitleDelay}
+						onFontSizeChange={setSubtitleFontSize}
+						onFontFamilyChange={setSubtitleFontFamily}
+						onDelayChange={changeSubtitleDelay}
+						onSettingsModeChange={(active) => setSubtitleEditMode(active)}
+					/>
+				))}
 
 			{/* mpv's own window shows the subtitles itself. */}
 			{!mpv.fallbackActive && (subtitleCues.length > 0 || subtitleEditMode) && (
@@ -1963,8 +2372,12 @@ export const PlayerView = () => {
 					playing={videoPlaying && !mpv.buffering && !mpv.state.waiting}
 					fontSize={subtitleFontSize}
 					fontFamily={subtitleFontFamily}
-					posX={subtitlePos.x}
-					posY={subtitlePos.y}
+					posX={remote && showSubtitlePicker ? TV_SUBTITLE_BESIDE_PANEL : subtitlePos.x}
+					posY={
+						tvBarVisible
+							? Math.min(subtitlePos.y, tvSubtitleTop(tvView))
+							: subtitlePos.y
+					}
 					delay={subtitleDelay}
 					editMode={subtitleEditMode}
 					onPositionChange={(x, y) => setSubtitlePos({ x, y })}
@@ -1972,46 +2385,48 @@ export const PlayerView = () => {
 			)}
 
 			{/* Info drawers */}
-			{showInfoDrawer && activeChannel && activeChannel.contentType === "series" && (
-				<SeriesDetailModal
-					showTitle={showTitleForDrawer}
+			{remote && showInfoDrawer && activeChannel && (
+				<TvPlayerInfo
+					channel={activeChannel}
+					show={{ name: showTitleForDrawer, id: seriesContainerId }}
 					episodes={episodesForDrawer}
-					seriesChannelId={seriesContainerId}
+					omdbData={prefetchedOmdbData}
+					whatsonData={prefetchedWhatsonData}
+					onPlay={playFromInfo}
 					onClose={() => setShowInfoDrawer(false)}
-					currentUrl={activeChannel.url}
-					onPlay={(ch) => {
-						// Same episode, different source → switch in place and keep the position.
-						if (isSameEpisode(ch, activeChannel)) {
-							setShowInfoDrawer(false);
-							switchSource(ch.url);
-						} else {
-							playEpisode(ch);
-						}
-					}}
-					prefetchedOmdbData={prefetchedOmdbData}
-					prefetchedWhatsonData={prefetchedWhatsonData}
 				/>
 			)}
 
-			{showInfoDrawer && activeChannel && activeChannel.contentType === "movie" && (
-				<MovieInfoDrawer
-					movie={activeChannel}
-					onClose={() => setShowInfoDrawer(false)}
-					onPlay={(ch) => {
-						setShowInfoDrawer(false);
-						// Same movie, different source → switch in place and keep the position.
-						if (ch.id === activeChannel.id) {
-							switchSource(ch.url);
-						} else {
-							startPlayback(ch, "player");
-						}
-					}}
-					prefetchedOmdbData={prefetchedOmdbData}
-					prefetchedWhatsonData={prefetchedWhatsonData}
-				/>
-			)}
+			{!remote &&
+				showInfoDrawer &&
+				activeChannel &&
+				activeChannel.contentType === "series" && (
+					<SeriesDetailModal
+						showTitle={showTitleForDrawer}
+						episodes={episodesForDrawer}
+						seriesChannelId={seriesContainerId}
+						onClose={() => setShowInfoDrawer(false)}
+						currentUrl={activeChannel.url}
+						onPlay={playFromInfo}
+						prefetchedOmdbData={prefetchedOmdbData}
+						prefetchedWhatsonData={prefetchedWhatsonData}
+					/>
+				)}
 
-			{showInfoDrawer && activeChannel && activeChannel.contentType === "live" && (
+			{!remote &&
+				showInfoDrawer &&
+				activeChannel &&
+				activeChannel.contentType === "movie" && (
+					<MovieInfoDrawer
+						movie={activeChannel}
+						onClose={() => setShowInfoDrawer(false)}
+						onPlay={playFromInfo}
+						prefetchedOmdbData={prefetchedOmdbData}
+						prefetchedWhatsonData={prefetchedWhatsonData}
+					/>
+				)}
+
+			{!remote && showInfoDrawer && activeChannel && activeChannel.contentType === "live" && (
 				<LiveInfoDrawer channel={activeChannel} onClose={() => setShowInfoDrawer(false)} />
 			)}
 
@@ -2020,7 +2435,7 @@ export const PlayerView = () => {
 			)}
 
 			{pendingResume && (
-				<ResumePrompt
+				<ResumeDialog
 					title={pendingResume.channel.name}
 					position={pendingResume.position}
 					duration={pendingResume.duration}

@@ -33,7 +33,7 @@ interface ProviderSettingsModalProps {
 	) => Promise<void>;
 }
 
-const INTERVAL_OPTIONS = [
+export const INTERVAL_OPTIONS = [
 	{ label: "Every hour", hours: 1 },
 	{ label: "Every 6 hours", hours: 6 },
 	{ label: "Every 12 hours", hours: 12 },
@@ -42,7 +42,7 @@ const INTERVAL_OPTIONS = [
 	{ label: "Every week", hours: 168 },
 ];
 
-const EPG_INTERVAL_OPTIONS = [
+export const EPG_INTERVAL_OPTIONS = [
 	{ label: "Every 6 hours", hours: 6 },
 	{ label: "Every 12 hours", hours: 12 },
 	{ label: "Every day", hours: 24 },
@@ -56,7 +56,7 @@ const OFF_ON: SegmentedOption<boolean>[] = [
 ];
 
 /** Shown when a guide refreshed by hand had no programs. */
-const EMPTY_GUIDE_MESSAGE = "The guide came back with no programs, so nothing changed.";
+export const EMPTY_GUIDE_MESSAGE = "The guide came back with no programs, so nothing changed.";
 
 const SectionLabel = ({ children }: { children: React.ReactNode }) => (
 	<p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">

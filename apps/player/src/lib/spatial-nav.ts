@@ -77,15 +77,17 @@ export const distanceIn = (from: Box, to: Box, direction: Direction): number | n
  * a move up, and so on. Moving from it reaches the first thing inside.
  */
 export const entryEdge = (box: Box, direction: Direction): Box => {
+	// A browser's DOMRect keeps these on its prototype, so spreading one copies nothing.
+	const { left, top, right, bottom } = box;
 	switch (direction) {
 		case "down":
-			return { ...box, bottom: box.top };
+			return { left, top, right, bottom: top };
 		case "up":
-			return { ...box, top: box.bottom };
+			return { left, top: bottom, right, bottom };
 		case "right":
-			return { ...box, right: box.left };
+			return { left, top, right: left, bottom };
 		case "left":
-			return { ...box, left: box.right };
+			return { left: right, top, right, bottom };
 	}
 };
 

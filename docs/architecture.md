@@ -46,6 +46,10 @@ Cinette/
 - Components are in the shadcn style (`components/ui/`), styled with Tailwind CSS 4.
   There is no Tailwind config file. The theme and the custom utilities are in
   `styles/globals.css`. Long channel lists use `@tanstack/react-virtual`.
+- A TV gets its own frame and screens from `components/tv/`, and `App.tsx` routes to them
+  when `controlsOthers()` is false. See [Android](android.md#the-tv-remote). Logic the TV
+  shares with the desktop pages lives in hooks, such as `useSubtitleSearch`,
+  `useRemoteControlSettings` and `useCatalog`.
 
 ## Backend
 

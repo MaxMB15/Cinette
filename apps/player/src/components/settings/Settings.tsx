@@ -25,21 +25,19 @@ import {
 	getOmdbApiKey,
 	setOmdbApiKey,
 	testOmdbApiKey,
-	clearWatchHistory,
 	getOpenSubtitlesApiKey,
 	setOpenSubtitlesApiKey,
 	testOpenSubtitlesApiKey,
 	getGeminiApiKey,
 	setGeminiApiKey,
 	testGeminiApiKey,
-	clearAllCaches,
 	getDownloadFolder,
 	setDownloadFolder,
 	getDownloadConcurrency,
 	setDownloadConcurrency,
 	countDownloadsDue,
 } from "@/lib/tauri";
-import { historyKey, reloadClearedCaches } from "@/lib/queries";
+import { clearCacheData, clearHistoryData } from "@/lib/queries";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { RemoteControlSettings } from "@/components/settings/RemoteControlSettings";
 import { useDownloads } from "@/hooks/useDownloads";
@@ -76,9 +74,9 @@ import { DownloadHistoryDialog } from "./DownloadHistory";
 type SaveStatus = "idle" | "saved" | "error";
 type HistoryStatus = "idle" | "cleared";
 
-const SKIP_CHOICES = SKIP_OPTIONS.map((n) => ({ value: n, label: `${n} seconds` }));
+export const SKIP_CHOICES = SKIP_OPTIONS.map((n) => ({ value: n, label: `${n} seconds` }));
 
-const SKIP_SEGMENT_CHOICES: { value: SkipSegmentMode; label: string }[] = [
+export const SKIP_SEGMENT_CHOICES: { value: SkipSegmentMode; label: string }[] = [
 	{ value: "button", label: "Skip button" },
 	{ value: "auto", label: "Automatic" },
 	{ value: "off", label: "Off" },
@@ -93,7 +91,7 @@ const GEMINI_KEY: ApiKeyService = {
 	test: testGeminiApiKey,
 };
 
-const OMDB_KEY: ApiKeyService = {
+export const OMDB_KEY: ApiKeyService = {
 	load: getOmdbApiKey,
 	save: setOmdbApiKey,
 	test: testOmdbApiKey,
@@ -101,7 +99,7 @@ const OMDB_KEY: ApiKeyService = {
 	onSaved: (key) => rememberHasOmdbKey(Boolean(key)),
 };
 
-const OPENSUBTITLES_KEY: ApiKeyService = {
+export const OPENSUBTITLES_KEY: ApiKeyService = {
 	load: getOpenSubtitlesApiKey,
 	save: setOpenSubtitlesApiKey,
 	test: testOpenSubtitlesApiKey,
@@ -257,10 +255,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		);
 		if (!confirmed) return;
 		try {
-			await clearWatchHistory();
-			// The history lists start over, rather than show the cleared
-			// entries until they load again.
-			queryClient.removeQueries({ queryKey: historyKey() });
+			await clearHistoryData(queryClient);
 			setHistoryStatus("cleared");
 			setHistoryError(null);
 			if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
@@ -277,8 +272,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		);
 		if (!confirmed) return;
 		try {
-			await clearAllCaches();
-			reloadClearedCaches(queryClient).catch(() => {});
+			await clearCacheData(queryClient);
 			setCacheStatus("cleared");
 			setCacheError(null);
 			if (cacheTimerRef.current) clearTimeout(cacheTimerRef.current);

@@ -138,6 +138,29 @@ describe("entryEdge", () => {
 		expect(entryEdge(outer, "left")).toEqual({ left: 500, right: 500, top: 100, bottom: 300 });
 	});
 
+	it("reads a box that keeps its sides on its prototype, as a browser's DOMRect does", () => {
+		class Rect implements Box {
+			get left() {
+				return 100;
+			}
+			get top() {
+				return 100;
+			}
+			get right() {
+				return 500;
+			}
+			get bottom() {
+				return 300;
+			}
+		}
+		expect(entryEdge(new Rect(), "right")).toEqual({
+			left: 100,
+			right: 100,
+			top: 100,
+			bottom: 300,
+		});
+	});
+
 	it("leads to the first thing inside in that direction", () => {
 		const inside = candidates({ top: box(120, 120), bottom: box(120, 240) });
 		expect(pickNext(entryEdge(outer, "down"), inside, "down")).toBe("top");

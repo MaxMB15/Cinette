@@ -4,7 +4,10 @@
 import { describe, it, expect } from "vitest";
 import {
 	dedupeEpisodes,
+	episodeHeading,
+	episodeLabel,
 	episodeNeighbors,
+	episodeTitle,
 	findEpisode,
 	isSameEpisode,
 	sortEpisodes,
@@ -153,5 +156,94 @@ describe("episodeNeighbors", () => {
 		]);
 		expect(episodeNeighbors(items, 1)).toEqual({ prev: items[0], next: items[2] });
 		expect(items.map((i) => i.id)).toEqual(["e1", "e2", "e3"]);
+	});
+});
+
+describe("episodeTitle", () => {
+	it("leaves what follows the show and the code", () => {
+		expect(episodeTitle("Harbor Lights S01E03 The Ferry")).toBe("The Ferry");
+	});
+
+	it("goes by the last code when the server repeats it in the title", () => {
+		expect(episodeTitle("Harbor S01E03 Harbor - S01E03 - The Ferry")).toBe("The Ferry");
+	});
+
+	it("reads the code in any case, with a space, and with one to three season digits", () => {
+		expect(episodeTitle("Harbor s1e2 Fog")).toBe("Fog");
+		expect(episodeTitle("Harbor S123E456 Fog")).toBe("Fog");
+		expect(episodeTitle("Harbor S01 E03 Fog")).toBe("Fog");
+		expect(episodeTitle("Harbor S01E1234 Fog")).toBe("Fog");
+	});
+
+	it("drops the separator after the code and the space at the end", () => {
+		expect(episodeTitle("Harbor S01E03 - Fog ")).toBe("Fog");
+		expect(episodeTitle("Harbor S01E03: Fog")).toBe("Fog");
+		expect(episodeTitle("Harbor S01E03_.Fog")).toBe("Fog");
+	});
+
+	it("keeps a code with four season digits, or one inside a word, as part of the name", () => {
+		expect(episodeTitle("Harbor S1234E03 Fog")).toBe("Harbor S1234E03 Fog");
+		expect(episodeTitle("HarborS01E03 Fog")).toBe("HarborS01E03 Fog");
+	});
+
+	it("only looks on the name's first line", () => {
+		expect(episodeTitle("Harbor\nS01E03 Fog")).toBe("Harbor\nS01E03 Fog");
+	});
+
+	it("gives the whole name when nothing follows the code", () => {
+		expect(episodeTitle("Harbor S01E03")).toBe("Harbor S01E03");
+	});
+});
+
+describe("episodeLabel", () => {
+	it("gives the number and the title", () => {
+		expect(episodeLabel({ name: "Harbor S01E03 The Ferry", episode: 3 })).toBe("3 The Ferry");
+	});
+
+	it("says Episode and the number when the name is only the show and the code", () => {
+		expect(episodeLabel({ name: "Harbor S01E03", episode: 3 })).toBe("Episode 3");
+		expect(episodeLabel({ name: "Harbor S00E00", episode: 0 })).toBe("Episode 0");
+	});
+
+	it("doesn't say the number twice when the title is only the number", () => {
+		expect(episodeLabel({ name: "Harbor S01E03 Episode 3", episode: 3 })).toBe("Episode 3");
+		expect(episodeLabel({ name: "Harbor S01E03 Ep3", episode: 3 })).toBe("Episode 3");
+		expect(episodeLabel({ name: "Harbor S01E03 episode  12", episode: 12 })).toBe("Episode 12");
+	});
+
+	it("keeps a title that only starts like a number", () => {
+		expect(episodeLabel({ name: "Harbor S01E03 Episode 3 Part 2", episode: 3 })).toBe(
+			"3 Episode 3 Part 2"
+		);
+		expect(episodeLabel({ name: "Harbor S01E03 The Episode 3", episode: 3 })).toBe(
+			"3 The Episode 3"
+		);
+		expect(episodeLabel({ name: "Harbor S01E03 Epic 3", episode: 3 })).toBe("3 Epic 3");
+		expect(episodeLabel({ name: "Harbor S01E03 Episode", episode: 3 })).toBe("3 Episode");
+	});
+
+	it("gives the title alone, or the whole name, without a number", () => {
+		expect(episodeLabel({ name: "Harbor S01E03 Fog" })).toBe("Fog");
+		expect(episodeLabel({ name: "Harbor S01 Fog" })).toBe("Harbor S01 Fog");
+		expect(episodeLabel({ name: "Harbor S01E03" })).toBe("Harbor S01E03");
+	});
+});
+
+describe("episodeHeading", () => {
+	it("puts the season and episode before the title", () => {
+		expect(episodeHeading("Harbor S02E05 Harbour Lights", 2, 5)).toBe(
+			"S2 E5 \u00b7 Harbour Lights"
+		);
+	});
+
+	it("is the season and episode alone when the episode has no title of its own", () => {
+		expect(episodeHeading("Harbor S02E05", 2, 5)).toBe("S2 E5");
+		expect(episodeHeading("Harbor S02E05 Episode 5", 2, 5)).toBe("S2 E5");
+	});
+
+	it("is the title, or the name, without the numbers", () => {
+		expect(episodeHeading("Harbor S02E05 Harbour Lights", undefined, 5)).toBe("Harbour Lights");
+		expect(episodeHeading("Harbor S02E05 Harbour Lights", 2)).toBe("Harbour Lights");
+		expect(episodeHeading("Pilot")).toBe("Pilot");
 	});
 });

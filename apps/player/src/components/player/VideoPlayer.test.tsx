@@ -36,11 +36,16 @@ import type { PlaybackDestination, PlaybackState } from "@/lib/destination";
 import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
 import type { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
 import type { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
-import type { SubtitlePick, SubtitlePicker } from "./SubtitlePicker";
+import type { TvPlayerInfo } from "@/components/tv/TvPlayerInfo";
+import type { TvSubtitlePanel } from "@/components/tv/TvSubtitlePanel";
+import { Dialog } from "@/components/ui/dialog";
+import type { SubtitlePick } from "@/hooks/useSubtitleSearch";
+import type { SubtitlePicker } from "./SubtitlePicker";
 import type {
 	Channel,
 	DownloadRecord,
 	LayoutMode,
+	MpvTrack,
 	PlaybackPosition,
 	PolledMpvState,
 	Platform,
@@ -58,6 +63,8 @@ import { makeSegment } from "@/test/segments";
 import { fakeDestination, playbackCapabilities, playbackState } from "@/test/destination-fixtures";
 import { getMountedPlayer } from "@/lib/remote-target";
 import { nowPlaying } from "@/lib/now-playing";
+import { setZapList } from "@/lib/tv-zap";
+import { formatHHMM } from "@/lib/epg-window";
 import { saveProgressNow } from "@/lib/player-progress";
 import { PlayerView } from "./VideoPlayer";
 
@@ -76,6 +83,7 @@ const idleState = vi.hoisted(() => (): PolledMpvState => ({
 	reachedEnd: false,
 	waiting: false,
 	fallbackActive: false,
+	buffered: null,
 	positionAt: 0,
 }));
 
@@ -97,6 +105,9 @@ const tauri = vi.hoisted(() => ({
 	mpvSubAdd: vi.fn<typeof Bridge.mpvSubAdd>(async () => {}),
 	mpvSubRemove: vi.fn<typeof Bridge.mpvSubRemove>(async () => {}),
 	mpvSetSubDelay: vi.fn<typeof Bridge.mpvSetSubDelay>(async () => {}),
+	mpvGetTracks: vi.fn<typeof Bridge.mpvGetTracks>(async () => []),
+	mpvSetAudio: vi.fn<typeof Bridge.mpvSetAudio>(async () => {}),
+	mpvSetSpeed: vi.fn<typeof Bridge.mpvSetSpeed>(async () => {}),
 	recordPlayStart: vi.fn<typeof Bridge.recordPlayStart>(async () => {}),
 	recordPlayEnd: vi.fn<typeof Bridge.recordPlayEnd>(async () => {}),
 	fetchOmdbData: vi.fn<typeof Bridge.fetchOmdbData>(async () => null),
@@ -413,23 +424,7 @@ vi.mock("./SubtitlePicker", () => ({
 			</p>
 			<input aria-label="Search subtitles" />
 			<p>Current subtitle {props.currentSelectedEntry?.fileId ?? "none"}</p>
-			<button
-				type="button"
-				onClick={() => {
-					props.startPick();
-					props.onSubtitleSelected?.(
-						101,
-						[{ start: 1, end: 4, text: "Mind the lantern" }],
-						{
-							fileId: 101,
-							languageCode: "en",
-							format: "srt",
-							releaseName: "Lantern.Keeper.2024",
-						},
-						1
-					);
-				}}
-			>
+			<button type="button" onClick={() => pickEnglish(props)}>
 				Pick English
 			</button>
 			<button
@@ -513,6 +508,101 @@ vi.mock("@/components/channels/LiveInfoDrawer", () => ({
 		</div>
 	),
 }));
+
+vi.mock("@/components/tv/TvSubtitlePanel", () => ({
+	TvSubtitlePanel: ({ style, ...props }: ComponentProps<typeof TvSubtitlePanel>) => (
+		<div role="dialog" aria-label="TV subtitles">
+			<p>
+				Looking up {props.imdbId} season {props.season ?? "none"} episode{" "}
+				{props.episode ?? "none"}
+			</p>
+			<p>Current subtitle {props.currentSelectedEntry?.fileId ?? "none"}</p>
+			<p>
+				Text {style.fontSize} in {style.fontFamily}, delay {style.delay}, at{" "}
+				{style.position.x} {style.position.y}
+			</p>
+			<button type="button" onClick={() => pickEnglish(props)}>
+				Pick English
+			</button>
+			<button type="button" onClick={() => style.onDelayChange(1.5)}>
+				Delay subtitles
+			</button>
+			<button type="button" onClick={() => style.onFontSizeChange(30)}>
+				Bigger subtitles
+			</button>
+			<button type="button" onClick={() => style.onFontFamilyChange("Georgia, serif")}>
+				Serif subtitles
+			</button>
+			<button type="button" onClick={() => style.onPositionChange({ x: 50, y: 40 })}>
+				Raise subtitles
+			</button>
+			<button type="button" onClick={props.onClose}>
+				Close subtitles
+			</button>
+		</div>
+	),
+}));
+
+vi.mock("@/components/tv/TvPlayerInfo", () => ({
+	TvPlayerInfo: (props: ComponentProps<typeof TvPlayerInfo>) => (
+		<div role="dialog" aria-label={`Info on ${props.channel.name}`}>
+			<p>
+				Show {props.show.name}, card {props.show.id}
+			</p>
+			<p>
+				Details {props.omdbData?.imdbId ?? "none"}, guide{" "}
+				{props.whatsonData ? "found" : "none"}
+			</p>
+			<button
+				type="button"
+				onClick={() => props.onPlay({ ...props.channel, url: MIRROR_URL })}
+			>
+				Play the second source
+			</button>
+			<button type="button" onClick={() => props.onPlay(harborLights())}>
+				Play another movie
+			</button>
+			{props.episodes.map((ep) => (
+				<button key={ep.id} type="button" onClick={() => props.onPlay(ep)}>
+					Play {ep.id}
+				</button>
+			))}
+			<button type="button" onClick={props.onClose}>
+				Close details
+			</button>
+		</div>
+	),
+}));
+
+// The guide has tests of its own, and these tests have no guide to read.
+vi.mock("@/hooks/useNowNext", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/hooks/useNowNext")>()),
+	useNowNext: () => ({
+		now: 0,
+		programsOf: () => [],
+		nowNextOf: () => ({ now: null, next: null }),
+		scheduleOf: () => [],
+	}),
+}));
+
+/** Picks the English subtitles the way both subtitle stand-ins do. */
+const pickEnglish = ({
+	startPick,
+	onSubtitleSelected,
+}: Pick<ComponentProps<typeof SubtitlePicker>, "startPick" | "onSubtitleSelected">) => {
+	startPick();
+	onSubtitleSelected?.(
+		101,
+		[{ start: 1, end: 4, text: "Mind the lantern" }],
+		{
+			fileId: 101,
+			languageCode: "en",
+			format: "srt",
+			releaseName: "Lantern.Keeper.2024",
+		},
+		1
+	);
+};
 
 const MOVIE_URL = "https://cdn.example.test/movies/lantern-keeper.mkv";
 const MIRROR_URL = "http://mirror.example.test/movies/lantern-keeper.mkv";
@@ -761,6 +851,41 @@ const tapLayer = () => document.querySelector(".touch-manipulation") as HTMLElem
 const controlBar = () =>
 	screen.getByRole("button", { name: "Stop" }).closest(".transition-opacity");
 
+/** The TV's controls over the video, which stay on the page while they're hidden. */
+const tvBar = () => screen.queryByTestId("tv-controls") as HTMLElement;
+
+/** The TV's row of round buttons, which Up or Down shows. */
+const tvRow = () => screen.getByRole("toolbar", { name: "Player" });
+
+/** A button in that row. */
+const tvButton = (name: string) => within(tvRow()).getByRole("button", { name });
+
+/** Whether that row has this button. */
+const hasTvButton = (name: string) => within(tvRow()).queryByRole("button", { name }) !== null;
+
+/** The TV's tray of options, which a second Down shows under the row. */
+const tvTray = () => screen.getByRole("toolbar", { name: "More" });
+
+/** An option in the tray, named by its label and then its value. */
+const tvTile = (label: string) =>
+	within(tvTray()).getByRole("button", { name: new RegExp(`^${label}`) });
+
+/** Whether the tray has this option. */
+const hasTvTile = (label: string) =>
+	within(tvTray()).queryByRole("button", { name: new RegExp(`^${label}`) }) !== null;
+
+/** Shows the row of buttons from the video, as Down does. */
+const openTvRow = () => press("ArrowDown");
+
+/** Shows the tray from the video, as Down twice does. */
+const openTvTray = async () => {
+	await press("ArrowDown");
+	await press("ArrowDown");
+};
+
+/** Runs the clock ahead by `ms`, with fake timers on. */
+const wait = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+
 /** The positioned box around a subtitle line. */
 const subtitleBox = (text: string) =>
 	screen.getByText(text).parentElement?.parentElement as HTMLElement;
@@ -820,6 +945,7 @@ beforeEach(() => {
 	env.downloads = [];
 	env.layoutMode = "desktop";
 	env.os = "macos";
+	setZapList([]);
 	nav.current = null;
 	pageOpens.run = null;
 	local.destination = null;
@@ -1547,6 +1673,78 @@ describe("episodes", () => {
 		await setMpv({ state: playing(ep1.url, 1296, 1300) });
 		await setMpv({ state: ended(ep1.url, 1300) });
 		expect(loadedUrls()).toEqual([ep1.url]);
+		expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+	});
+
+	describe("on a TV, when a video ends", () => {
+		beforeEach(() => {
+			env.os = "android";
+			window.__CINETTE_TV__ = true;
+		});
+
+		afterEach(() => {
+			delete window.__CINETTE_TV__;
+		});
+
+		const finish = async (url: string) => {
+			await setMpv({ state: playing(url, 1296, 1300) });
+			await setMpv({ state: ended(url, 1300) });
+		};
+
+		const expectLeft = () => {
+			expect(fakeMpv.actions.stop).toHaveBeenCalledTimes(1);
+			expect(screen.getByText("Channel list")).toBeInTheDocument();
+		};
+
+		it("goes back to where a movie was opened from", async () => {
+			await openItem(lanternKeeper());
+			await finish(MOVIE_URL);
+			expectLeft();
+		});
+
+		it("goes back after the last episode", async () => {
+			await openItem(ep2, { episodes: [ep1, ep2] });
+			await finish(ep2.url);
+			expectLeft();
+		});
+
+		it("goes back when autoplay is off, with an episode to go on to", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			await openTvTray();
+			fireEvent.click(tvTile("Autoplay"));
+			await finish(ep1.url);
+			expect(loadedUrls()).toEqual([ep1.url]);
+			expectLeft();
+		});
+
+		it("stays to play the next episode", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			await finish(ep1.url);
+			expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+			expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+		});
+
+		it("stays for a device controlling it, which chooses what's next", async () => {
+			tauri.remoteSessions.mockResolvedValue([
+				{
+					sessionId: "s1",
+					deviceId: "d1",
+					name: "Phone",
+					deviceType: "iphone",
+					connected: true,
+				},
+			]);
+			await openItem(lanternKeeper());
+			await finish(MOVIE_URL);
+			expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+			expect(screen.queryByText("Channel list")).not.toBeInTheDocument();
+		});
+
+		it("stays when it comes back to a video that ended on another page", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: ended(MOVIE_URL, 1300) });
+			expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+		});
 	});
 
 	it("doesn't go on to the next episode when the viewer pauses part way", async () => {
@@ -1580,6 +1778,15 @@ describe("episodes", () => {
 				reachedEnd: false,
 			},
 		});
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
+	it("doesn't take being near the end of one episode for being near the end of the next", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2, ep3] });
+		await setMpv({ state: playing(ep1.url, 1299, 1300) });
+		await press("n");
+		// The first report about episode two already says it ended.
+		await setMpv({ state: ended(ep2.url, 1300) });
 		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
 	});
 
@@ -1762,19 +1969,19 @@ describe("switching sources", () => {
 	});
 });
 
+/** Opens the movie with an intro from 60 to 120 seconds. */
+const openWithIntro = async () => {
+	tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+	tauri.getSkipSegments.mockResolvedValue([makeSegment()]);
+	await openItem(lanternKeeper());
+};
+
+/** Plays the movie through these positions, one poll each. */
+const playThrough = async (positions: number[], url = MOVIE_URL, duration = 3600) => {
+	for (const position of positions) await setMpv({ state: playing(url, position, duration) });
+};
+
 describe("skipping intros and credits", () => {
-	/** Opens the movie with an intro from 60 to 120 seconds. */
-	const openWithIntro = async () => {
-		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
-		tauri.getSkipSegments.mockResolvedValue([makeSegment()]);
-		await openItem(lanternKeeper());
-	};
-
-	/** Plays the movie through these positions, one poll each. */
-	const playThrough = async (positions: number[], url = MOVIE_URL, duration = 3600) => {
-		for (const position of positions) await setMpv({ state: playing(url, position, duration) });
-	};
-
 	it("offers a Skip intro button during the intro", async () => {
 		await openWithIntro();
 		await playThrough([30]);
@@ -1927,24 +2134,66 @@ describe("keyboard shortcuts", () => {
 			expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
 		});
 
-		it("leaves Up and Down to move focus, since the TV has its own volume", async () => {
+		it("takes no notice of the center button while the stream opens", async () => {
 			await openItem(lanternKeeper());
-			expect(await press("ArrowUp")).toBe(true);
-			expect(await press("ArrowDown")).toBe(true);
+			await setMpv({ opening: true });
+			expect(await press("Enter")).toBe(true);
+			expect(fakeMpv.actions.play).not.toHaveBeenCalled();
+			expect(fakeMpv.actions.pause).not.toHaveBeenCalled();
+		});
+
+		it("opens the buttons with Down on the video, since the TV has its own volume", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+			expect(await press("ArrowDown")).toBe(false);
+			expect(tvButton("Pause")).toHaveFocus();
 			expect(fakeMpv.actions.setVolume).not.toHaveBeenCalled();
 		});
 
-		it("still seeks with Left and Right", async () => {
+		it("shows the buttons under what plays with Up, since the TV has its own volume", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+			expect(await press("ArrowUp")).toBe(false);
+			expect(screen.getByRole("heading", { name: "The Lantern Keeper" })).toBeInTheDocument();
+			expect(tvButton("Pause")).toHaveFocus();
+			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+			expect(fakeMpv.actions.setVolume).not.toHaveBeenCalled();
+		});
+
+		it("goes back to the video alone with Down from there", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+			await press("ArrowUp");
+			expect(await press("ArrowDown")).toBe(false);
+			expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+			expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+			expect(playerArea()).toHaveFocus();
+		});
+
+		it("shows the tray of options with Down from the buttons, and goes back up with Up", async () => {
+			await openItem(lanternKeeper());
+			await openTvRow();
+			expect(screen.queryByRole("toolbar", { name: "More" })).not.toBeInTheDocument();
+			await press("ArrowDown");
+			expect(tvTile("Source")).toHaveFocus();
+			expect(tvRow()).toBeInTheDocument();
+			await press("ArrowUp");
+			expect(screen.queryByRole("toolbar", { name: "More" })).not.toBeInTheDocument();
+			expect(tvButton("Play")).toHaveFocus();
+		});
+
+		it("still seeks with Left and Right, and says how far", async () => {
 			await openItem(lanternKeeper());
 			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
 			expect(await press("ArrowRight")).toBe(false);
 			expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
+			expect(screen.getByText("+10s")).toBeInTheDocument();
 		});
 
-		it("leaves the arrows to move between the controls once one has focus", async () => {
+		it("leaves the arrows to move between the buttons once one has focus", async () => {
 			await openItem(lanternKeeper());
 			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
-			screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+			await press("ArrowDown");
 			expect(await press("ArrowRight")).toBe(true);
 			expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
 		});
@@ -1954,31 +2203,34 @@ describe("keyboard shortcuts", () => {
 				vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 			});
 
-			it("shows them on any key, and keeps them up while focus moves between them", async () => {
+			it("hides them after six seconds, shows them on any key, and each key keeps them up", async () => {
 				await openItem(lanternKeeper());
 				await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
-				act(() => vi.advanceTimersByTime(4000));
-				expect(controlBar()).toHaveClass("opacity-0");
-				// Down moves focus into the controls, so they show.
-				await press("ArrowDown");
-				expect(controlBar()).toHaveClass("opacity-100");
+				wait(5999);
+				expect(tvBar()).not.toHaveClass("invisible");
+				wait(1);
+				expect(tvBar()).toHaveClass("invisible");
 
-				screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
-				act(() => vi.advanceTimersByTime(3000));
-				await press("ArrowLeft");
-				act(() => vi.advanceTimersByTime(3000));
-				expect(controlBar()).toHaveClass("opacity-100");
-				act(() => vi.advanceTimersByTime(1000));
-				expect(controlBar()).toHaveClass("opacity-0");
+				await press("q");
+				expect(tvBar()).not.toHaveClass("invisible");
+				wait(3000);
+				await press("ArrowDown");
+				wait(3000);
+				await press("ArrowRight");
+				wait(5999);
+				expect(tvBar()).not.toHaveClass("invisible");
+				wait(1);
+				expect(tvBar()).toHaveClass("invisible");
 			});
 
 			it("gives the player focus back as they hide, so Left and Right seek again", async () => {
 				await openItem(lanternKeeper());
 				await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
-				screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
-				act(() => vi.advanceTimersByTime(4000));
-				expect(controlBar()).toHaveClass("opacity-0");
-				expect(document.activeElement).toBe(playerArea());
+				await press("ArrowDown");
+				expect(tvButton("Pause")).toHaveFocus();
+				wait(6000);
+				expect(tvBar()).toHaveClass("invisible");
+				expect(playerArea()).toHaveFocus();
 				expect(await press("ArrowRight")).toBe(false);
 				expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
 			});
@@ -2751,9 +3003,9 @@ describe("subtitles", () => {
 		pickEnglishSubtitles();
 		fireEvent.click(screen.getByRole("button", { name: "Adjust subtitles" }));
 		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(box(1000, 500));
-		fireEvent.mouseDown(subtitleBox("Sample subtitle text"), { clientX: 500, clientY: 440 });
-		fireEvent.mouseMove(document, { clientX: 600, clientY: 390 });
-		fireEvent.mouseUp(document);
+		fireEvent.pointerDown(subtitleBox("Sample subtitle text"), { clientX: 500, clientY: 440 });
+		fireEvent.pointerMove(document, { clientX: 600, clientY: 390 });
+		fireEvent.pointerUp(document);
 		fireEvent.click(screen.getByRole("button", { name: "Delay subtitles" }));
 		fireEvent.click(screen.getByRole("button", { name: "Bigger subtitles" }));
 		fireEvent.click(screen.getByRole("button", { name: "Serif subtitles" }));
@@ -3354,12 +3606,12 @@ describe("subtitles", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
 		fireEvent.click(screen.getByRole("button", { name: "Adjust subtitles" }));
 		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(box(1000, 500));
-		fireEvent.mouseDown(subtitleBox("Sample subtitle text"), { clientX: 500, clientY: 440 });
-		fireEvent.mouseMove(document, { clientX: 600, clientY: 390 });
+		fireEvent.pointerDown(subtitleBox("Sample subtitle text"), { clientX: 500, clientY: 440 });
+		fireEvent.pointerMove(document, { clientX: 600, clientY: 390 });
 		expect(subtitleBox("Sample subtitle text").style.left).toBe("60%");
 		expect(subtitleBox("Sample subtitle text").style.top).toBe("78%");
-		fireEvent.mouseUp(document);
-		fireEvent.mouseMove(document, { clientX: 900, clientY: 390 });
+		fireEvent.pointerUp(document);
+		fireEvent.pointerMove(document, { clientX: 900, clientY: 390 });
 		expect(subtitleBox("Sample subtitle text").style.left).toBe("60%");
 	});
 
@@ -3706,15 +3958,1129 @@ describe("phones, tablets and TV boxes", () => {
 		).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Fullscreen" })).toBeInTheDocument();
 	});
+});
 
-	it("keeps the volume slider and the shortcut list on a TV box, which has a remote", async () => {
-		env.os = "android";
-		env.layoutMode = "tv";
-		setTouchPoints(0);
+describe("the TV player", () => {
+	const sports = makeNewsChannel({
+		id: "ch2",
+		name: "Sports",
+		url: "http://live.example.test/sports.ts",
+	});
+	const music = makeNewsChannel({
+		id: "ch3",
+		name: "Music",
+		url: "http://live.example.test/music.ts",
+	});
+
+	/** The name of what's on, in the details that Up and the channel keys show. */
+	const tvTitle = () => within(tvBar()).getByRole("heading", { level: 2 });
+
+	/** A time on a half hour, so the clock reads the same in every test. */
+	const NOW_MS = 1_800_000_000_000;
+
+	/** The row the cursor is on in a panel's list. */
+	const cursor = () => screen.getByRole("option", { selected: true });
+
+	/** A dialog with this name, if it shows. */
+	const dialog = (name: string) => screen.queryByRole("dialog", { name });
+
+	/** Turns on the clock the bar's timer runs on. */
+	const fakeTimers = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+	/** Opens the movie with details to look up subtitles with, 2 seconds in. */
+	const openWithSubtitles = async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
 		await openItem(lanternKeeper());
-		expect(screen.getByRole("slider", { name: "Volume" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Keyboard shortcuts" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Fullscreen" })).toBeInTheDocument();
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+	};
+
+	/** Opens the subtitle panel and picks the English subtitles it offers. */
+	const pickSubtitles = async () => {
+		await openTvRow();
+		fireEvent.click(tvButton("Subtitles"));
+		fireEvent.click(screen.getByRole("button", { name: "Pick English" }));
+		await flush();
+	};
+
+	const closeSubtitles = () =>
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+
+	beforeEach(() => {
+		env.os = "android";
+		window.__CINETTE_TV__ = true;
+	});
+
+	afterEach(() => {
+		delete window.__CINETTE_TV__;
+	});
+
+	describe("what it shows", () => {
+		it("leaves out the desktop's controls, since it has its own bar for the remote", async () => {
+			setTouchPoints(0);
+			await openItem(lanternKeeper());
+			expect(screen.queryByRole("slider", { name: "Volume" })).not.toBeInTheDocument();
+			expect(
+				screen.queryByRole("button", { name: "Keyboard shortcuts" })
+			).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Fullscreen" })).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+			expect(tvBar()).not.toHaveClass("invisible");
+		});
+
+		it("has no back button or empty message, even in a phone's layout", async () => {
+			env.layoutMode = "mobile";
+			renderPlayer(null);
+			await flush();
+			expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
+			expect(
+				screen.queryByText("Select a channel to start watching")
+			).not.toBeInTheDocument();
+			await press("ArrowUp");
+			expect(tvTitle()).toBeEmptyDOMElement();
+		});
+
+		it("shows the name once, in the details Up shows", async () => {
+			await openItem(makeNewsChannel());
+			expect(screen.queryByText("News 24")).not.toBeInTheDocument();
+			await press("ArrowUp");
+			expect(screen.getAllByText("News 24")).toHaveLength(1);
+			expect(tvTitle()).toHaveTextContent("News 24");
+		});
+
+		it("names a bare stream address as it came, with no info to show", async () => {
+			renderPlayer({ url: "http://live.example.test/radio.ts", channelName: "Harbor Radio" });
+			await flush();
+			await press("ArrowUp");
+			expect(tvTitle()).toHaveTextContent("Harbor Radio");
+			expect(hasTvButton("Info")).toBe(false);
+		});
+
+		it("leaves the bar out while mpv draws in a window of its own", async () => {
+			await openItem(lanternKeeper());
+			expect(tvBar()).toBeInTheDocument();
+			await setMpv({ fallbackActive: true });
+			expect(tvBar()).not.toBeInTheDocument();
+		});
+
+		it("shows how far a movie got, and what OK does", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: { ...playing(MOVIE_URL, 900, 3600), buffered: [0, 1800] } });
+			const bar = screen.getByRole("progressbar", { name: "Position" });
+			expect(bar).toHaveAttribute("aria-valuenow", "25");
+			expect(bar).toHaveAttribute("aria-valuetext", "15:00 of 1:00:00");
+			expect(screen.getByTestId("buffered").style.width).toBe("50%");
+			expect(
+				screen.getByText("Left and Right skip. Up or Down shows the controls. OK pauses.")
+			).toBeInTheDocument();
+			await setMpv({ state: paused(MOVIE_URL, 900, 3600) });
+			expect(
+				screen.getByText("Left and Right skip. Up or Down shows the controls. OK plays.")
+			).toBeInTheDocument();
+		});
+
+		it("shows when the movie ends", async () => {
+			vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 0, 3600) });
+			await openTvRow();
+			expect(
+				screen.getByText(`Ends at ${formatHHMM(NOW_MS / 1000 + 3600)}`)
+			).toBeInTheDocument();
+		});
+
+		it("shows a live channel against the broadcast, with the guide in its details", async () => {
+			await openItem(makeNewsChannel());
+			expect(screen.getByRole("progressbar", { name: "Position" })).toHaveAttribute(
+				"aria-valuetext",
+				"Live"
+			);
+			expect(
+				screen.getByText("Up or Down shows the controls. OK plays.")
+			).toBeInTheDocument();
+			expect(screen.queryByText("No guide for this channel")).not.toBeInTheDocument();
+			await press("ArrowUp");
+			expect(screen.getByText("No guide for this channel")).toBeInTheDocument();
+		});
+
+		it("offers no retry buttons over a live channel, since OK retries", async () => {
+			fakeTimers();
+			await openItem(makeNewsChannel());
+			await setMpv({ opening: true });
+			wait(45_000);
+			expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+			await setMpv({ opening: false, loadFailed: true });
+			expect(screen.getByText("Stream unavailable")).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+		});
+
+		it("starts its subtitles larger, to read from across the room", async () => {
+			await openWithSubtitles();
+			await openTvRow();
+			fireEvent.click(tvButton("Subtitles"));
+			expect(
+				screen.getByText("Text 26 in system-ui, sans-serif, delay 0, at 50 88")
+			).toBeInTheDocument();
+		});
+	});
+
+	describe("when the bar shows", () => {
+		it.each([
+			["a paused video", { state: paused(MOVIE_URL, 100, 3600) }],
+			["a stream that failed to load", { loadFailed: true }],
+			["a stream that failed to open", { openFailed: true }],
+		])("keeps it up for %s", async (_, patch) => {
+			fakeTimers();
+			await openItem(lanternKeeper());
+			await setMpv(patch);
+			wait(6000);
+			expect(tvBar()).not.toHaveClass("invisible");
+		});
+
+		it("hides it behind the source panel, and gives the panel the focus", async () => {
+			await openItem(lanternKeeper());
+			expect(tvBar()).not.toHaveClass("invisible");
+			await openTvTray();
+			fireEvent.click(tvTile("Source"));
+			await flush();
+			expect(tvBar()).toHaveClass("invisible");
+			expect(cursor()).toHaveFocus();
+		});
+
+		it("hides it behind the channel panel, and gives the panel the focus", async () => {
+			env.channels = [makeNewsChannel()];
+			await openItem(makeNewsChannel());
+			await press("ContextMenu");
+			expect(tvBar()).toHaveClass("invisible");
+			expect(cursor()).toHaveFocus();
+		});
+
+		it("hides it behind the info", async () => {
+			await openItem(lanternKeeper());
+			await openTvRow();
+			fireEvent.click(tvButton("Info"));
+			expect(tvBar()).toHaveClass("invisible");
+		});
+
+		it("hides it behind the subtitle panel", async () => {
+			await openWithSubtitles();
+			await openTvRow();
+			fireEvent.click(tvButton("Subtitles"));
+			expect(tvBar()).toHaveClass("invisible");
+		});
+
+		it("comes back on the video alone once a panel closes", async () => {
+			await openItem(lanternKeeper());
+			await openTvTray();
+			fireEvent.click(tvTile("Source"));
+			await flush();
+			await press("Escape");
+			await flush();
+			expect(tvBar()).not.toHaveClass("invisible");
+			expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+		});
+
+		it("leaves the focus with a dialog from elsewhere as it hides", async () => {
+			fakeTimers();
+			await openItem(lanternKeeper());
+			render(
+				<Dialog label="Elsewhere" onClose={() => {}}>
+					<button type="button">Stay</button>
+				</Dialog>
+			);
+			await flush();
+			expect(screen.getByRole("button", { name: "Stay" })).toHaveFocus();
+			wait(6000);
+			expect(tvBar()).toHaveClass("invisible");
+			expect(screen.getByRole("button", { name: "Stay" })).toHaveFocus();
+		});
+
+		it("closes the buttons as it hides, so a key brings back only the bar", async () => {
+			fakeTimers();
+			await openItem(makeNewsChannel());
+			await openTvRow();
+			expect(tvRow()).toBeInTheDocument();
+			wait(6000);
+			await press("q");
+			expect(tvBar()).not.toHaveClass("invisible");
+			expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+		});
+	});
+
+	describe("the keys on the remote", () => {
+		it("leaves a panel's keys to the panel", async () => {
+			await openItem(lanternKeeper());
+			await openTvTray();
+			fireEvent.click(tvTile("Source"));
+			await flush();
+			await press("MediaStop");
+			await press("Info");
+			expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+			expect(dialog("Info on The Lantern Keeper")).not.toBeInTheDocument();
+		});
+
+		it("saves the place and ends the play record before the stop key stops", async () => {
+			await openItem(lanternKeeper());
+			await playThrough([690, 700]);
+			await press("MediaStop");
+			const stopped = fakeMpv.actions.stop.mock.invocationCallOrder[0];
+			const saves = tauri.savePlaybackPosition.mock;
+			const lastSave = saves.calls.findIndex(([, position]) => position === 700);
+			expect(lastSave).toBeGreaterThan(-1);
+			expect(saves.invocationCallOrder[lastSave]).toBeLessThan(stopped);
+			expect(tauri.recordPlayEnd.mock.invocationCallOrder[0]).toBeLessThan(stopped);
+		});
+
+		it("stops and goes to the channels with the stop key, even from a button", async () => {
+			await openItem(lanternKeeper());
+			await openTvRow();
+			expect(tvRow()).toContainElement(document.activeElement as HTMLElement);
+			await press("MediaStop");
+			expect(fakeMpv.actions.stop).toHaveBeenCalledTimes(1);
+			expect(screen.getByText("Channel list")).toBeInTheDocument();
+		});
+
+		it.each([
+			["load", { loadFailed: true }],
+			["open", { openFailed: true }],
+		])("tries again with OK when a live channel fails to %s", async (_, failure) => {
+			await openItem(makeNewsChannel());
+			await setMpv(failure);
+			expect(
+				screen.getByText("OK tries again. Menu shows the channels.")
+			).toBeInTheDocument();
+			expect(await press("Enter")).toBe(false);
+			expect(fakeMpv.actions.reload).toHaveBeenCalledTimes(1);
+			expect(dialog("Channels")).not.toBeInTheDocument();
+		});
+
+		it("tries again with OK on a failed movie, and doesn't play it", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ loadFailed: true });
+			expect(await press("Enter")).toBe(false);
+			expect(fakeMpv.actions.reload).toHaveBeenCalledTimes(1);
+			expect(fakeMpv.actions.play).not.toHaveBeenCalled();
+		});
+
+		it("pauses a healthy live channel with OK", async () => {
+			await openItem(makeNewsChannel());
+			await setMpv({ state: playing(NEWS_URL, 100, 0) });
+			expect(await press("Enter")).toBe(false);
+			expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+			expect(fakeMpv.actions.reload).not.toHaveBeenCalled();
+			expect(dialog("Channels")).not.toBeInTheDocument();
+		});
+
+		it.each(["ContextMenu", "Guide"])(
+			"opens the channels with %s on a live channel, and goes on playing",
+			async (key) => {
+				await openItem(makeNewsChannel());
+				await setMpv({ state: playing(NEWS_URL, 100, 0) });
+				expect(await press(key)).toBe(false);
+				expect(dialog("Channels")).toBeInTheDocument();
+				expect(fakeMpv.actions.pause).not.toHaveBeenCalled();
+			}
+		);
+
+		it("steps through the channels with the channel keys, and loads the one it stops on", async () => {
+			fakeTimers();
+			env.channels = [makeNewsChannel(), sports, music];
+			await openItem(makeNewsChannel());
+			await press("ChannelDown");
+			expect(tvTitle()).toHaveTextContent("Sports");
+			expect(within(tvBar()).getByText("S")).toBeInTheDocument();
+			wait(349);
+			expect(loadedUrls()).toEqual([NEWS_URL]);
+			await press("ChannelDown");
+			expect(tvTitle()).toHaveTextContent("Music");
+			wait(350);
+			await flush();
+			expect(loadedUrls()).toEqual([NEWS_URL, music.url]);
+			expect(tvTitle()).toHaveTextContent("Music");
+			await press("ChannelUp");
+			expect(tvTitle()).toHaveTextContent("Sports");
+		});
+
+		it("stays on the channel with the D-pad's Up and Down", async () => {
+			fakeTimers();
+			env.channels = [makeNewsChannel(), sports];
+			await openItem(makeNewsChannel());
+			await press("ArrowDown");
+			expect(tvRow()).toBeInTheDocument();
+			await press("Escape");
+			await press("ArrowUp");
+			wait(350);
+			await flush();
+			expect(loadedUrls()).toEqual([NEWS_URL]);
+			expect(tvTitle()).toHaveTextContent("News");
+		});
+
+		it("offers the channels with the Menu key on a failed one, and doesn't try it again", async () => {
+			env.channels = [makeNewsChannel(), sports];
+			await openItem(makeNewsChannel());
+			await setMpv({ loadFailed: true });
+			await press("ContextMenu");
+			expect(dialog("Channels")).toBeInTheDocument();
+			expect(fakeMpv.actions.reload).not.toHaveBeenCalled();
+		});
+
+		it("steps to another channel with a channel key on a failed one, and doesn't try it again", async () => {
+			env.channels = [makeNewsChannel(), sports];
+			await openItem(makeNewsChannel());
+			await setMpv({ loadFailed: true });
+			await press("ChannelUp");
+			expect(tvTitle()).toHaveTextContent("Sports");
+			expect(fakeMpv.actions.reload).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			["ChannelUp", ep1],
+			["PageUp", ep1],
+			["ChannelDown", ep3],
+			["PageDown", ep3],
+		])("plays the episode next to this one with %s", async (key, episode) => {
+			await openItem(ep2, { episodes: [ep1, ep2, ep3] });
+			expect(await press(key)).toBe(false);
+			expect(loadedUrls()).toEqual([ep2.url, episode.url]);
+		});
+
+		it.each([
+			["ChannelUp", ep1],
+			["ChannelDown", ep2],
+		])("takes %s without an error when there's no episode that way", async (key, episode) => {
+			const errors = vi.fn((e: ErrorEvent) => e.preventDefault());
+			window.addEventListener("error", errors);
+			await openItem(episode, { episodes: [ep1, ep2] });
+			await press(key);
+			window.removeEventListener("error", errors);
+			expect(errors).not.toHaveBeenCalled();
+			expect(loadedUrls()).toEqual([episode.url]);
+		});
+
+		it.each(["Info", "ContextMenu"])("opens a movie's info with %s", async (key) => {
+			await openItem(lanternKeeper());
+			await press(key);
+			expect(dialog("Info on The Lantern Keeper")).toBeInTheDocument();
+		});
+
+		it("has no info for a recording, from the key or a button", async () => {
+			await openItem(
+				makeChannel({
+					id: "rec1",
+					name: "City News recording",
+					url: "/recordings/city-news.ts",
+					contentType: "recording",
+				})
+			);
+			await openTvRow();
+			expect(hasTvButton("Info")).toBe(false);
+			await press("Info");
+			expect(dialog("Info on City News recording")).not.toBeInTheDocument();
+			await press("ArrowUp");
+			expect(dialog("Info on City News recording")).not.toBeInTheDocument();
+		});
+
+		it("goes back to the video with Back on a button, and stays in the player", async () => {
+			await openItem(makeNewsChannel());
+			await openTvRow();
+			expect(tvRow()).toContainElement(document.activeElement as HTMLElement);
+			expect(await press("Escape")).toBe(false);
+			expect(playerArea()).toHaveFocus();
+			expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+			expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+			expect(screen.queryByText("Channel list")).not.toBeInTheDocument();
+		});
+	});
+
+	describe("its buttons", () => {
+		it.each([
+			["nothing plays yet", { isPlaying: false, isPaused: false }, "Play"],
+			["mpv holds a paused stream", { isPlaying: true, isPaused: true }, "Play"],
+			["it's playing", { isPlaying: true, isPaused: false }, "Pause"],
+		])("presses play or pause when %s", async (_, state, label) => {
+			await openItem(lanternKeeper());
+			await setMpv({ state });
+			await openTvRow();
+			fireEvent.click(tvButton(label));
+			const { play, pause } = fakeMpv.actions;
+			expect(play).toHaveBeenCalledTimes(label === "Play" ? 1 : 0);
+			expect(pause).toHaveBeenCalledTimes(label === "Pause" ? 1 : 0);
+		});
+
+		it.each([
+			["Back 10 s", 90],
+			["Forward 10 s", 110],
+		])("skips a movie with %s", async (label, to) => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+			await openTvRow();
+			fireEvent.click(tvButton(label));
+			expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(to);
+		});
+
+		it.each([
+			["still opens", { opening: true }],
+			["failed to load", { loadFailed: true }],
+			["failed to open", { openFailed: true }],
+		])("offers to try again when the stream %s", async (_, patch) => {
+			await openItem(lanternKeeper());
+			await setMpv(patch);
+			await openTvRow();
+			expect(hasTvButton("Play")).toBe(false);
+			fireEvent.click(tvButton("Try again"));
+			expect(fakeMpv.actions.reload).toHaveBeenCalledTimes(1);
+		});
+
+		it("opens the channels from its button", async () => {
+			await openItem(makeNewsChannel());
+			await openTvRow();
+			fireEvent.click(tvButton("Channels"));
+			await flush();
+			expect(dialog("Channels")).toBeInTheDocument();
+		});
+
+		it("offers the channels only on live TV", async () => {
+			await openItem(lanternKeeper());
+			await openTvRow();
+			expect(hasTvButton("Channels")).toBe(false);
+		});
+
+		it.each([
+			["Previous episode", ep1],
+			["Next episode", ep3],
+		])("plays the episode next to this one with %s", async (label, episode) => {
+			await openItem(ep2, { episodes: [ep1, ep2, ep3] });
+			await openTvRow();
+			fireEvent.click(tvButton(label));
+			await flush();
+			expect(loadedUrls()).toEqual([ep2.url, episode.url]);
+		});
+
+		it("offers subtitles only with details to look them up by", async () => {
+			await openItem(lanternKeeper());
+			await openTvRow();
+			expect(hasTvButton("Subtitles")).toBe(false);
+		});
+	});
+
+	describe("its tray", () => {
+		it("offers another source only when there is one, and says which plays", async () => {
+			await openItem(harborLights());
+			await openTvTray();
+			expect(hasTvTile("Source")).toBe(false);
+			cleanup();
+			await openItem(lanternKeeper());
+			await openTvTray();
+			expect(tvTile("Source")).toHaveTextContent("1 of 2");
+		});
+
+		it("offers autoplay only for a show, and turns it off and on", async () => {
+			await openItem(lanternKeeper());
+			await openTvTray();
+			expect(hasTvTile("Autoplay")).toBe(false);
+			cleanup();
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			await openTvTray();
+			expect(tvTile("Autoplay")).toHaveTextContent("On");
+			fireEvent.click(tvTile("Autoplay"));
+			expect(tvTile("Autoplay")).toHaveTextContent("Off");
+			fireEvent.click(tvTile("Autoplay"));
+			expect(tvTile("Autoplay")).toHaveTextContent("On");
+		});
+
+		it.each([
+			["a movie", lanternKeeper(), "Download"],
+			["live TV", makeNewsChannel(), "Record"],
+		])(
+			"shows saving %s greyed out, since a TV has nowhere to keep it",
+			async (_, item, label) => {
+				await openItem(item);
+				await openTvTray();
+				const save = tvTile(label);
+				expect(save).toHaveAttribute("aria-disabled", "true");
+				expect(save).toHaveTextContent("Needs storage");
+				fireEvent.click(save);
+				expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+			}
+		);
+
+		describe("audio", () => {
+			const track = (id: number, extra: Partial<MpvTrack>): MpvTrack => ({
+				id,
+				kind: "audio",
+				codec: "aac",
+				default: false,
+				selected: false,
+				language: null,
+				title: null,
+				channels: 2,
+				...extra,
+			});
+			const tracks = [
+				track(1, { language: "en", selected: true }),
+				track(2, { language: "fr", channels: 6 }),
+				track(1, { kind: "video", codec: "h264", channels: null, selected: true }),
+			];
+
+			it("offers no audio until the stream says what it has", async () => {
+				await openItem(lanternKeeper());
+				await openTvTray();
+				expect(hasTvTile("Audio")).toBe(false);
+			});
+
+			it("names the track that plays, and plays the one picked", async () => {
+				tauri.mpvGetTracks.mockResolvedValue(tracks);
+				await openItem(lanternKeeper());
+				await openTvTray();
+				expect(tvTile("Audio")).toHaveTextContent("English Stereo");
+				fireEvent.click(tvTile("Audio"));
+				await flush();
+				expect(dialog("Audio")).toBeInTheDocument();
+				expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual([
+					expect.stringContaining("English Stereo"),
+					expect.stringContaining("French 5.1"),
+				]);
+				expect(cursor()).toHaveTextContent("English Stereo");
+				await press("ArrowDown");
+				await press("Enter");
+				expect(dialog("Audio")).not.toBeInTheDocument();
+				expect(tauri.mpvSetAudio).toHaveBeenCalledWith(2);
+				// The tile says so before mpv answers again.
+				tauri.mpvGetTracks.mockReturnValue(new Promise(() => {}));
+				await openTvTray();
+				expect(tvTile("Audio")).toHaveTextContent("French 5.1");
+			});
+
+			it("forgets the tracks of what played before", async () => {
+				tauri.mpvGetTracks.mockResolvedValue(tracks);
+				await openItem(lanternKeeper());
+				await openTvTray();
+				tauri.mpvGetTracks.mockReturnValue(new Promise(() => {}));
+				await setMpv({ loadId: 1 });
+				await press("Escape");
+				await openTvTray();
+				expect(hasTvTile("Audio")).toBe(false);
+			});
+		});
+
+		describe("speed", () => {
+			const pickSpeed = async (steps: number) => {
+				await openTvTray();
+				fireEvent.click(tvTile("Speed"));
+				await flush();
+				for (let i = 0; i < steps; i++) await press("ArrowDown");
+				await press("Enter");
+			};
+
+			it("plays at the speed picked, and says when it ends at that speed", async () => {
+				vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
+				await openItem(lanternKeeper());
+				await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
+				await openTvTray();
+				expect(tvTile("Speed")).toHaveTextContent("Normal");
+				await press("Escape");
+				await pickSpeed(2);
+				expect(dialog("Speed")).not.toBeInTheDocument();
+				expect(tauri.mpvSetSpeed).toHaveBeenCalledWith(1.5);
+				await openTvTray();
+				expect(tvTile("Speed")).toHaveTextContent("1.5×");
+				expect(
+					screen.getByText(`Ends at ${formatHHMM(NOW_MS / 1000 + 1800)}`)
+				).toBeInTheDocument();
+			});
+
+			it("marks the speed it plays at", async () => {
+				await openItem(lanternKeeper());
+				await openTvTray();
+				fireEvent.click(tvTile("Speed"));
+				await flush();
+				expect(screen.getAllByRole("option")).toHaveLength(6);
+				expect(within(cursor()).getByLabelText("Playing")).toBeInTheDocument();
+				expect(cursor()).toHaveTextContent("Normal");
+			});
+
+			it("starts what plays next at normal speed", async () => {
+				await openItem(lanternKeeper());
+				await pickSpeed(1);
+				await setMpv({ loadId: 1 });
+				await openTvTray();
+				expect(tvTile("Speed")).toHaveTextContent("Normal");
+			});
+
+			it("has no speed on live TV, which can't run ahead of the broadcast", async () => {
+				await openItem(makeNewsChannel());
+				await openTvTray();
+				expect(hasTvTile("Speed")).toBe(false);
+			});
+		});
+	});
+
+	describe("live TV's buffer", () => {
+		/** The player's clock, in milliseconds, as mpv's polls read it. */
+		const T0 = 50_000;
+
+		/**
+		 * Plays the news 10 minutes in with the last 2½ minutes held, then
+		 * reports `position`, still at the same moment, so the broadcast is at 600.
+		 */
+		const playNewsAt = async (position: number, held: [number, number] = [450, 600]) => {
+			vi.spyOn(performance, "now").mockReturnValue(T0);
+			await openItem(makeNewsChannel());
+			await setMpv({ state: { ...playing(NEWS_URL, 600, 0), buffered: held } });
+			if (position !== 600) await setMpv({ state: { position } });
+		};
+		const bar = () => within(tvBar()).getByRole("progressbar", { name: "Position" });
+
+		it("skips back through what the stream holds with Left, and says how far behind", async () => {
+			await playNewsAt(600);
+			expect(
+				screen.getByText("Left and Right skip. Up or Down shows the controls. OK pauses.")
+			).toBeInTheDocument();
+			expect(bar()).toHaveAttribute("aria-valuetext", "Live");
+			expect(screen.queryByTestId("rewindable")).not.toBeInTheDocument();
+			expect(await press("ArrowLeft")).toBe(false);
+			expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(590);
+			await setMpv({ state: { position: 590 } });
+			expect(bar()).toHaveAttribute("aria-valuetext", "−0:10 behind live");
+			expect(within(tvBar()).getByText("GO LIVE")).toBeInTheDocument();
+			expect(
+				screen.getByText(
+					"Left and Right skip. Up or Down shows the controls. OK goes live."
+				)
+			).toBeInTheDocument();
+		});
+
+		it("shows what can be gone back to", async () => {
+			await playNewsAt(590);
+			// 5 minutes back from now, the stream holds from 2½ minutes back.
+			const band = screen.getByTestId("rewindable");
+			expect(band.style.left).toBe("50%");
+			expect(band.style.width).toBe("50%");
+		});
+
+		it("goes no further forward than the broadcast with Right", async () => {
+			await playNewsAt(595);
+			await press("ArrowRight");
+			expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(600);
+		});
+
+		it("goes back no further than the stream holds", async () => {
+			await playNewsAt(455);
+			await press("ArrowLeft");
+			expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(450);
+		});
+
+		it("can't skip forward from the broadcast, and can once behind it", async () => {
+			await playNewsAt(600);
+			await openTvRow();
+			expect(tvButton("Forward 10 s")).toHaveAttribute("aria-disabled", "true");
+			await setMpv({ state: { position: 590 } });
+			expect(tvButton("Forward 10 s")).not.toHaveAttribute("aria-disabled");
+		});
+
+		it("goes live with OK while the bar says so, in what the stream holds", async () => {
+			await playNewsAt(590);
+			expect(await press("Enter")).toBe(false);
+			expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(600);
+			expect(fakeMpv.actions.pause).not.toHaveBeenCalled();
+		});
+
+		it("opens the channel again to go live when the stream holds too little", async () => {
+			await playNewsAt(590, [450, 590]);
+			await press("Enter");
+			await flush();
+			expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
+			expect(loadedUrls()).toEqual([NEWS_URL, NEWS_URL]);
+		});
+
+		it("pauses with OK while nothing shows, even behind live", async () => {
+			fakeTimers();
+			await playNewsAt(590);
+			wait(6000);
+			expect(tvBar()).toHaveClass("invisible");
+			await press("Enter");
+			expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+			expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
+		});
+
+		it("has nothing to skip through before the stream has played", async () => {
+			await openItem(makeNewsChannel());
+			await press("ArrowLeft");
+			expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
+			expect(
+				screen.getByText("Up or Down shows the controls. OK plays.")
+			).toBeInTheDocument();
+		});
+	});
+
+	describe("the skip prompt", () => {
+		const skipButton = () => screen.getByRole("button", { name: "Skip intro" });
+
+		it("goes back to the video with Back, and Down opens the buttons again", async () => {
+			await openWithIntro();
+			await playThrough([61]);
+			await press("ArrowDown");
+			act(() => skipButton().focus());
+			expect(await press("Escape")).toBe(false);
+			expect(playerArea()).toHaveFocus();
+			expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+			await press("ArrowDown");
+			expect(tvButton("Pause")).toHaveFocus();
+		});
+
+		it("gives the player the focus as the focused button goes away", async () => {
+			await openWithIntro();
+			await playThrough([61]);
+			act(() => skipButton().focus());
+			await playThrough([121]);
+			expect(playerArea()).toHaveFocus();
+		});
+
+		it("leaves the focus to the open buttons as the focused button goes away", async () => {
+			await openWithIntro();
+			await playThrough([61]);
+			await press("ArrowDown");
+			act(() => skipButton().focus());
+			await playThrough([121]);
+			expect(tvButton("Pause")).toHaveFocus();
+		});
+
+		const held = () => skipButton().closest(".invisible") !== null;
+
+		it("stays beside the buttons, and holds while the tray or the details fill its corner", async () => {
+			await openWithIntro();
+			await playThrough([61]);
+			expect(held()).toBe(false);
+			await openTvRow();
+			expect(held()).toBe(false);
+			await press("ArrowDown");
+			expect(held()).toBe(true);
+			await press("Escape");
+			await press("ArrowUp");
+			expect(held()).toBe(true);
+		});
+
+		it("holds behind an open panel", async () => {
+			await openWithIntro();
+			await playThrough([61]);
+			await openTvTray();
+			fireEvent.click(tvTile("Source"));
+			await flush();
+			expect(held()).toBe(true);
+		});
+
+		it("holds behind the subtitle panel", async () => {
+			await openWithIntro();
+			await playThrough([61]);
+			await openTvRow();
+			fireEvent.click(tvButton("Subtitles"));
+			expect(held()).toBe(true);
+		});
+	});
+
+	describe("the channel panel", () => {
+		const names = () => screen.getAllByRole("option").map((row) => row.textContent);
+
+		it("lists the channels Up and Down step through, on the one playing", async () => {
+			env.channels = [makeNewsChannel(), sports, music];
+			setZapList([sports, makeNewsChannel()]);
+			await openItem(makeNewsChannel());
+			await press("ContextMenu");
+			expect(names()).toEqual([
+				expect.stringContaining("Sports"),
+				expect.stringContaining("News 24"),
+			]);
+			expect(cursor()).toHaveTextContent("News 24");
+		});
+
+		it("lists every live channel when the one playing isn't in that list", async () => {
+			env.channels = [makeNewsChannel(), lanternKeeper(), sports];
+			setZapList([music]);
+			await openItem(makeNewsChannel());
+			await press("ContextMenu");
+			expect(names()).toEqual([
+				expect.stringContaining("News 24"),
+				expect.stringContaining("Sports"),
+			]);
+		});
+
+		it("closes and plays the channel picked, with the details up to say what's on", async () => {
+			fakeTimers();
+			env.channels = [makeNewsChannel(), sports];
+			await openItem(makeNewsChannel());
+			await press("ContextMenu");
+			wait(6000);
+			await press("ArrowDown");
+			await press("Enter");
+			expect(dialog("Channels")).not.toBeInTheDocument();
+			expect(loadedUrls()).toEqual([NEWS_URL, sports.url]);
+			expect(tvBar()).not.toHaveClass("invisible");
+			expect(tvTitle()).toHaveTextContent("Sports");
+		});
+
+		it("closes with Back and goes on playing", async () => {
+			await openItem(makeNewsChannel());
+			await press("ContextMenu");
+			await press("Escape");
+			await flush();
+			expect(dialog("Channels")).not.toBeInTheDocument();
+			expect(loadedUrls()).toEqual([NEWS_URL]);
+			expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+			expect(screen.queryByText("Channel list")).not.toBeInTheDocument();
+		});
+	});
+
+	describe("the source panel", () => {
+		const openSources = async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
+			await openTvTray();
+			fireEvent.click(tvTile("Source"));
+			await flush();
+		};
+
+		it("marks what's playing", async () => {
+			await openSources();
+			expect(dialog("Source")).toBeInTheDocument();
+			expect(within(cursor()).getByLabelText("Playing")).toBeInTheDocument();
+		});
+
+		it("closes and switches in place, keeping the position", async () => {
+			await openSources();
+			await press("ArrowDown");
+			await press("Enter");
+			expect(dialog("Source")).not.toBeInTheDocument();
+			expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MIRROR_URL, 900, true);
+		});
+
+		it("closes with Back and goes on playing", async () => {
+			await openSources();
+			await press("Escape");
+			await flush();
+			expect(dialog("Source")).not.toBeInTheDocument();
+			expect(loadedUrls()).toEqual([MOVIE_URL]);
+		});
+	});
+
+	describe("the subtitle panel", () => {
+		it("leaves no sample subtitle behind as it closes", async () => {
+			await openWithSubtitles();
+			await openTvRow();
+			fireEvent.click(tvButton("Subtitles"));
+			closeSubtitles();
+			expect(screen.queryByText("Sample subtitle text")).not.toBeInTheDocument();
+		});
+
+		it("gets what the player knows, in place of the desktop's picker", async () => {
+			await openWithSubtitles();
+			await openTvRow();
+			fireEvent.click(tvButton("Subtitles"));
+			expect(dialog("TV subtitles")).toBeInTheDocument();
+			expect(dialog("Subtitle picker")).not.toBeInTheDocument();
+			expect(screen.getByText("Looking up tt9000001 season none episode none")).toBeVisible();
+			fireEvent.click(screen.getByRole("button", { name: "Pick English" }));
+			await flush();
+			expect(screen.getByText("Current subtitle 101")).toBeInTheDocument();
+			closeSubtitles();
+			expect(dialog("TV subtitles")).not.toBeInTheDocument();
+		});
+
+		it("changes the text, and sends the delay to mpv", async () => {
+			await openWithSubtitles();
+			await openTvRow();
+			fireEvent.click(tvButton("Subtitles"));
+			for (const name of [
+				"Bigger subtitles",
+				"Serif subtitles",
+				"Delay subtitles",
+				"Raise subtitles",
+			]) {
+				fireEvent.click(screen.getByRole("button", { name }));
+			}
+			expect(
+				screen.getByText("Text 30 in Georgia, serif, delay 1.5, at 50 40")
+			).toBeInTheDocument();
+			expect(tauri.mpvSetSubDelay).toHaveBeenCalledWith(1.5);
+		});
+
+		it("moves the subtitles beside the panel, above the bar, and down once it hides", async () => {
+			fakeTimers();
+			await openWithSubtitles();
+			await pickSubtitles();
+			expect(subtitleBox("Mind the lantern").style.left).toBe("34%");
+			expect(subtitleBox("Mind the lantern").style.top).toBe("88%");
+			closeSubtitles();
+			await flush();
+			expect(subtitleBox("Mind the lantern").style.left).toBe("50%");
+			expect(subtitleBox("Mind the lantern").style.top).toBe("72%");
+			wait(6000);
+			expect(subtitleBox("Mind the lantern").style.top).toBe("88%");
+		});
+
+		it("moves the subtitles above the buttons, the tray and the details as each shows", async () => {
+			await openWithSubtitles();
+			await pickSubtitles();
+			closeSubtitles();
+			await flush();
+			await press("ArrowDown");
+			expect(subtitleBox("Mind the lantern").style.top).toBe("58%");
+			await press("ArrowDown");
+			expect(subtitleBox("Mind the lantern").style.top).toBe("40%");
+			await press("Escape");
+			await press("ArrowUp");
+			expect(subtitleBox("Mind the lantern").style.top).toBe("24%");
+		});
+
+		it("leaves subtitles the viewer raised past the bar where they are", async () => {
+			fakeTimers();
+			await openWithSubtitles();
+			await pickSubtitles();
+			fireEvent.click(screen.getByRole("button", { name: "Raise subtitles" }));
+			closeSubtitles();
+			await flush();
+			expect(subtitleBox("Mind the lantern").style.top).toBe("40%");
+			wait(6000);
+			expect(subtitleBox("Mind the lantern").style.top).toBe("40%");
+		});
+	});
+
+	describe("the resume prompt", () => {
+		const openWithResumePoint = async () => {
+			remember(saved(MOVIE_KEY, 900, 3600));
+			await openItem(lanternKeeper());
+		};
+		const resumeDialog = () => dialog("Resume The Lantern Keeper");
+
+		it("asks with its own prompt, on Resume, with the bar out of the way", async () => {
+			await openWithResumePoint();
+			expect(resumePrompt()).not.toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Resume" })).toHaveFocus();
+			expect(tvBar()).toHaveClass("invisible");
+			fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+			await flush();
+			expect(resumeDialog()).not.toBeInTheDocument();
+			expect(tvBar()).not.toHaveClass("invisible");
+			expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MOVIE_URL, 900);
+		});
+
+		it("starts over and forgets the point", async () => {
+			await openWithResumePoint();
+			fireEvent.click(screen.getByRole("button", { name: "Start over" }));
+			await flush();
+			expect(tauri.deletePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY);
+			expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MOVIE_URL, undefined);
+		});
+
+		it("goes back to the list with Back", async () => {
+			await openWithResumePoint();
+			await press("Escape");
+			await flush();
+			expect(screen.getByText("Channel list")).toBeInTheDocument();
+		});
+	});
+
+	describe("the details", () => {
+		it("shows its own for a movie, and plays the other source in place", async () => {
+			tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
+			await openTvRow();
+			fireEvent.click(tvButton("Info"));
+			expect(dialog("Info on The Lantern Keeper")).toBeInTheDocument();
+			expect(dialog("About The Lantern Keeper")).not.toBeInTheDocument();
+			expect(screen.getByText("Details tt9000001, guide none")).toBeInTheDocument();
+			fireEvent.click(screen.getByRole("button", { name: "Play the second source" }));
+			await flush();
+			expect(dialog("Info on The Lantern Keeper")).not.toBeInTheDocument();
+			expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MIRROR_URL, 900, true);
+		});
+
+		it("plays another movie from the start", async () => {
+			await openItem(lanternKeeper());
+			await openTvRow();
+			fireEvent.click(tvButton("Info"));
+			fireEvent.click(screen.getByRole("button", { name: "Play another movie" }));
+			await flush();
+			expect(loadedUrls()).toEqual([MOVIE_URL, harborLights().url]);
+		});
+
+		it("shows its own for a show, and plays another episode", async () => {
+			env.channels = [seriesCard];
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			await openTvRow();
+			fireEvent.click(tvButton("Episodes and info"));
+			expect(dialog(`Info on ${ep1.name}`)).toBeInTheDocument();
+			expect(dialog("Episodes of Show")).not.toBeInTheDocument();
+			expect(screen.getByText("Show Show, card series-show")).toBeInTheDocument();
+			fireEvent.click(screen.getByRole("button", { name: `Play ${ep2.id}` }));
+			await flush();
+			expect(dialog(`Info on ${ep1.name}`)).not.toBeInTheDocument();
+			expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+		});
+
+		it("plays the same episode from another source in place", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			await setMpv({ state: playing(ep1.url, 300, 1300) });
+			await openTvRow();
+			fireEvent.click(tvButton("Episodes and info"));
+			fireEvent.click(screen.getByRole("button", { name: "Play the second source" }));
+			await flush();
+			expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MIRROR_URL, 300, true);
+		});
+
+		it("shows its own for a live channel, and closes", async () => {
+			await openItem(makeNewsChannel());
+			await press("Info");
+			expect(dialog("Info on News 24")).toBeInTheDocument();
+			expect(dialog("About News 24")).not.toBeInTheDocument();
+			fireEvent.click(screen.getByRole("button", { name: "Close details" }));
+			expect(dialog("Info on News 24")).not.toBeInTheDocument();
+		});
+	});
+});
+
+describe("off a TV, the player", () => {
+	it("leaves its subtitles where they are, with the controls and the picker up", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		pickEnglishSubtitles();
+		await flush();
+		expect(subtitleBox("Mind the lantern").style.left).toBe("50%");
+		expect(subtitleBox("Mind the lantern").style.top).toBe("88%");
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		expect(subtitleBox("Mind the lantern").style.top).toBe("88%");
+	});
+
+	it("leaves Back on the skip prompt to the player, which stops", async () => {
+		await openWithIntro();
+		await playThrough([61]);
+		act(() => screen.getByRole("button", { name: "Skip intro" }).focus());
+		await press("Escape");
+		expect(fakeMpv.actions.stop).toHaveBeenCalledTimes(1);
+	});
+
+	it("holds the skip prompt behind the shortcut list", async () => {
+		await openWithIntro();
+		await playThrough([61]);
+		const skip = screen.getByRole("button", { name: "Skip intro" });
+		expect(skip.closest(".invisible")).toBeNull();
+		await press("?");
+		expect(skip.closest(".invisible")).not.toBeNull();
+	});
+
+	it("offers a movie's details with no episodes", async () => {
+		await openItem(lanternKeeper());
+		await press("i");
+		expect(
+			screen.getByRole("dialog", { name: "About The Lantern Keeper" })
+		).toBeInTheDocument();
+		expect(screen.queryByRole("dialog", { name: /^Episodes of/ })).not.toBeInTheDocument();
+	});
+
+	it("has no bar for a remote", async () => {
+		await openItem(lanternKeeper());
+		expect(tvBar()).not.toBeInTheDocument();
+		expect(screen.queryByRole("toolbar", { name: "Player" })).not.toBeInTheDocument();
 	});
 });
 

@@ -392,7 +392,7 @@ fn drops_a_renderer_that_cannot_attach_before_the_fallback_starts() {
     let mut dropped_before_fallback = None;
 
     state
-        .load_with(true, false, || {
+        .load_with(true, false, None, || {
             let embedded = (renderer, headless_options().to_vec());
             state.load_embedded(&path, None, &app.handle(), Ok(embedded), || {
                 dropped_before_fallback = Some(log.lock().unwrap().dropped);
@@ -415,7 +415,7 @@ fn falls_back_when_mpv_rejects_an_embedded_option() {
     let embedded = (renderer, headless(&[("no-such-option", "1")]));
 
     state
-        .load_with(true, false, || {
+        .load_with(true, false, None, || {
             state.load_embedded(&path, None, &app.handle(), Ok(embedded), || {
                 headless_options().to_vec()
             })
@@ -440,7 +440,7 @@ fn a_load_fails_when_the_fallback_cannot_start_either() {
     let path = media.file("tone.wav", &wav(10));
     let state = app.state();
 
-    let result = state.load_with(true, false, || {
+    let result = state.load_with(true, false, None, || {
         state.load_embedded(&path, None, &app.handle(), Err("no window".into()), || {
             headless(&[("no-such-option", "1")])
         })
@@ -531,7 +531,7 @@ fn hardware_decoding_follows_the_setting() {
         let (renderer, _log) = FakeRenderer::working();
         let embedded = (renderer, headless(&[("hwdec", "auto")]));
         state
-            .load_with(enabled, false, || {
+            .load_with(enabled, false, None, || {
                 state.load_embedded(&path, None, &app.handle(), Ok(embedded), || {
                     headless_options().to_vec()
                 })
@@ -542,6 +542,16 @@ fn hardware_decoding_follows_the_setting() {
             expected,
             "hwdec enabled: {enabled}"
         );
+    }
+}
+
+#[test]
+fn each_load_sets_the_back_buffer_for_the_next_instance() {
+    let state = MpvState::new();
+    let read = || state.back_buffer_mib.load(Ordering::Acquire);
+    for (asked, kept) in [(Some(150), 150), (None, 0)] {
+        let _ = state.load_with(true, false, asked, || Err("no renderer".into()));
+        assert_eq!(read(), kept, "asked for {asked:?}");
     }
 }
 

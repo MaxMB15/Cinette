@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import type { QueryKey } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { unhandledRejectionsDuring } from "@/test/unhandled-rejections";
 
 vi.mock("./tauri", () => ({
 	getProviders: vi.fn(async () => [{ id: "p1" }]),
 	getAllChannels: vi.fn(async () => [{ id: "c1" }]),
+	getContentCounts: vi.fn(async () => ({ live: 3, movies: 2, series: 1 })),
 	getGroupHierarchy: vi.fn(async () => [{ groupName: "News" }]),
 	getPinnedGroups: vi.fn(async () => [{ groupName: "Sport" }]),
 	getEpgForLiveChannels: vi.fn(),
@@ -13,12 +16,18 @@ vi.mock("./tauri", () => ({
 	searchEpgProgrammes: vi.fn(async () => [{ title: "Found" }]),
 	fetchOmdbData: vi.fn(async () => ({ title: "Sintel" })),
 	fetchWhatsonData: vi.fn(async () => ({ certification: "12A" })),
+	clearWatchHistory: vi.fn(async () => {}),
+	clearAllCaches: vi.fn(async () => {}),
+	getWatchHistory: vi.fn(async () => []),
 }));
 
 import {
+	clearAllCaches,
+	clearWatchHistory,
 	fetchOmdbData,
 	fetchWhatsonData,
 	getAllChannels,
+	getContentCounts,
 	getEpgForLiveChannels,
 	getEpgProgrammes,
 	getGroupHierarchy,
@@ -29,6 +38,9 @@ import {
 import {
 	channelGuideQuery,
 	channelsQuery,
+	clearCacheData,
+	clearHistoryData,
+	contentCountsQuery,
 	groupHierarchyQuery,
 	guideQuery,
 	guideSearchQuery,
@@ -40,6 +52,7 @@ import {
 	reloadClearedCaches,
 	SCHEDULE_STEP,
 	scheduleQuery,
+	watchHistoryQuery,
 	whatsonQuery,
 } from "./queries";
 import type { EpgProgram } from "./types";
@@ -84,6 +97,25 @@ describe("queries", () => {
 		expect(pinnedGroupsQuery("p1", "live", LOCAL).queryKey).toEqual(
 			pinnedGroupsQuery("p1", "live").queryKey
 		);
+		expect(contentCountsQuery("p1", "2026-11-21").queryKey).toEqual([
+			"local",
+			"contentCounts",
+			"p1",
+			"2026-11-21",
+		]);
+		expect(contentCountsQuery("p1", "v", LOCAL).queryKey).toEqual(
+			contentCountsQuery("p1", "v").queryKey
+		);
+	});
+
+	it("ask the backend how much one provider has", async () => {
+		const client = createTestQueryClient();
+		await expect(client.fetchQuery(contentCountsQuery("p2", "v1"))).resolves.toEqual({
+			live: 3,
+			movies: 2,
+			series: 1,
+		});
+		expect(getContentCounts).toHaveBeenCalledExactlyOnceWith("p2");
 	});
 
 	it("ask the backend for one provider's groups of one type", async () => {
@@ -298,5 +330,78 @@ describe("reloadClearedCaches", () => {
 		client.setQueryData(elsewhere, { title: "Sintel" });
 		await reloadClearedCaches(client);
 		expect(client.getQueryState(elsewhere)?.isInvalidated).toBe(false);
+	});
+});
+
+describe("clearHistoryData", () => {
+	it("clears the history, and the lists start over", async () => {
+		const client = createTestQueryClient();
+		const all: QueryKey = watchHistoryQuery(10).queryKey;
+		const movies: QueryKey = watchHistoryQuery(5, "movie").queryKey;
+		const kept: QueryKey = channelsQuery().queryKey;
+		for (const key of [all, movies, kept]) client.setQueryData(key, ["cached"]);
+
+		await clearHistoryData(client);
+
+		expect(clearWatchHistory).toHaveBeenCalledOnce();
+		expect(client.getQueryData(all)).toBeUndefined();
+		expect(client.getQueryData(movies)).toBeUndefined();
+		expect(client.getQueryData(kept)).toEqual(["cached"]);
+	});
+
+	it("keeps another source's history", async () => {
+		const client = createTestQueryClient();
+		const elsewhere = ["tv", "history", "all", 10] as const;
+		client.setQueryData(elsewhere, ["cached"]);
+
+		await clearHistoryData(client);
+
+		expect(client.getQueryData(elsewhere)).toEqual(["cached"]);
+	});
+
+	it("keeps the lists and fails when the history can't be cleared", async () => {
+		const client = createTestQueryClient();
+		const all: QueryKey = watchHistoryQuery(10).queryKey;
+		client.setQueryData(all, ["cached"]);
+		vi.mocked(clearWatchHistory).mockRejectedValueOnce(new Error("locked"));
+
+		await expect(clearHistoryData(client)).rejects.toThrow("locked");
+
+		expect(client.getQueryData(all)).toEqual(["cached"]);
+	});
+});
+
+describe("clearCacheData", () => {
+	const details: QueryKey = omdbQuery("mv1", "Sintel", "movie").queryKey;
+
+	it("clears the caches and marks what's on screen to load again", async () => {
+		const client = createTestQueryClient();
+		client.setQueryData(details, { title: "Sintel" });
+
+		await clearCacheData(client);
+
+		expect(clearAllCaches).toHaveBeenCalledOnce();
+		expect(client.getQueryState(details)?.isInvalidated).toBe(true);
+	});
+
+	it("loads nothing again and fails when the caches can't be cleared", async () => {
+		const client = createTestQueryClient();
+		client.setQueryData(details, { title: "Sintel" });
+		vi.mocked(clearAllCaches).mockRejectedValueOnce(new Error("locked"));
+
+		await expect(clearCacheData(client)).rejects.toThrow("locked");
+
+		expect(client.getQueryState(details)?.isInvalidated).toBe(false);
+	});
+
+	it("counts as cleared when loading again fails, and leaves no failure behind", async () => {
+		const client = createTestQueryClient();
+		vi.spyOn(client, "invalidateQueries").mockRejectedValue(new Error("offline"));
+
+		const failed = await unhandledRejectionsDuring(() =>
+			expect(clearCacheData(client)).resolves.toBeUndefined()
+		);
+
+		expect(failed).toEqual([]);
 	});
 });

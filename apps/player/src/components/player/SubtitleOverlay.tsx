@@ -12,7 +12,7 @@ interface SubtitleOverlayProps {
 	positionAt: number; // when it was read, in performance.now() milliseconds
 	playing?: boolean; // whether the video plays on from that position
 	delay?: number; // seconds; positive shows each cue later, as mpv's sub-delay does
-	fontSize?: number; // px, default 18
+	fontSize?: number; // a 16th of a rem, default 18, which is 18px where a rem is 16px
 	fontFamily?: string; // CSS font-family string, default system-ui
 	posX?: number; // 0 to 100 %, default 50
 	posY?: number; // 0 to 100 %, default 88
@@ -41,7 +41,10 @@ export const SubtitleOverlay = ({
 
 	const displayText = active?.text ?? "Sample subtitle text";
 
-	const handleMouseDown = (e: React.MouseEvent) => {
+	// Pointer events follow a finger as well as a mouse. Cancelling the press
+	// also stops the mousedown after it, which the subtitle picker would take
+	// for a click outside it and close.
+	const handlePointerDown = (e: React.PointerEvent) => {
 		if (!editMode || !onPositionChange) return;
 		e.preventDefault();
 		const parent = ref.current?.parentElement;
@@ -53,7 +56,7 @@ export const SubtitleOverlay = ({
 		const startPosX = posX;
 		const startPosY = posY;
 
-		const handleMove = (me: MouseEvent) => {
+		const handleMove = (me: PointerEvent) => {
 			const next = clampSubtitlePosition({
 				x: startPosX + ((me.clientX - startX) / rect.width) * 100,
 				y: startPosY + ((me.clientY - startY) / rect.height) * 100,
@@ -61,19 +64,25 @@ export const SubtitleOverlay = ({
 			onPositionChange(next.x, next.y);
 		};
 
+		// The browser cancels a touch it takes over, such as for a system gesture.
 		const handleUp = () => {
-			document.removeEventListener("mousemove", handleMove);
-			document.removeEventListener("mouseup", handleUp);
+			document.removeEventListener("pointermove", handleMove);
+			document.removeEventListener("pointerup", handleUp);
+			document.removeEventListener("pointercancel", handleUp);
 		};
 
-		document.addEventListener("mousemove", handleMove);
-		document.addEventListener("mouseup", handleUp);
+		document.addEventListener("pointermove", handleMove);
+		document.addEventListener("pointerup", handleUp);
+		document.addEventListener("pointercancel", handleUp);
 	};
 
 	return (
 		<div
 			ref={ref}
-			onMouseDown={handleMouseDown}
+			// select-none sets Safari's -webkit-user-select too. Without it, a finger
+			// held on the text on iOS selects it, which ends the drag.
+			className="select-none"
+			onPointerDown={handlePointerDown}
 			style={{
 				position: "absolute",
 				left: `${posX}%`,
@@ -82,17 +91,20 @@ export const SubtitleOverlay = ({
 				pointerEvents: editMode ? "auto" : "none",
 				zIndex: 30,
 				cursor: editMode ? "grab" : "default",
+				// A finger on the text moves it instead of scrolling or zooming.
+				touchAction: "none",
+				// Without this, a box placed at 50% wraps at half the player's width.
+				width: "max-content",
 				maxWidth: "80%",
-				userSelect: "none",
 			}}
 		>
 			<div
 				style={{
-					fontSize: `${fontSize}px`,
+					fontSize: `${fontSize / 16}rem`,
 					fontFamily,
 					backgroundColor: "rgba(0,0,0,0.65)",
 					color: "white",
-					padding: "6px 16px",
+					padding: "0.375rem 1rem",
 					borderRadius: "4px",
 					textAlign: "center",
 					lineHeight: 1.4,

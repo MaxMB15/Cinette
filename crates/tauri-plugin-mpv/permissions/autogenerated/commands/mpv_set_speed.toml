@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-mpv-set-speed"
+description = "Enables the mpv_set_speed command without any pre-configured scope."
+commands.allow = ["mpv_set_speed"]
+
+[[permission]]
+identifier = "deny-mpv-set-speed"
+description = "Denies the mpv_set_speed command without any pre-configured scope."
+commands.deny = ["mpv_set_speed"]

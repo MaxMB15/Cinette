@@ -743,3 +743,52 @@ describe("useApiKey checking", () => {
 		expect(view.result.current.testStatus).toBe("idle");
 	});
 });
+
+describe("useApiKey with text from the TV's keyboard", () => {
+	it("saves the text it's given, not the field's, and shows it", async () => {
+		const service = makeService();
+		const view = await renderKey(service);
+		type(view, "in the field");
+
+		await act(() => view.result.current.save("  typed-key "));
+
+		expect(service.save).toHaveBeenCalledExactlyOnceWith("typed-key");
+		expect(view.result.current).toMatchObject({
+			value: "typed-key",
+			saved: "typed-key",
+			saveStatus: "saved",
+		});
+	});
+
+	it("removes the key when it's given blank text, even with text in the field", async () => {
+		const service = makeService("old-key");
+		const view = await renderKey(service);
+
+		await act(() => view.result.current.save(""));
+
+		expect(service.save).toHaveBeenCalledExactlyOnceWith("");
+		expect(view.result.current).toMatchObject({ value: "", saved: "", saveStatus: "removed" });
+	});
+
+	it("checks the text it's given, not the field's", async () => {
+		const service = makeService();
+		const view = await renderKey(service);
+		type(view, "in the field");
+
+		await act(() => view.result.current.test(" typed-key "));
+
+		expect(service.test).toHaveBeenCalledExactlyOnceWith("typed-key");
+		expect(view.result.current.testStatus).toBe("valid");
+	});
+
+	it("doesn't check blank text, even with text in the field", async () => {
+		const service = makeService();
+		const view = await renderKey(service);
+		type(view, "in the field");
+
+		await act(() => view.result.current.test("   "));
+
+		expect(service.test).not.toHaveBeenCalled();
+		expect(view.result.current.testStatus).toBe("idle");
+	});
+});

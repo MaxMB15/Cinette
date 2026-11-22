@@ -127,6 +127,8 @@ interface ChannelsContextValue {
 	initialized: boolean;
 	loading: boolean;
 	error: string | null;
+	/** A list failed to load, which an empty list doesn't tell from having nothing in it. */
+	loadFailed: boolean;
 	loadM3u: (name: string, url: string) => Promise<void>;
 	loadM3uFile: (name: string, path: string) => Promise<void>;
 	loadXtream: (name: string, url: string, username: string, password: string) => Promise<void>;
@@ -349,6 +351,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		initialized,
 		loading,
 		error,
+		loadFailed: loadError !== null,
 		loadM3u,
 		loadM3uFile,
 		loadXtream,

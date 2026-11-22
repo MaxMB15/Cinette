@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { act, render, cleanup, fireEvent, screen } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { DEFAULT_SUBTITLE_POSITION } from "@/lib/subtitle-position";
 import { useSubtitleNudge } from "./useSubtitleNudge";
 import { useTvRemote } from "./useTvRemote";
@@ -56,6 +57,30 @@ const renderAt = (path: string, nudge = false) => {
 	place(screen.getByText("second"), 50);
 	place(screen.getByLabelText("search"), 100);
 	Element.prototype.scrollIntoView = vi.fn();
+};
+
+/** Presses a key at `target`, and gives the event. */
+const pressAt = (target: EventTarget, key: string, repeat = false) => {
+	const event = new KeyboardEvent("keydown", { key, repeat, bubbles: true, cancelable: true });
+	target.dispatchEvent(event);
+	return event;
+};
+
+/** The remote with no controls on the screen. */
+const EmptyScreen = () => {
+	useTvRemote();
+	return null;
+};
+
+/** A modal over the remote's page, with no focus anywhere yet. */
+const ModalOver = () => {
+	const ref = useRef<HTMLDivElement>(null);
+	useFocusTrap(ref);
+	return (
+		<div ref={ref}>
+			<button>in the modal</button>
+		</div>
+	);
 };
 
 describe("useTvRemote", () => {
@@ -171,5 +196,131 @@ describe("useTvRemote", () => {
 		expect(document.activeElement).toBe(outside);
 		outside.remove();
 		below.remove();
+	});
+
+	describe("OK with nothing focused", () => {
+		it("goes to the screen's first control and takes the press", () => {
+			renderAt("/");
+
+			const event = pressAt(document.body, "Enter");
+
+			expect(document.activeElement).toBe(screen.getByText("first"));
+			expect(event.defaultPrevented).toBe(true);
+		});
+
+		it("goes to the row the screen marks", () => {
+			renderAt("/");
+			screen.getByText("second").setAttribute("data-tv-start", "");
+
+			pressAt(document.body, "Enter");
+
+			expect(document.activeElement).toBe(screen.getByText("second"));
+		});
+
+		it("goes into the open modal rather than the page behind it", () => {
+			render(
+				<MemoryRouter>
+					<Remote />
+					<ModalOver />
+				</MemoryRouter>
+			);
+			screen.getByText("in the modal").blur();
+
+			pressAt(document.body, "Enter");
+
+			expect(document.activeElement).toBe(screen.getByText("in the modal"));
+		});
+
+		it("leaves the press alone on a screen with no controls", () => {
+			render(
+				<MemoryRouter>
+					<EmptyScreen />
+				</MemoryRouter>
+			);
+			expect(pressAt(document.body, "Enter").defaultPrevented).toBe(false);
+		});
+
+		it("takes no notice of another key", () => {
+			renderAt("/");
+
+			const event = pressAt(document.body, "a");
+
+			expect(document.activeElement).toBe(document.body);
+			expect(event.defaultPrevented).toBe(false);
+		});
+
+		it("takes no notice with a modifier held", () => {
+			renderAt("/");
+			const event = new KeyboardEvent("keydown", {
+				key: "Enter",
+				shiftKey: true,
+				bubbles: true,
+				cancelable: true,
+			});
+			document.body.dispatchEvent(event);
+			expect(document.activeElement).toBe(document.body);
+		});
+	});
+
+	it("leaves OK to the control that has the focus", () => {
+		renderAt("/");
+		const second = screen.getByText("second");
+		second.focus();
+
+		const event = pressAt(second, "Enter");
+
+		expect(document.activeElement).toBe(second);
+		expect(event.defaultPrevented).toBe(false);
+	});
+
+	describe("a held OK", () => {
+		it("lets the first press through to the control", () => {
+			renderAt("/");
+			const first = screen.getByText("first");
+			first.focus();
+			const pressed = vi.fn();
+			first.addEventListener("keydown", pressed);
+
+			const event = pressAt(first, "Enter");
+
+			expect(pressed).toHaveBeenCalledOnce();
+			expect(event.defaultPrevented).toBe(false);
+		});
+
+		it("stops the repeats before anything on the page sees them", () => {
+			renderAt("/");
+			const first = screen.getByText("first");
+			first.focus();
+			const pressed = vi.fn();
+			first.addEventListener("keydown", pressed);
+
+			const event = pressAt(first, "Enter", true);
+
+			expect(pressed).not.toHaveBeenCalled();
+			expect(event.defaultPrevented).toBe(true);
+		});
+
+		it("doesn't put the focus anywhere with nothing focused", () => {
+			renderAt("/");
+			pressAt(document.body, "Enter", true);
+			expect(document.activeElement).toBe(document.body);
+		});
+
+		it("leaves other held keys, so a held arrow keeps moving", () => {
+			renderAt("/");
+			const first = screen.getByText("first");
+			first.focus();
+
+			const event = pressAt(first, "ArrowDown", true);
+
+			expect(document.activeElement).toBe(screen.getByText("second"));
+			expect(event.defaultPrevented).toBe(true);
+		});
+
+		it("lets the repeats through once the remote has gone", () => {
+			renderAt("/");
+			cleanup();
+			expect(pressAt(document.body, "Enter", true).defaultPrevented).toBe(false);
+		});
 	});
 });
