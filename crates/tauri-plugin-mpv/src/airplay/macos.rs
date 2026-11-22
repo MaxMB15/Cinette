@@ -11,7 +11,9 @@
 //! - The picker is bound to this module's one `AVPlayer`. When it closes,
 //!   the route counts as picked, and the app loads the item.
 //! - AVPlayer is muted whenever `isExternalPlaybackActive` says the video
-//!   isn't on a receiver, so the Mac's own speakers never play it. If the
+//!   isn't on a receiver, so the Mac's own speakers never play it. The
+//!   video counts as gone from the receiver only once it's been off there
+//!   for [`LEAVE_GRACE`](super::pick::LEAVE_GRACE). If the
 //!   video hasn't got there [`PICK_LIMIT`](super::pick::PICK_LIMIT) after the item is ready,
 //!   nothing was picked: AVPlayer stops, and the player hears it as
 //!   [`Callback::NotPicked`]. [`Pick`] holds these rules.
@@ -495,8 +497,8 @@ impl Host {
                 player.setMuted(step.muted);
             }
             if step.pause {
-                // The video left the receiver. The tracker says the
-                // receiver was lost.
+                // The video left the receiver and didn't come back. The
+                // tracker says the receiver was lost.
                 player.pause();
             }
         }
@@ -540,7 +542,7 @@ impl Host {
                 status: status.to_string(),
                 position,
                 duration,
-                external,
+                external: step.on_receiver,
                 error,
                 subtitles: Vec::new(),
                 subtitle: None,
