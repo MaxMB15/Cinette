@@ -33,7 +33,7 @@ snow = { version = "0.10", default-features = false, features = ["use-chacha20po
 blake2 = { version = "0.10", default-features = false }
 curve25519-dalek = { version = "4.1", default-features = false }
 # The converter's unguessable paths.
-getrandom = "0.3"
+getrandom = "0.4"
 # Clears the logins of providers sent to another device from memory once
 # they're saved. Already in the build through the Noise crates.
 zeroize = "1"
