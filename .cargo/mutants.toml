@@ -70,8 +70,9 @@ exclude_re = [
     'src-tauri/src/wifi\.rs:.*\b(interfaces|default_route_address)\b',
     # Only differs on iOS, which the mutation runs don't build.
     'src-tauri/src/commands\.rs:.*\bensure_downloads_supported\b',
-    # Only differs on Android, which the mutation runs don't build either.
-    'src-tauri/src/commands\.rs:.*\bsideloaded_apk\b',
+    # Only differs on Android, or only builds there, and the mutation runs
+    # don't build Android either.
+    'src-tauri/src/commands\.rs:.*\b(sideloaded_apk|install_android_update)\b',
     # Passes GitHub's latest.json and the real pkexec to update_package, which
     # the tests run with a local release and a stand-in for pkexec. Its APK
     # branch only builds for Android.
