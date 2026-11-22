@@ -526,6 +526,30 @@ async fn a_dropped_connection_resumes_without_asking_again() {
 }
 
 #[tokio::test]
+async fn a_transfer_the_network_cuts_off_fails_and_the_session_resumes() {
+    let mut t = target(ControlMode::Always).await;
+    let proxy = Proxy::new(t.port).await;
+    let mut link = link_to(&t, proxy.port, GRACE);
+    link.until_phase(Phase::Connected).await;
+    link.handle
+        .ask_providers(vec![ProviderName {
+            name: "Home".into(),
+            kind: ProviderKind::M3u,
+        }])
+        .await
+        .unwrap();
+    // The other device's dialog is up when the network drops.
+    timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
+    proxy.cut(false);
+    link.until(|l| {
+        l.transfers()
+            .contains(&ControllerEvent::Refused(ErrorCode::Cancelled))
+    })
+    .await;
+    link.until_connected_again().await;
+}
+
+#[tokio::test]
 async fn a_resume_a_restarted_target_asks_about_shows_its_code() {
     let mut t = target(ControlMode::Ask).await;
     let proxy = Proxy::new(t.port).await;

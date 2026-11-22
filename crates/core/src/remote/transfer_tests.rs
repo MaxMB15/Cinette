@@ -1060,6 +1060,36 @@ fn a_transfer_lost_with_its_connection_says_so_on_the_target() {
 }
 
 #[test]
+fn a_transfer_lost_with_its_connection_says_so_on_the_controller() {
+    let (mut net, phone) = connected();
+    let transfer = granted_send(&mut net, phone);
+    net.drop_link(phone);
+    let controller = &mut net.clients[phone].controller;
+    assert_eq!(
+        controller.lost().events,
+        vec![Event::Transfer(ControllerEvent::Progress {
+            transfer,
+            progress: Progress::Failed(ErrorCode::Cancelled),
+        })]
+    );
+    // It's over, so it isn't lost twice.
+    assert!(controller.lost().events.is_empty());
+}
+
+#[test]
+fn a_request_lost_with_its_connection_says_so_on_the_controller() {
+    let (mut net, phone) = connected();
+    ask(&mut net, phone, Direction::Send);
+    net.drop_link(phone);
+    assert_eq!(
+        net.clients[phone].controller.lost().events,
+        vec![Event::Transfer(ControllerEvent::Refused(
+            ErrorCode::Cancelled
+        ))]
+    );
+}
+
+#[test]
 fn a_transfer_lost_with_its_session_says_so_on_the_controller() {
     let (mut net, phone) = connected();
     granted_send(&mut net, phone);

@@ -585,9 +585,17 @@ async fn connection(
     // request and asks again, and then the user needs this code.
     let mut code_for_a_new_request: Option<Phase> = None;
 
-    let finish = |waiting: HashMap<u64, (Waiting, Instant)>| {
+    // Every way out of this connection ends here. A resume makes a new
+    // controller, so a transfer on this one fails now, or its dialog would
+    // wait for good.
+    let finish = |waiting: HashMap<u64, (Waiting, Instant)>, controller: &mut Controller| {
         for (_, (w, _)) in waiting {
             w.fail(LinkError::NotConnected);
+        }
+        for event in controller.lost().events {
+            if let Event::Transfer(event) = event {
+                host.transfer(link, device, &event);
+            }
         }
     };
 
@@ -597,7 +605,7 @@ async fn connection(
                 let frame = match read {
                     Some(((), Read::Frame(frame))) => frame,
                     _ => {
-                        finish(waiting);
+                        finish(waiting, &mut controller);
                         return if verified {
                             Outcome::Dropped
                         } else {
@@ -680,11 +688,11 @@ async fn connection(
                             // Another device is at this address, which it
                             // may have taken over, or claims the target's id
                             // or breaks the handshake.
-                            finish(waiting);
+                            finish(waiting, &mut controller);
                             return Outcome::NotThere(Ended::Target(reason));
                         }
                         Event::Closed(reason) => {
-                            finish(waiting);
+                            finish(waiting, &mut controller);
                             return Outcome::Ended(Ended::Target(reason));
                         }
                     }
@@ -695,14 +703,14 @@ async fn connection(
                     if let Some(bytes) = controller.leave() {
                         let _ = writer.send(bytes);
                     }
-                    finish(waiting);
+                    finish(waiting, &mut controller);
                     return Outcome::Ended(Ended::Left);
                 }
                 Some(Input::Leave(done)) => {
                     if let Some(bytes) = controller.leave() {
                         let _ = writer.send(bytes);
                     }
-                    finish(waiting);
+                    finish(waiting, &mut controller);
                     // Dropping the writer flushes the goodbye, then closes.
                     drop(writer);
                     let _ = done.send(());
@@ -795,7 +803,7 @@ async fn connection(
             }
         }
         if closed {
-            finish(waiting);
+            finish(waiting, &mut controller);
             if !verified {
                 return Outcome::NotThere(Ended::Unreachable);
             }
@@ -805,7 +813,7 @@ async fn connection(
             return Outcome::Ended(Ended::Target(CloseReason::Timeout));
         }
         if !verified && now.duration_since(opened) >= config.limits.handshake {
-            finish(waiting);
+            finish(waiting, &mut controller);
             return Outcome::NotThere(Ended::Unreachable);
         }
         let late: Vec<u64> = waiting
@@ -819,7 +827,7 @@ async fn connection(
             }
         }
         if verified && now.duration_since(last_heard) >= IDLE_TIMEOUT {
-            finish(waiting);
+            finish(waiting, &mut controller);
             return Outcome::Dropped;
         }
         if now.duration_since(last_sent) >= config.limits.ping
