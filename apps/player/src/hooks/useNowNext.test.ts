@@ -141,6 +141,22 @@ describe("useNowNext", () => {
 		expect(loadedRange()).toEqual(guideRangeFor(state.now, state.now, state.now));
 	});
 
+	it("loads on to the time asked for, and further as that moves past the range", () => {
+		const later = NOW + 10 * 3600;
+		let until = later;
+		const { rerender } = renderHook(() => useNowNext(until));
+		const first = loadedRange();
+		expect(first).toEqual(guideRangeFor(NOW, NOW, later));
+
+		until = later + 60;
+		rerender();
+		expect(loadedRange()).toBe(first);
+
+		until = first.to + 1;
+		rerender();
+		expect(loadedRange()).toEqual(guideRangeFor(NOW, NOW, until));
+	});
+
 	it("gives the current time", () => {
 		const { result } = renderHook(() => useNowNext());
 		expect(result.current.now).toBe(NOW);

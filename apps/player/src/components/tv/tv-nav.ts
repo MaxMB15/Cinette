@@ -4,7 +4,7 @@
 import { createContext, useCallback, useContext, useState } from "react";
 
 /** The sections of the channels page. */
-export type TvSection = "search" | "live" | "movie" | "series" | "favorites" | "history";
+export type TvSection = "search" | "live" | "guide" | "movie" | "series" | "favorites" | "history";
 
 export interface TvNav {
 	section: TvSection;

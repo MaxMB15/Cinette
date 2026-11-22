@@ -3,13 +3,13 @@
 
 import {
 	AudioLines,
+	CalendarClock,
 	Captions,
 	CircleDot,
 	Download,
 	Gauge,
 	Info,
 	Layers,
-	List,
 	ListVideo,
 	Pause,
 	Play,
@@ -57,7 +57,7 @@ export interface TvRowOptions {
 	/** Live TV that's already live, so there's nothing to skip forward to. */
 	atLive: boolean;
 	onZap: (step: 1 | -1) => void;
-	onChannels: () => void;
+	onGuide: () => void;
 	onPrevEpisode?: () => void;
 	onNextEpisode?: () => void;
 	onSubtitles?: () => void;
@@ -125,7 +125,7 @@ export const tvRow = (o: TvRowOptions): TvRow => {
 			onPress: o.onSubtitles,
 		});
 	}
-	if (o.live) end.push({ id: "channels", label: "Channels", icon: List, onPress: o.onChannels });
+	if (o.live) end.push({ id: "guide", label: "Guide", icon: CalendarClock, onPress: o.onGuide });
 	return { start, center, end };
 };
 

@@ -19,7 +19,7 @@ const live = [news, sport, music, cinema];
 const setup = (channel: Channel | null, channels: readonly Channel[] = live) => {
 	const handlers = {
 		play: vi.fn<(channel: Channel) => void>(),
-		onChannels: vi.fn(),
+		onGuide: vi.fn(),
 		onEpisode: vi.fn<(step: 1 | -1) => void>(),
 		onInfo: vi.fn(),
 		onStop: vi.fn(),
@@ -169,16 +169,16 @@ describe("useTvPlayer zapping", () => {
 
 describe("useTvPlayer keys", () => {
 	it("leaves OK to the player's own shortcuts", () => {
-		const { press, onChannels } = setup(news);
+		const { press, onGuide } = setup(news);
 		expect(press("Enter")).toBe(false);
-		expect(onChannels).not.toHaveBeenCalled();
+		expect(onGuide).not.toHaveBeenCalled();
 	});
 
 	it("opens the channel list with the Menu and Guide keys on live TV", () => {
-		const { press, onChannels } = setup(news);
+		const { press, onGuide } = setup(news);
 		expect(press("ContextMenu")).toBe(true);
 		expect(press("Guide")).toBe(true);
-		expect(onChannels).toHaveBeenCalledTimes(2);
+		expect(onGuide).toHaveBeenCalledTimes(2);
 	});
 
 	it("leaves Left and Right to the player's own shortcuts on a movie", () => {
@@ -202,7 +202,7 @@ describe("useTvPlayer keys", () => {
 	it.each([news, movie, null])(
 		"shows the controls with Down and the details with Up",
 		(channel) => {
-			const { press, result, onActivity, onChannels, onInfo } = setup(channel);
+			const { press, result, onActivity, onGuide, onInfo } = setup(channel);
 			expect(result.current.view).toBe("none");
 
 			expect(press("ArrowDown")).toBe(true);
@@ -210,7 +210,7 @@ describe("useTvPlayer keys", () => {
 			expect(press("ArrowUp")).toBe(true);
 			expect(result.current.view).toBe("details");
 			expect(onActivity).toHaveBeenCalledTimes(2);
-			expect(onChannels).not.toHaveBeenCalled();
+			expect(onGuide).not.toHaveBeenCalled();
 			expect(onInfo).not.toHaveBeenCalled();
 			expect(result.current.zapTarget).toBeNull();
 		}
@@ -240,10 +240,10 @@ describe("useTvPlayer keys", () => {
 	});
 
 	it("opens the episodes and info with the Menu key on a movie or episode", () => {
-		const { press, onInfo, onChannels } = setup(movie);
+		const { press, onInfo, onGuide } = setup(movie);
 		expect(press("ContextMenu")).toBe(true);
 		expect(onInfo).toHaveBeenCalledOnce();
-		expect(onChannels).not.toHaveBeenCalled();
+		expect(onGuide).not.toHaveBeenCalled();
 	});
 
 	it("opens the info from the Info key", () => {
@@ -261,10 +261,10 @@ describe("useTvPlayer keys", () => {
 	});
 
 	it("does only what the key is for", () => {
-		const { press, onChannels, onEpisode, onInfo, onStop, onSeek, play, result } = setup(news);
+		const { press, onGuide, onEpisode, onInfo, onStop, onSeek, play, result } = setup(news);
 		press("Guide");
 		wait(ZAP_DELAY_MS);
-		expect(onChannels).toHaveBeenCalledOnce();
+		expect(onGuide).toHaveBeenCalledOnce();
 		expect(onEpisode).not.toHaveBeenCalled();
 		expect(onInfo).not.toHaveBeenCalled();
 		expect(onStop).not.toHaveBeenCalled();

@@ -4060,7 +4060,9 @@ describe("the TV player", () => {
 			await openItem(lanternKeeper());
 			await press("ArrowUp");
 			expect(screen.getByText(lanternOmdb().plot!)).toBeInTheDocument();
-			expect(screen.queryByText("No guide for this channel")).not.toBeInTheDocument();
+			expect(
+				screen.queryByText("No schedule information for this channel")
+			).not.toBeInTheDocument();
 			expect(tvBar().style.background).toContain("rgba(0, 0, 0, 0.84) 40%");
 		});
 
@@ -4106,9 +4108,13 @@ describe("the TV player", () => {
 			expect(
 				screen.getByText("Up or Down shows the controls. OK plays.")
 			).toBeInTheDocument();
-			expect(screen.queryByText("No guide for this channel")).not.toBeInTheDocument();
+			expect(
+				screen.queryByText("No schedule information for this channel")
+			).not.toBeInTheDocument();
 			await press("ArrowUp");
-			expect(screen.getByText("No guide for this channel")).toBeInTheDocument();
+			expect(
+				screen.getByText("No schedule information for this channel")
+			).toBeInTheDocument();
 		});
 
 		it("offers no retry buttons over a live channel, since OK retries", async () => {
@@ -4155,7 +4161,7 @@ describe("the TV player", () => {
 			expect(cursor()).toHaveFocus();
 		});
 
-		it("hides it behind the channel panel, and gives the panel the focus", async () => {
+		it("hides it behind the guide, and gives the guide the focus", async () => {
 			env.channels = [makeNewsChannel()];
 			await openItem(makeNewsChannel());
 			await press("ContextMenu");
@@ -4270,12 +4276,10 @@ describe("the TV player", () => {
 		])("tries again with OK when a live channel fails to %s", async (_, failure) => {
 			await openItem(makeNewsChannel());
 			await setMpv(failure);
-			expect(
-				screen.getByText("OK tries again. Menu shows the channels.")
-			).toBeInTheDocument();
+			expect(screen.getByText("OK tries again. Menu shows the guide.")).toBeInTheDocument();
 			expect(await press("Enter")).toBe(false);
 			expect(fakeMpv.actions.reload).toHaveBeenCalledTimes(1);
-			expect(dialog("Channels")).not.toBeInTheDocument();
+			expect(dialog("Guide")).not.toBeInTheDocument();
 		});
 
 		it("tries again with OK on a failed movie, and doesn't play it", async () => {
@@ -4293,16 +4297,16 @@ describe("the TV player", () => {
 			expect(await press("Enter")).toBe(false);
 			expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
 			expect(fakeMpv.actions.reload).not.toHaveBeenCalled();
-			expect(dialog("Channels")).not.toBeInTheDocument();
+			expect(dialog("Guide")).not.toBeInTheDocument();
 		});
 
 		it.each(["ContextMenu", "Guide"])(
-			"opens the channels with %s on a live channel, and goes on playing",
+			"opens the guide with %s on a live channel, and goes on playing",
 			async (key) => {
 				await openItem(makeNewsChannel());
 				await setMpv({ state: playing(NEWS_URL, 100, 0) });
 				expect(await press(key)).toBe(false);
-				expect(dialog("Channels")).toBeInTheDocument();
+				expect(dialog("Guide")).toBeInTheDocument();
 				expect(fakeMpv.actions.pause).not.toHaveBeenCalled();
 			}
 		);
@@ -4340,12 +4344,12 @@ describe("the TV player", () => {
 			expect(tvTitle()).toHaveTextContent("News");
 		});
 
-		it("offers the channels with the Menu key on a failed one, and doesn't try it again", async () => {
+		it("offers the guide with the Menu key on a failed one, and doesn't try it again", async () => {
 			env.channels = [makeNewsChannel(), sports];
 			await openItem(makeNewsChannel());
 			await setMpv({ loadFailed: true });
 			await press("ContextMenu");
-			expect(dialog("Channels")).toBeInTheDocument();
+			expect(dialog("Guide")).toBeInTheDocument();
 			expect(fakeMpv.actions.reload).not.toHaveBeenCalled();
 		});
 
@@ -4469,18 +4473,18 @@ describe("the TV player", () => {
 			expect(fakeMpv.actions.reload).toHaveBeenCalledTimes(1);
 		});
 
-		it("opens the channels from its button", async () => {
+		it("opens the guide from its button", async () => {
 			await openItem(makeNewsChannel());
 			await openTvRow();
-			fireEvent.click(tvButton("Channels"));
+			fireEvent.click(tvButton("Guide"));
 			await flush();
-			expect(dialog("Channels")).toBeInTheDocument();
+			expect(dialog("Guide")).toBeInTheDocument();
 		});
 
-		it("offers the channels only on live TV", async () => {
+		it("offers the guide only on live TV", async () => {
 			await openItem(lanternKeeper());
 			await openTvRow();
-			expect(hasTvButton("Channels")).toBe(false);
+			expect(hasTvButton("Guide")).toBe(false);
 		});
 
 		it.each([
@@ -4919,7 +4923,7 @@ describe("the TV player", () => {
 		});
 	});
 
-	describe("the channel panel", () => {
+	describe("the guide panel", () => {
 		const names = () => screen.getAllByRole("option").map((row) => row.textContent);
 
 		it("lists the channels Up and Down step through, on the one playing", async () => {
@@ -4953,7 +4957,7 @@ describe("the TV player", () => {
 			wait(6000);
 			await press("ArrowDown");
 			await press("Enter");
-			expect(dialog("Channels")).not.toBeInTheDocument();
+			expect(dialog("Guide")).not.toBeInTheDocument();
 			expect(loadedUrls()).toEqual([NEWS_URL, sports.url]);
 			expect(tvBar()).not.toHaveClass("invisible");
 			expect(tvTitle()).toHaveTextContent("Sports");
@@ -4964,7 +4968,7 @@ describe("the TV player", () => {
 			await press("ContextMenu");
 			await press("Escape");
 			await flush();
-			expect(dialog("Channels")).not.toBeInTheDocument();
+			expect(dialog("Guide")).not.toBeInTheDocument();
 			expect(loadedUrls()).toEqual([NEWS_URL]);
 			expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
 			expect(screen.queryByText("Channel list")).not.toBeInTheDocument();

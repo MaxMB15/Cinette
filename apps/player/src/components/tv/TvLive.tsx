@@ -6,10 +6,9 @@ import { useChannels } from "@/hooks/useChannels";
 import { programProgress, useNowNext } from "@/hooks/useNowNext";
 import { formatHHMM } from "@/lib/epg-window";
 import type { Channel, EpgProgram } from "@/lib/types";
-import { TvGroupList, useTvGroups } from "./TvGroups";
+import { TvGroupList, useGroupedChannels } from "./TvGroups";
 import { TvList } from "./TvList";
 import { COLUMN_HEIGHT, TvButton, TvChannelRow, TvHeader } from "./ui";
-import { useRemembered } from "./tv-nav";
 
 const CHANNEL_ROW = 3.4;
 /** How many programs after the current one fit under it. */
@@ -29,11 +28,7 @@ export const TvLive = ({
 }) => {
 	const { toggleFavorite } = useChannels();
 	const { now, nowNextOf, scheduleOf } = useNowNext();
-	const [place, setPlace] = useRemembered("live", { group: 0, channel: 0, inGroups: false });
-	const { groups, itemsOf } = useTvGroups(live, "All channels");
-
-	const group = groups[Math.min(place.group, groups.length - 1)];
-	const channels = itemsOf(group);
+	const { place, groups, group, channels, toGroup, toChannel } = useGroupedChannels("live", live);
 	const channel: Channel | undefined = channels[Math.min(place.channel, channels.length - 1)];
 
 	return (
@@ -43,7 +38,7 @@ export const TvLive = ({
 				<TvGroupList
 					groups={groups}
 					active={place.group}
-					onActiveChange={(i) => setPlace({ group: i, channel: 0, inGroups: true })}
+					onActiveChange={toGroup}
 					start={place.inGroups}
 				/>
 				<TvList
@@ -52,7 +47,7 @@ export const TvLive = ({
 					label={`Channels in ${group.name}`}
 					itemKey={(ch) => ch.id}
 					active={place.channel}
-					onActiveChange={(i) => setPlace({ ...place, channel: i, inGroups: false })}
+					onActiveChange={toChannel}
 					onSelect={(ch) => onPlay(ch, channels)}
 					rowHeight={CHANNEL_ROW}
 					height={COLUMN_HEIGHT}
@@ -127,7 +122,9 @@ export const ChannelInfo = ({
 				</div>
 			) : (
 				<p className="mt-[1rem] text-[0.8rem] leading-[1.1rem] opacity-70">
-					{schedule.length === 0 ? "No guide for this channel" : "Nothing on right now"}
+					{schedule.length === 0
+						? "No schedule information for this channel"
+						: "Nothing on right now"}
 				</p>
 			)}
 			{upcoming.length > 0 && (

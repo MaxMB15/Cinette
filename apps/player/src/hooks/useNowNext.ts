@@ -28,12 +28,17 @@ export const nowAndNext = (programs: readonly EpgProgram[], at: number): NowNext
 export const programProgress = (program: EpgProgram, at: number): number =>
 	Math.max(0, Math.min(1, (at - program.startTime) / (program.endTime - program.startTime)));
 
-/** Reads what's on from the guide of every live channel, loaded once and cached. */
-export const useNowNext = () => {
+/**
+ * Reads what's on from the guide of every live channel, loaded once and
+ * cached. It loads the hours around now, and on up to `until` for a grid that
+ * shows what's on later.
+ */
+export const useNowNext = (until?: number) => {
 	const { channels, guideVersion } = useChannels();
 	const now = useNow();
+	const end = until ?? now;
 	const [range, setRange] = useState<TimeRange | null>(null);
-	if (!(range && coversWindow(range, now, now))) setRange(guideRangeFor(now, now, now));
+	if (!(range && coversWindow(range, now, end))) setRange(guideRangeFor(now, now, end));
 	const { programs } = useGuidePrograms(
 		range,
 		channels.length > 0 ? "all" : null,

@@ -54,12 +54,21 @@ describe("TvRail", () => {
 			within(list)
 				.getAllByRole("option")
 				.map((row) => row.textContent)
-		).toEqual(["Search", "Live TV", "Movies", "Series", "Favorites", "History", "Settings"]);
+		).toEqual([
+			"Search",
+			"Live TV",
+			"Guide",
+			"Movies",
+			"Series",
+			"Favorites",
+			"History",
+			"Settings",
+		]);
 	});
 
 	it("is tall enough for all its rows", () => {
 		render(rail("live"));
-		expect(screen.getByRole("listbox").style.height).toBe("21rem");
+		expect(screen.getByRole("listbox").style.height).toBe("24rem");
 		expect(option("Search").style.height).toBe("3rem");
 	});
 
@@ -92,6 +101,7 @@ describe("TvRail", () => {
 	it.each<[TvRailItem, string]>([
 		["search", "Search"],
 		["live", "Live TV"],
+		["guide", "Guide"],
 		["movie", "Movies"],
 		["series", "Series"],
 		["favorites", "Favorites"],
@@ -106,13 +116,13 @@ describe("TvRail", () => {
 		render(rail("live"));
 		fireEvent.keyDown(cursor(), { key: "ArrowDown" });
 		fireEvent.keyDown(cursor(), { key: "ArrowDown" });
-		expect(cursor()).toBe(option("Series"));
+		expect(cursor()).toBe(option("Movies"));
 		expect(openSection).not.toHaveBeenCalled();
 	});
 
 	it.each<[string, TvRailItem]>([
-		["Enter", "series"],
-		["ArrowRight", "series"],
+		["Enter", "movie"],
+		["ArrowRight", "movie"],
 	])("opens the section under the cursor on %s", (key, section) => {
 		render(rail("live"));
 		fireEvent.keyDown(cursor(), { key: "ArrowDown" });
@@ -124,6 +134,7 @@ describe("TvRail", () => {
 	it.each<[string, TvRailItem]>([
 		["Search", "search"],
 		["Live TV", "live"],
+		["Guide", "guide"],
 		["Movies", "movie"],
 		["Series", "series"],
 		["Favorites", "favorites"],
@@ -172,15 +183,15 @@ describe("TvRail", () => {
 		render(rail("live"));
 		act(() => cursor().focus());
 		fireEvent.keyDown(cursor(), { key: "ArrowDown" });
-		expect(document.activeElement).toBe(option("Movies"));
-		expect(cursor()).toBe(option("Movies"));
+		expect(document.activeElement).toBe(option("Guide"));
+		expect(cursor()).toBe(option("Guide"));
 	});
 
 	it("puts its cursor back on the open section when the focus leaves", () => {
 		render(rail("live"));
 		act(() => cursor().focus());
 		fireEvent.keyDown(cursor(), { key: "ArrowDown" });
-		expect(cursor()).toBe(option("Movies"));
+		expect(cursor()).toBe(option("Guide"));
 		act(() => screen.getByRole("button", { name: "The page" }).focus());
 		expect(cursor()).toBe(option("Live TV"));
 	});

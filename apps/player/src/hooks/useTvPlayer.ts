@@ -13,7 +13,7 @@ import type { Channel } from "@/lib/types";
 export const ZAP_DELAY_MS = 350;
 
 /** The side panels over the video. */
-export type TvPlayerPanel = "channels" | "sources" | "audio" | "speed";
+export type TvPlayerPanel = "guide" | "sources" | "audio" | "speed";
 
 /**
  * What the bar along the bottom shows: the buttons, the buttons under the
@@ -26,7 +26,7 @@ interface UseTvPlayerOptions {
 	channel: Channel | null;
 	channels: readonly Channel[];
 	play: (channel: Channel) => void;
-	onChannels: () => void;
+	onGuide: () => void;
 	onEpisode: (step: 1 | -1) => void;
 	onInfo: () => void;
 	onStop: () => void;
@@ -41,7 +41,7 @@ export const useTvPlayer = ({
 	channel,
 	channels,
 	play,
-	onChannels,
+	onGuide,
 	onEpisode,
 	onInfo,
 	onStop,
@@ -93,8 +93,8 @@ export const useTvPlayer = ({
 			case "zap":
 				zap(action.step);
 				break;
-			case "channels":
-				onChannels();
+			case "guide":
+				onGuide();
 				break;
 			case "controls":
 			case "details":

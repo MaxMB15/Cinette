@@ -196,6 +196,19 @@ html.tv .tv-cursor:focus .tv-name {
 	overflow-wrap: anywhere;
 	white-space: normal;
 }
+/* A row of the guide's grid has its cursor on one program, not on all of it. */
+html.tv .tv-cursor.tv-guide-row:focus,
+html.tv .tv-cursor.tv-guide-row[data-active] {
+	background: none;
+	color: inherit;
+}
+html.tv .tv-guide-row[data-active] .tv-guide-focus {
+	background: hsl(0 0% 100% / 0.25);
+}
+html.tv .tv-guide-row:focus .tv-guide-focus {
+	background: var(--tv-cursor);
+	color: var(--tv-ink);
+}
 /* A button OK presses while the focus stays on the video behind it. */
 html.tv .player-container:focus .tv-press {
 	background: var(--tv-cursor);

@@ -150,7 +150,9 @@ describe("TvLiveDetails", () => {
 		expect(screen.getAllByText("Headlines")[0].tagName).toBe("P");
 		expect(screen.getByText(`${timeSpan(on)} · News`)).toBeInTheDocument();
 		expect(screen.getByText("The day's top stories.")).toBeInTheDocument();
-		expect(screen.queryByText("No guide for this channel")).not.toBeInTheDocument();
+		expect(
+			screen.queryByText("No schedule information for this channel")
+		).not.toBeInTheDocument();
 	});
 
 	it("shows only the time of a program with nothing more to say", () => {
@@ -163,7 +165,7 @@ describe("TvLiveDetails", () => {
 
 	it("says when the channel has no guide", () => {
 		render(<TvLiveDetails channel={NEWS} />);
-		expect(screen.getByText("No guide for this channel")).toBeInTheDocument();
+		expect(screen.getByText("No schedule information for this channel")).toBeInTheDocument();
 		expect(screen.queryByText("ON AIR")).not.toBeInTheDocument();
 		expect(screen.queryByRole("group", { name: "Guide" })).not.toBeInTheDocument();
 	});
