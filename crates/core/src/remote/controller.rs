@@ -511,6 +511,15 @@ impl Controller {
         self.transfer(|flow, out| flow.cancel(out))
     }
 
+    /// The connection went without a word, as when the network drops: a
+    /// transfer on it can't go on, unless this device is already writing
+    /// what it has. A goodbye or a broken frame does this by itself.
+    pub fn lost(&mut self) -> Output {
+        let mut out = Output::default();
+        self.lose_flow(&mut out);
+        out
+    }
+
     /// The connection is going: a transfer on it can't go on.
     fn lose_flow(&mut self, out: &mut Output) {
         let mut flow_out = ControllerOut::default();
