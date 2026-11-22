@@ -36,13 +36,15 @@ runs:
         java-version: 21
 
     # The runner comes with the Android SDK. This adds the NDK docs/android.md
-    # names, since the SDK's own can change under the build.
+    # names, since the SDK's own can change under the build. `yes` accepts the
+    # license. It comes in through `< <(yes)`, not a pipe, because yes ends
+    # with SIGPIPE once sdkmanager exits, and an action's bash has pipefail on.
     - name: Install the NDK
       id: ndk
       shell: bash
       run: |
         VERSION=30.0.16248370
-        yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$VERSION" > /dev/null
+        "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$VERSION" < <(yes) > /dev/null
         echo "NDK_HOME=$ANDROID_HOME/ndk/$VERSION" >> "$GITHUB_ENV"
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
