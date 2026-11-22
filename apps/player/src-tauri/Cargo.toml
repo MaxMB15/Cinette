@@ -26,6 +26,9 @@ chrono = { version = "0.4", features = ["serde"] }
 reqwest = { workspace = true, features = ["json", "stream"] }
 futures-util = "0.3"
 tempfile = "3"
+# Tells whether the newest release is newer than the app, for the GitHub
+# build for Android. The same version as Tauri's.
+semver = "1"
 # The errors the converter's server tells apart when an accept fails.
 libc = "0.2"
 # Reads the logo addresses other Cinette devices send. The same version as mvp-core's.

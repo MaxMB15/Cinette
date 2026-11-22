@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!-- Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7. -->
+<!-- Merged into the GitHub build's manifest only. That build updates itself
+     through Android's installer, which Google Play and the Amazon Appstore
+     don't allow. See build.gradle.kts. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+</manifest>

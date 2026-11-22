@@ -7,12 +7,13 @@ plugins {
     id("rust")
 }
 
-// The store the build is for: google (the default) or amazon. Set it with
+// The store the build is for: google (the default), amazon, or github for
+// the APKs on the GitHub release, which update themselves. Set it with
 // -Pstore=amazon, or ORG_GRADLE_PROJECT_store=amazon around
 // `pnpm tauri android build`. A property rather than a flavor dimension,
 // because a second dimension renames the variant tasks that Tauri's
-// RustPlugin.kt and CLI expect. Both stores get the same Rust library.
-val stores = listOf("google", "amazon")
+// RustPlugin.kt and CLI expect. Every store gets the same Rust library.
+val stores = listOf("google", "amazon", "github")
 val store = (findProperty("store") as? String ?: "google").also {
     require(it in stores) { "store must be one of $stores, not \"$it\"" }
 }
@@ -104,6 +105,15 @@ android {
     sourceSets {
         getByName("main") {
             jniLibs.srcDir("../../../../../../libs/android")
+        }
+    }
+}
+
+// Only the GitHub build may install its own updates.
+if (store == "github") {
+    androidComponents {
+        onVariants { variant ->
+            variant.sources.manifests.addStaticManifestFile("src/github/AndroidManifest.xml")
         }
     }
 }

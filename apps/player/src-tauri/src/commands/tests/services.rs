@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! The online services, subtitles, skip times, sorting groups with Gemini and
-//! Linux package updates.
+//! The online services, subtitles, skip times, sorting groups with Gemini,
+//! Linux package updates and the Android build's update check.
 //!
 //! No test here reaches a real service. A lookup is answered from the cache
 //! or stops before its request is sent, and what a service would send back is
@@ -996,6 +996,75 @@ async fn a_release_list_that_cannot_be_read_is_an_error() {
     let err = download(garbled).await.unwrap_err();
     assert!(err.starts_with("Failed to parse latest.json: "), "{err}");
     let err = download("unix:/latest.json".to_string()).await.unwrap_err();
+    assert!(err.starts_with("Failed to fetch latest.json: "), "{err}");
+}
+
+/// The key a 64-bit ARM Android device's APK is listed under.
+const ARM64_APK: &str = "android-arm64-v8a";
+
+/// A release of `version` whose latest.json lists only a `key` package.
+fn release_listing(version: &str, key: &str) -> String {
+    let latest = json!({
+        "version": version,
+        "notes": "See the CHANGELOG for details.",
+        "packages": {key: "http://127.0.0.1:9/Cinette.apk"},
+    });
+    test_server::serve_once("200 OK", latest.to_string())
+}
+
+fn version(v: &str) -> semver::Version {
+    semver::Version::parse(v).unwrap()
+}
+
+#[tokio::test]
+async fn a_newer_release_with_an_apk_for_the_device_is_offered() {
+    let latest = release_listing("1.2.0", ARM64_APK);
+
+    let release = newer_release(&version("1.1.9"), &latest, ARM64_APK).await;
+
+    let offered = NewerRelease {
+        version: "1.2.0".to_string(),
+        body: Some("See the CHANGELOG for details.".to_string()),
+    };
+    assert_eq!(release, Ok(Some(offered)));
+}
+
+/// 1.10.0 comes after 1.2.0, though it sorts first as text.
+#[tokio::test]
+async fn the_same_or_an_older_release_is_not_offered() {
+    for current in ["1.2.0", "1.10.0"] {
+        let latest = release_listing("1.2.0", ARM64_APK);
+
+        let release = newer_release(&version(current), &latest, ARM64_APK).await;
+
+        assert_eq!(release, Ok(None), "{current}");
+    }
+}
+
+#[tokio::test]
+async fn a_release_without_an_apk_for_the_device_is_not_offered() {
+    let latest = release_listing("1.2.0", "android-armeabi-v7a");
+
+    let release = newer_release(&version("1.1.9"), &latest, ARM64_APK).await;
+
+    assert_eq!(release, Ok(None));
+}
+
+#[tokio::test]
+async fn a_release_list_without_a_valid_version_is_an_error() {
+    let current = version("1.0.0");
+    let unversioned = test_server::serve_once("200 OK", json!({"packages": {}}).to_string());
+    let err = newer_release(&current, &unversioned, ARM64_APK).await;
+    assert_eq!(err, Err("latest.json has no version".to_string()));
+
+    let err = newer_release(&current, &release_listing("next", ARM64_APK), ARM64_APK)
+        .await
+        .unwrap_err();
+    assert!(err.starts_with("latest.json's version next isn't valid: "), "{err}");
+
+    let err = newer_release(&current, &test_server::refused_url(), ARM64_APK)
+        .await
+        .unwrap_err();
     assert!(err.starts_with("Failed to fetch latest.json: "), "{err}");
 }
 

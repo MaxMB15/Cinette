@@ -81,7 +81,32 @@ fn the_manifest_names_the_store_from_gradle() {
     ));
     let gradle = include_str!("../gen/android/app/build.gradle.kts");
     assert!(gradle.contains(r#"manifestPlaceholders["store"] = store"#));
-    assert!(gradle.contains(r#"val stores = listOf("google", "amazon")"#));
+    assert!(gradle.contains(r#"val stores = listOf("google", "amazon", "github")"#));
+}
+
+/// Only the GitHub build may install its updates, since Google Play and the
+/// Amazon Appstore don't allow an app to. `android_device::install_apk`
+/// hands the APK to Android's installer through the app's FileProvider, from
+/// the temporary folder, which is the cache folder.
+#[test]
+fn only_the_github_build_installs_its_updates() {
+    let main = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+    assert!(!main.contains("REQUEST_INSTALL_PACKAGES"));
+    let github = include_str!("../gen/android/app/src/github/AndroidManifest.xml");
+    assert!(github.contains(
+        r#"<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />"#
+    ));
+    let gradle = include_str!("../gen/android/app/build.gradle.kts");
+    let only_github = gradle.find(r#"if (store == "github") {"#).unwrap();
+    assert!(gradle[only_github..].contains(r#"addStaticManifestFile("src/github/AndroidManifest.xml")"#));
+
+    assert!(main.contains(r#"android:authorities="${applicationId}.fileprovider""#));
+    let paths = include_str!("../gen/android/app/src/main/res/xml/file_paths.xml");
+    assert!(paths.contains(r#"<cache-path name="my_cache_images" path="." />"#));
+    let proguard = include_str!("../gen/android/app/proguard-rules.pro");
+    assert!(proguard.contains(
+        "getUriForFile(android.content.Context, java.lang.String, java.io.File);"
+    ));
 }
 
 /// The multicast permission implies Wi-Fi, so without this the stores would

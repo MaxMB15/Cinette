@@ -91,7 +91,8 @@ while IFS='|' read -r platform url signature; do
 
 done <<< "$PLATFORMS"
 
-# The packages the in-app updater downloads for .deb and .rpm installs
+# The packages the in-app updater downloads for .deb and .rpm installs and
+# for the Android app
 PACKAGES=$(echo "$BODY" | python3 -c "
 import sys, json
 for name, url in json.load(sys.stdin).get('packages', {}).items():
@@ -111,7 +112,8 @@ echo ""
 echo "--- README downloads ---"
 for name in Cinette_aarch64.dmg Cinette_x64.dmg \
             Cinette_amd64.AppImage Cinette_amd64.deb \
-            Cinette_x86_64.rpm; do
+            Cinette_x86_64.rpm \
+            Cinette_arm64-v8a.apk Cinette_armeabi-v7a.apk; do
   check_url "$name" "$BASE_URL/$name"
 done
 

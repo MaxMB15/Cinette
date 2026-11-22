@@ -10,6 +10,8 @@ declare global {
 	interface Window {
 		/** Set by the app's init script on Android TV, Google TV and Fire TV. See android_device.rs. */
 		__CINETTE_TV__?: boolean;
+		/** Set by the app's init script on Android: "google", "amazon" or "github". See android_device.rs. */
+		__CINETTE_STORE__?: string;
 	}
 }
 
@@ -29,9 +31,16 @@ export const getPlatform = (): Platform => {
 	}
 };
 
-/** Phones, tablets and TVs: no downloads, no updater, no donation prompts. */
+/** Phones, tablets and TVs: no downloads, no donation prompts. */
 export const isMobilePlatform = (p: Platform = getPlatform()): boolean =>
 	p === "ios" || p === "android" || p === "tv";
+
+/**
+ * Whether the app updates itself: on a computer, and in the Android build from
+ * GitHub. An app store updates the others.
+ */
+export const updatesItself = (p: Platform = getPlatform()): boolean =>
+	!isMobilePlatform(p) || window.__CINETTE_STORE__ === "github";
 
 /**
  * Whether this device can control other Cinette devices. Every device can

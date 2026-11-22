@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState, useEffect, useCallback } from "react";
-import type { Update } from "@tauri-apps/plugin-updater";
 import { refreshProvider, refreshEpg } from "@/lib/tauri";
 import {
 	loadProviderSettings,
@@ -11,7 +10,7 @@ import {
 	useChannels,
 } from "@/hooks/useChannels";
 import { findDueRefreshes, refreshKeys } from "@/lib/refresh-schedule";
-import type { UpdateState } from "@/hooks/useUpdateChecker";
+import type { AvailableUpdate, UpdateState } from "@/hooks/useUpdateChecker";
 import { readStorage, SPLASH_SHOWN_KEY, writeStorage } from "@/lib/storage";
 import { useLatestRef } from "@/hooks/useLatestRef";
 
@@ -27,7 +26,7 @@ export interface SplashScreenState {
 	steps: SplashStep[];
 	allDone: boolean;
 	progress: number;
-	update: Update | null;
+	update: AvailableUpdate | null;
 	dismissed: boolean;
 	hasProviders: boolean;
 	dismiss: () => void;
@@ -200,7 +199,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			// still running, so only one actual check() call happens.
 			// Give up after 7s so the splash never gets stuck.
 			setStepStatus("updates", "active");
-			let foundUpdate: Update | null;
+			let foundUpdate: AvailableUpdate | null;
 			try {
 				foundUpdate = await Promise.race([
 					updates.checkForUpdates(),

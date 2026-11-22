@@ -9,8 +9,9 @@ exclude_re = [
     "test_server::",
     # These only pass the real address and the shared client to a fetch_from
     # that the tests run against the loopback server. A test of the wrapper
-    # itself would have to call the real service.
-    "replace (fetch_source|fetch_whatson|fetch_mdblist) ",
+    # itself would have to call the real service. check_android_update does
+    # the same for newer_release, with GitHub's latest.json.
+    "replace (fetch_source|fetch_whatson|fetch_mdblist|check_android_update) ",
     # mpv's OpenGL render context, which the macOS and Linux renderers share,
     # needs a real OpenGL context.
     'tauri-plugin-mpv/src/gl_render\.rs:',
@@ -69,6 +70,13 @@ exclude_re = [
     'src-tauri/src/wifi\.rs:.*\b(interfaces|default_route_address)\b',
     # Only differs on iOS, which the mutation runs don't build.
     'src-tauri/src/commands\.rs:.*\bensure_downloads_supported\b',
+    # Only differs on Android, or only builds there, and the mutation runs
+    # don't build Android either.
+    'src-tauri/src/commands\.rs:.*\b(sideloaded_apk|install_android_update)\b',
+    # Passes GitHub's latest.json and the real pkexec to update_package, which
+    # the tests run with a local release and a stand-in for pkexec. Its APK
+    # branch only builds for Android.
+    'src-tauri/src/commands\.rs:.*\bpackage_update\b',
     # Starts caffeinate or systemd-inhibit, which would change the machine's
     # own sleep settings. The tests check the command it runs.
     'src-tauri/src/keep_awake\.rs:.*\bhold_while_running\b',
