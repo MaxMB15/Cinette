@@ -2751,9 +2751,9 @@ describe("subtitles", () => {
 		pickEnglishSubtitles();
 		fireEvent.click(screen.getByRole("button", { name: "Adjust subtitles" }));
 		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(box(1000, 500));
-		fireEvent.mouseDown(subtitleBox("Sample subtitle text"), { clientX: 500, clientY: 440 });
-		fireEvent.mouseMove(document, { clientX: 600, clientY: 390 });
-		fireEvent.mouseUp(document);
+		fireEvent.pointerDown(subtitleBox("Sample subtitle text"), { clientX: 500, clientY: 440 });
+		fireEvent.pointerMove(document, { clientX: 600, clientY: 390 });
+		fireEvent.pointerUp(document);
 		fireEvent.click(screen.getByRole("button", { name: "Delay subtitles" }));
 		fireEvent.click(screen.getByRole("button", { name: "Bigger subtitles" }));
 		fireEvent.click(screen.getByRole("button", { name: "Serif subtitles" }));
@@ -3354,12 +3354,12 @@ describe("subtitles", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
 		fireEvent.click(screen.getByRole("button", { name: "Adjust subtitles" }));
 		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(box(1000, 500));
-		fireEvent.mouseDown(subtitleBox("Sample subtitle text"), { clientX: 500, clientY: 440 });
-		fireEvent.mouseMove(document, { clientX: 600, clientY: 390 });
+		fireEvent.pointerDown(subtitleBox("Sample subtitle text"), { clientX: 500, clientY: 440 });
+		fireEvent.pointerMove(document, { clientX: 600, clientY: 390 });
 		expect(subtitleBox("Sample subtitle text").style.left).toBe("60%");
 		expect(subtitleBox("Sample subtitle text").style.top).toBe("78%");
-		fireEvent.mouseUp(document);
-		fireEvent.mouseMove(document, { clientX: 900, clientY: 390 });
+		fireEvent.pointerUp(document);
+		fireEvent.pointerMove(document, { clientX: 900, clientY: 390 });
 		expect(subtitleBox("Sample subtitle text").style.left).toBe("60%");
 	});
 
