@@ -39,7 +39,7 @@ It used to be called Max Video Player.
 | **Linux** | [**AppImage**](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_amd64.AppImage) · [Debian / Ubuntu (.deb)](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_amd64.deb) · [Fedora (.rpm)](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_x86_64.rpm) | x86_64 |
 | Windows | Planned | |
 | iOS, iPadOS | Coming soon to the App Store | |
-| Android, Fire TV | Planned | |
+| **Android, Fire TV, Google TV** | [**TV and Fire TV (.apk)**](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_armeabi-v7a.apk) · [Phone and tablet (.apk)](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_arm64-v8a.apk) | Android 9 or later, Fire OS 7 or later |
 
 These links always point at the newest version. Older versions and release notes are on the [releases page](https://github.com/MaxMB15/Cinette/releases), and the [changelog](CHANGELOG.md) lists what changed in each one. Once installed, the app updates itself.
 
@@ -84,6 +84,16 @@ The AppImage needs glibc 2.38 or later, which Ubuntu 24.04, Debian 13 and curren
 Both packages need WebKitGTK 2.40 or later, which all of these releases have.
 
 Ubuntu 22.04 and releases based on it, such as Linux Mint 21 and Pop!_OS 22.04, aren't supported. Their libmpv is too old for the app, and their glibc is too old for the AppImage.
+
+**Fire TV, Google TV and Android TV.** Most TVs and streaming sticks run 32-bit Android, so use the TV APK, `Cinette_armeabi-v7a.apk`. To install it:
+
+1. Install an app that can download files, such as Downloader by AFTVnews, from the Appstore or Google Play.
+2. Let that app install apps. On a Fire TV, that's Settings → My Fire TV → Developer Options → Install unknown apps. If Developer Options isn't there, open About under My Fire TV and select your Fire TV's name seven times. On Google TV and Android TV, it's Settings → Apps → Security & restrictions → Unknown sources.
+3. In Downloader, enter `https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_armeabi-v7a.apk` and install the file it downloads.
+
+**Android phones and tablets.** Open the phone and tablet APK's link on the device, and let your browser install apps when Android asks.
+
+When a new version is out, Cinette shows Update available. Install downloads it and opens Android's installer, where you press Install or Update. The first time, Android asks you to let Cinette install apps.
 
 ## Features
 

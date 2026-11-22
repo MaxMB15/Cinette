@@ -20,9 +20,10 @@ remote. See [The TV remote](#the-tv-remote).
 - mpv draws with `vo=gpu` on OpenGL ES into the `Surface` of a `SurfaceView` under the
   transparent web view, and decodes with MediaCodec. See [Video](#video).
 - HTTPS uses rustls, not OpenSSL. See [TLS](#tls).
-- The updater, relaunch and downloads are off, as on iOS. Android can't run the ffmpeg
-  binary that downloads use, so `tauri.android.conf.json` leaves it out of the
-  bundle.
+- Downloads are off, as on iOS. Android can't run the ffmpeg binary that downloads
+  use, so `tauri.android.conf.json` leaves it out of the bundle.
+- Only the GitHub build updates itself, through Android's package installer. The
+  store builds leave that to their store. See [Updates](#updates).
 - Plain HTTP is allowed, because many IPTV servers only speak HTTP.
 - Android sets no `TMPDIR`, so Rust's `std::env::temp_dir()` would be
   `/data/local/tmp`, which apps can't write. `MainActivity` points it at the app's
@@ -75,21 +76,27 @@ Mac's emulator runs `aarch64`.
 
 A release APK or app bundle has to be signed. `app/build.gradle.kts` signs release
 builds with the key that `gen/android/keystore.properties` names, when that file
-exists. [amazon-appstore.md](amazon-appstore.md#signing) says how to make both. CI
-doesn't build release builds.
+exists, and leaves them unsigned otherwise. [amazon-appstore.md](amazon-appstore.md#signing)
+says how to make both for the Appstore. The release workflow builds the GitHub APKs
+unsigned and signs them afterwards, as [Releases](#releases) explains.
 
-### Google and Amazon builds
+### Store builds
 
-The app builds for Google's store or Amazon's. The Gradle property `store` picks
-one, `google` by default. Set it in the environment around the Tauri CLI:
+The app builds for Google's store, Amazon's, or the GitHub release. The Gradle
+property `store` picks one: `google` (the default), `amazon` or `github`. Set it in
+the environment around the Tauri CLI:
 
 ```bash
 ORG_GRADLE_PROJECT_store=amazon pnpm tauri android build --debug --target armv7 --apk
 ```
 
-Both get the same Rust library, frontend and manifest. The store only goes into the
-manifest as `app.cinette.STORE`, which the app reads at startup and logs. The output
-has the same name either way, so copy the APK away before building the other store.
+All three get the same Rust library and frontend. The store goes into the manifest
+as `app.cinette.STORE`, which the app reads at startup and logs, and which the page
+gets as `window.__CINETTE_STORE__`. The GitHub build also merges
+`app/src/github/AndroidManifest.xml`, which asks for `REQUEST_INSTALL_PACKAGES` so it
+can install its updates. The store builds must not have that permission: Google Play
+and the Appstore don't allow an app to update itself outside the store. The output
+has the same name for each store, so copy the APK away before building another.
 
 `store` is a property and not a Gradle flavor dimension, because a second dimension
 renames the variant tasks, like `mergeUniversalDebugJniLibFolders`, that Tauri's
@@ -97,8 +104,7 @@ renames the variant tasks, like `mergeUniversalDebugJniLibFolders`, that Tauri's
 `pnpm tauri android init`.
 
 Fire TV sticks run 32-bit userspace even on 64-bit chips, so `armv7` is the target
-for them. CI's Android workflow builds both stores and checks the store in each
-manifest.
+for them. CI's Android workflow builds all three stores and checks each manifest.
 
 ### Lint
 
@@ -156,7 +162,10 @@ The arrow keys on a TV remote come through as D-pad events. You can send them wi
   the manifest's `android:banner`, activity `android:icon` and `uses-feature` lines:
   the TV launcher banner.
 - `app/src/main/java/app/cinette/MainActivity.kt`: hands Back to the page.
-- The manifest's `app.cinette.STORE` meta-data, from the `store` property.
+- The manifest's `app.cinette.STORE` meta-data, from the `store` property, and
+  `app/src/github/AndroidManifest.xml` for the GitHub build.
+- `app/proguard-rules.pro` also keeps `FileProvider.getUriForFile`, which the
+  updater calls through JNI.
 
 Running `pnpm tauri android init` again overwrites these. Check the diff afterwards.
 
@@ -243,8 +252,56 @@ Fire TV's launcher ignores `android:banner` for an app that didn't come from the
 Appstore. It shows the launcher activity's `android:icon` instead, centered in a wide
 tile, so a square icon gets grey on both sides. The Amazon build sets that icon to the
 banner, through the `launcherIcon` placeholder in `app/build.gradle.kts`. The Google
-build keeps the square icon there, which Google TV's apps row shows. The launcher
+and GitHub builds keep the square icon there, which Google TV's apps row shows. So a
+GitHub APK on a Fire TV gets the grey sides. The launcher
 caches the tile, so a changed one only shows after uninstalling and installing again.
+
+## Releases
+
+The `release-android` job in `release.yml` builds the GitHub APKs for each release:
+
+1. It checks that the `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD` and
+   `ANDROID_KEY_ALIAS` secrets open the key, before the build starts.
+2. It builds the `github` store for `aarch64` and `armv7` with `--split-per-abi`, one
+   APK for each. There's no `keystore.properties`, so they come out unsigned, and
+   nothing the build runs can read the key.
+3. It aligns each APK with `zipalign -P 16`, signs it with `apksigner`, and uploads
+   `Cinette_arm64-v8a.apk` and `Cinette_armeabi-v7a.apk` to the draft release.
+
+`latest.json` lists them under `packages`, as `android-arm64-v8a` and
+`android-armeabi-v7a`. When the Android job fails, `latest.json` goes out without
+them, so the computers still get their update and the Android apps see none.
+Rerunning the failed job runs the `latest.json` job again too.
+
+[releasing.md](releasing.md#the-android-signing-key) says how to make the key. Every
+release must be signed with the same one, since Android only installs an update
+signed with the key of the app it replaces. If the key is lost, everyone has to
+uninstall the app, which deletes its data, and install the new one by hand.
+
+The Google Play and Appstore builds are still built and uploaded by hand, as
+[amazon-appstore.md](amazon-appstore.md) explains. Each store signs with its own
+key, so a copy from one place can't update a copy from another.
+
+## Updates
+
+The GitHub build checks for updates like the desktop app, when it starts and every
+two hours, and shows the same banner and the same button in Settings.
+
+- `get_install_info` reports `apk` when the store is `github`.
+- `check_android_update` in `commands.rs` reads `latest.json`, and offers the
+  release when its version is newer than the app's and it has an APK for the app's
+  CPU. The 64-bit build looks for `android-arm64-v8a` and the 32-bit build for
+  `android-armeabi-v7a`. Tauri's updater plugin has no Android support.
+- Installing downloads the APK into the app's cache as `cinette-update.apk`, then
+  opens Android's installer on it through the app's `FileProvider`. The startup
+  deletes a file left there by an earlier update.
+- The first time, Android asks the user to let Cinette install apps. After that,
+  the user presses Install once for each update. Android stops the app while it
+  installs, and the user opens it again.
+
+Android only installs an update without asking from Android 12 on, and only for the
+app that installed it. Fire OS 7 and 8 are Android 9 and 11, so the installer always
+asks there.
 
 ## TLS
 
@@ -278,7 +335,10 @@ the crates or the build setup:
    there's a TV launcher activity.
 5. Runs Clippy for both targets with `-D warnings`.
 
-Nothing is signed or uploaded.
+It builds the debug APKs for each store, and checks that only the GitHub build has
+`REQUEST_INSTALL_PACKAGES` and only the Amazon build uses the banner as its icon.
+Nothing is signed or uploaded. Release builds come from `release.yml`, as
+[Releases](#releases) explains.
 
 ## Licensing
 

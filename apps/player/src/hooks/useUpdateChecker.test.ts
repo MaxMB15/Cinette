@@ -23,18 +23,20 @@ vi.mock("@/lib/tauri", () => ({
 		releaseUrl: "https://github.com/MaxMB15/Cinette/releases/latest",
 	}),
 	packageUpdate: vi.fn().mockResolvedValue(undefined),
+	checkAndroidUpdate: vi.fn().mockResolvedValue(null),
 }));
 
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { listen, type EventCallback } from "@tauri-apps/api/event";
-import { getInstallInfo, packageUpdate } from "@/lib/tauri";
+import { checkAndroidUpdate, getInstallInfo, packageUpdate } from "@/lib/tauri";
 import { fakeUpdate } from "@/test/app-fixtures";
 
 const mockCheck = vi.mocked(check);
 const mockRelaunch = vi.mocked(relaunch);
 const mockGetInstallInfo = vi.mocked(getInstallInfo);
 const mockPackageUpdate = vi.mocked(packageUpdate);
+const mockCheckAndroidUpdate = vi.mocked(checkAndroidUpdate);
 
 describe("useUpdateChecker", () => {
 	beforeEach(() => {
@@ -337,6 +339,67 @@ describe("useUpdateChecker", () => {
 		expect(mockPackageUpdate).toHaveBeenCalledTimes(1);
 		expect(downloadAndInstall).not.toHaveBeenCalled();
 		expect(mockRelaunch).toHaveBeenCalledTimes(1);
+	});
+
+	// ── the Android build from GitHub ──────────────────────────────────
+
+	describe("in the Android build from GitHub", () => {
+		const release = { version: "0.9.0", body: null };
+
+		beforeEach(() => {
+			mockGetInstallInfo.mockResolvedValue({
+				installType: "apk",
+				releaseUrl: "https://github.com/MaxMB15/Cinette/releases/latest",
+			});
+			mockCheckAndroidUpdate.mockResolvedValue(release);
+		});
+
+		it("asks the release list instead of Tauri's updater", async () => {
+			const { result } = renderHook(() => useUpdateChecker());
+			await waitFor(() => expect(result.current.update).toBe(release));
+
+			expect(mockCheck).not.toHaveBeenCalled();
+			expect(result.current.packageInstall).toBe(false);
+		});
+
+		it("has nothing to offer when the app is up to date", async () => {
+			mockCheckAndroidUpdate.mockResolvedValue(null);
+			const { result } = renderHook(() => useUpdateChecker());
+			await waitFor(() => expect(result.current.checking).toBe(false));
+
+			expect(mockCheckAndroidUpdate).toHaveBeenCalledOnce();
+			expect(result.current.update).toBeNull();
+		});
+
+		it("opens Android's installer and keeps the update, without relaunching", async () => {
+			const { result } = renderHook(() => useUpdateChecker());
+			await waitFor(() => expect(result.current.update).toBe(release));
+
+			await act(async () => {
+				await result.current.install();
+			});
+
+			expect(listen).toHaveBeenCalledWith("package-update://progress", expect.any(Function));
+			expect(mockPackageUpdate).toHaveBeenCalledOnce();
+			expect(mockRelaunch).not.toHaveBeenCalled();
+			expect(result.current.installing).toBe(false);
+			expect(result.current.progress).toBeNull();
+			expect(result.current.error).toBeNull();
+			expect(result.current.update).toBe(release);
+		});
+
+		it("shows why the download failed", async () => {
+			mockPackageUpdate.mockRejectedValueOnce("Failed to download the update");
+			const { result } = renderHook(() => useUpdateChecker());
+			await waitFor(() => expect(result.current.update).toBe(release));
+
+			await act(async () => {
+				await result.current.install();
+			});
+
+			expect(result.current.error).toBe("Update failed: Failed to download the update");
+			expect(result.current.installing).toBe(false);
+		});
 	});
 });
 

@@ -522,13 +522,24 @@ export const deleteSuperCategory = (
 // --- Install Info ---
 
 export interface InstallInfo {
-	installType: string; // "appimage" | "deb" | "rpm" | "native"
+	installType: string; // "appimage" | "deb" | "rpm" | "native" | "apk" | "store"
 	releaseUrl: string;
 }
 
 export const getInstallInfo = (): Promise<InstallInfo> => invoke<InstallInfo>("get_install_info");
 
+/** Downloads the update and installs it, or for the Android build opens Android's installer. */
 export const packageUpdate = (): Promise<void> => invoke("package_update");
+
+/** A newer release for the Android build from GitHub. */
+export interface AndroidUpdate {
+	version: string;
+	body: string | null;
+}
+
+/** The newest release, or null when the Android build from GitHub is up to date. */
+export const checkAndroidUpdate = (): Promise<AndroidUpdate | null> =>
+	invoke<AndroidUpdate | null>("check_android_update");
 
 // --- Downloads ---
 

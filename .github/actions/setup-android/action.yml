@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+name: Set up the Android build
+description: >-
+  Install Rust for 64-bit and 32-bit ARM Android, Java 21, the NDK that
+  docs/android.md names, libmpv and FFmpeg for Android, and the frontend.
+  Sets NDK_HOME. Build with scripts/android-env.sh sourced.
+
+inputs:
+  save-rust-cache:
+    description: Whether to save the Rust cache, which only dev's builds do.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      with:
+        toolchain: stable
+        targets: aarch64-linux-android,armv7-linux-androideabi
+        components: clippy
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        workspaces: ". -> target"
+        shared-key: android
+        save-if: ${{ inputs.save-rust-cache }}
+
+    - name: Install Java
+      uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      with:
+        distribution: temurin
+        java-version: 21
+
+    # The runner comes with the Android SDK. This adds the NDK docs/android.md
+    # names, since the SDK's own can change under the build.
+    - name: Install the NDK
+      id: ndk
+      shell: bash
+      run: |
+        VERSION=30.0.16248370
+        yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$VERSION" > /dev/null
+        echo "NDK_HOME=$ANDROID_HOME/ndk/$VERSION" >> "$GITHUB_ENV"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+    # libmpv and FFmpeg take a while to build, so they're cached. The
+    # script pins every source, so it and the NDK make the key.
+    - name: Restore libmpv for Android
+      id: libmpv-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: libs/android
+        key: libmpv-android-${{ steps.ndk.outputs.version }}-${{ hashFiles('scripts/build-libmpv.sh', 'scripts/lib/libmpv-android.sh') }}
+
+    - name: Build libmpv for Android
+      if: steps.libmpv-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y meson ninja-build
+        ./scripts/build-libmpv.sh android
+        rm -rf libs/android-build
+
+    - name: Save libmpv for Android
+      if: steps.libmpv-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: libs/android
+        key: ${{ steps.libmpv-cache.outputs.cache-primary-key }}
+
+    - name: Set up the frontend
+      uses: ./.github/actions/setup-frontend

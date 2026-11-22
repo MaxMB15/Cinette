@@ -91,6 +91,7 @@
 	"delete_super_category": { "required": ["providerId", "contentType", "categoryName"] },
 	"get_install_info": {},
 	"package_update": {},
+	"check_android_update": {},
 	"enqueue_movie_download": { "required": ["channelId"] },
 	"enqueue_episode_download": { "required": ["episode", "seriesChannelId", "seriesTitle"] },
 	"enqueue_episodes_batch": { "required": ["episodes", "seriesChannelId", "seriesTitle"] },

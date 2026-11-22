@@ -250,6 +250,7 @@ register_commands![
     commands::rename_super_category,
     commands::delete_super_category,
     commands::get_install_info,
+    commands::check_android_update,
     commands::package_update,
     commands::enqueue_movie_download,
     commands::enqueue_episode_download,
@@ -352,6 +353,9 @@ pub fn run() {
             // request would hang, so the app stops here instead.
             #[cfg(target_os = "android")]
             android_tls::init().expect("HTTPS certificate checks could not start");
+            // An update Android's installer has finished with, if any.
+            #[cfg(target_os = "android")]
+            let _ = std::fs::remove_file(std::env::temp_dir().join(commands::UPDATE_APK));
 
             let app_dir = app
                 .path()

@@ -1,6 +1,12 @@
 # rustls-platform-verifier calls these through JNI, which ProGuard can't see.
 -keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }
 
+# android_device.rs calls this through JNI to hand the GitHub build's update
+# to Android's installer. The manifest only keeps the provider's constructor.
+-keepclassmembers class androidx.core.content.FileProvider {
+    public static android.net.Uri getUriForFile(android.content.Context, java.lang.String, java.io.File);
+}
+
 # Add project specific ProGuard rules here.
 # You can control the set of applied configuration files using the
 # proguardFiles setting in build.gradle.

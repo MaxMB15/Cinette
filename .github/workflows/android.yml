@@ -4,9 +4,10 @@
 name: Android
 
 # Builds a debug APK for 64-bit and 32-bit ARM, with libmpv and FFmpeg from
-# scripts/build-libmpv.sh android, once for Google's store and once for
-# Amazon's. Nothing is signed or uploaded; this catches changes that break
-# the Android build.
+# scripts/build-libmpv.sh android, once for each store: Google's, Amazon's,
+# and the GitHub release, whose build updates itself. Nothing is signed or
+# uploaded; this catches changes that break the Android build. release.yml
+# builds the GitHub release's APKs.
 on:
   push:
     branches: [main, dev]
@@ -15,6 +16,7 @@ on:
       - "crates/**"
       - ".cargo/config*"
       - ".github/actions/setup-frontend/**"
+      - ".github/actions/setup-android/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "package.json"
@@ -31,6 +33,7 @@ on:
       - "crates/**"
       - ".cargo/config*"
       - ".github/actions/setup-frontend/**"
+      - ".github/actions/setup-android/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "package.json"
@@ -50,9 +53,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # The NDK docs/android.md names. The runner's SDK has its own, which can
-  # change under the build.
-  NDK_VERSION: 30.0.16248370
 
 jobs:
   build-apk:
@@ -61,60 +61,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - name: Set up the Android build
+        uses: ./.github/actions/setup-android
         with:
-          toolchain: stable
-          targets: aarch64-linux-android,armv7-linux-androideabi
-          components: clippy
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: ". -> target"
-          shared-key: android
           # Pull requests restore from dev. Only dev saves, since a copy saved
           # from main would only take up room in the 10 GB cache.
-          save-if: ${{ github.ref == 'refs/heads/dev' }}
-
-      - name: Install Java
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: 21
-
-      # The runner comes with the Android SDK. This adds the NDK version above.
-      - name: Install the NDK
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
-          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
-
-      # libmpv and FFmpeg take a while to build, so they're cached. The
-      # script pins every source, so it and the NDK make the key.
-      - name: Restore libmpv for Android
-        id: libmpv-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: libs/android
-          key: libmpv-android-${{ env.NDK_VERSION }}-${{ hashFiles('scripts/build-libmpv.sh', 'scripts/lib/libmpv-android.sh') }}
-
-      - name: Build libmpv for Android
-        if: steps.libmpv-cache.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y meson ninja-build
-          ./scripts/build-libmpv.sh android
-          rm -rf libs/android-build
-
-      - name: Save libmpv for Android
-        if: steps.libmpv-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: libs/android
-          key: ${{ steps.libmpv-cache.outputs.cache-primary-key }}
-
-      - name: Set up the frontend
-        uses: ./.github/actions/setup-frontend
+          save-rust-cache: ${{ github.ref == 'refs/heads/dev' }}
 
       # Builds the frontend, the Rust library for both ABIs and the Gradle
       # project.
@@ -132,14 +84,14 @@ jobs:
           cargo build --locked -vv -p libmpv2-sys --target armv7-linux-androideabi 2>&1 | grep -vE '^\s+(Fresh|Compiling)' | tail -40
 
       # android-env.sh sets what bindgen needs for armv7. The Google build
-      # comes first. The Amazon one only differs in the store property that
-      # app/build.gradle.kts reads, so cargo has nothing left to build for it.
+      # comes first. The others only differ in the store property that
+      # app/build.gradle.kts reads, so cargo has nothing left to build for them.
       - name: Build the APKs
         working-directory: apps/player
         run: |
           . ../../scripts/android-env.sh
           OUT=src-tauri/gen/android/app/build/outputs/apk/universal/debug
-          for store in google amazon; do
+          for store in google amazon github; do
             ORG_GRADLE_PROJECT_store="$store" pnpm tauri android build --debug --target aarch64 --target armv7 --apk --ci
             mv "$OUT/app-universal-debug.apk" "$RUNNER_TEMP/app-$store-debug.apk"
           done
@@ -147,7 +99,7 @@ jobs:
       - name: Check the APKs
         run: |
           AAPT2="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt2"
-          for store in google amazon; do
+          for store in google amazon github; do
             APK="$RUNNER_TEMP/app-$store-debug.apk"
             echo "::group::$store"
             test -f "$APK"
@@ -177,8 +129,20 @@ jobs:
               echo "::error::The amazon APK's launcher activity doesn't use the banner as its icon"
               exit 1
             fi
-            if [ "$store" = google ] && grep -q "icon='[^']*/banner.png'" <<< "$ACTIVITY"; then
-              echo "::error::The google APK's launcher activity uses the banner as its icon"
+            if [ "$store" != amazon ] && grep -q "icon='[^']*/banner.png'" <<< "$ACTIVITY"; then
+              echo "::error::The $store APK's launcher activity uses the banner as its icon"
+              exit 1
+            fi
+            # Only the GitHub build installs its own updates, which Google Play
+            # and the Amazon Appstore don't allow. See
+            # app/src/github/AndroidManifest.xml.
+            INSTALLS=$(grep -c "^uses-permission: name='android.permission.REQUEST_INSTALL_PACKAGES'" "$BADGING" || true)
+            if [ "$store" = github ] && [ "$INSTALLS" = 0 ]; then
+              echo "::error::The github APK doesn't ask to install packages, so it can't install its updates"
+              exit 1
+            fi
+            if [ "$store" != github ] && [ "$INSTALLS" != 0 ]; then
+              echo "::error::The $store APK asks to install packages, and its store doesn't let an app update itself"
               exit 1
             fi
             # Both stores hide an app from every device that lacks a feature

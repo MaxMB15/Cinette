@@ -602,6 +602,7 @@ describe("backend commands", () => {
 		// Install and updates
 		["getInstallInfo", () => tauri.getInstallInfo(), "get_install_info"],
 		["packageUpdate", () => tauri.packageUpdate(), "package_update"],
+		["checkAndroidUpdate", () => tauri.checkAndroidUpdate(), "check_android_update"],
 		// Downloads
 		[
 			"enqueueMovieDownload",

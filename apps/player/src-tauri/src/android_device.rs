@@ -4,11 +4,12 @@
 //! What the app needs to know from Android: whether this is a TV, told to
 //! the page before any page script runs, the device type and name remote
 //! control advertises, and the store the build is for. Also the Wi-Fi
-//! multicast lock that DNS-SD needs.
+//! multicast lock that DNS-SD needs, and Android's installer for the GitHub
+//! build's updates.
 
 use crate::remote::device::{AndroidFacts, TV_FEATURES};
 use crate::remote::held::Held;
-use jni::objects::{Global, JObject, JString, JValue};
+use jni::objects::{Global, JObject, JString, JValue, LoaderContext};
 use jni::{jni_sig, jni_str};
 use mvp_core::remote::message::DeviceType;
 use std::sync::{Mutex, OnceLock};
@@ -96,7 +97,7 @@ fn facts() -> AndroidFacts {
 }
 
 /// The manifest's `app.cinette.STORE`, which `app/build.gradle.kts` sets
-/// from its `store` property: `google` or `amazon`.
+/// from its `store` property: `google`, `amazon` or `github`.
 fn read_store() -> jni::errors::Result<String> {
     with_context(|env, context| {
         let packages = env
@@ -138,6 +139,89 @@ fn read_store() -> jni::errors::Result<String> {
             )?
             .l()?;
         env.cast_local::<JString>(value)?.try_to_string(env)
+    })
+}
+
+/// The store the build is for, or an empty string when the manifest
+/// couldn't be read. It doesn't change while the app runs, so it's read once.
+pub fn store() -> &'static str {
+    static STORE: OnceLock<String> = OnceLock::new();
+    STORE.get_or_init(|| {
+        read_store().unwrap_or_else(|e| {
+            tracing::warn!("Couldn't read the store from the manifest: {e}");
+            String::new()
+        })
+    })
+}
+
+/// Opens Android's installer on the APK at `path`, in the cache folder that
+/// `res/xml/file_paths.xml` lets the installer read. Android asks before it
+/// installs, and first sends the user to its settings if Cinette may not
+/// install apps yet.
+pub fn install_apk(path: &std::path::Path) -> jni::errors::Result<()> {
+    with_context(|env, context| {
+        let path = env.new_string(path.to_string_lossy())?;
+        let file = env.new_object(
+            jni_str!("java/io/File"),
+            jni_sig!((java.lang.String) -> void),
+            &[JValue::from(&path)],
+        )?;
+        let package = env
+            .call_method(
+                context,
+                jni_str!("getPackageName"),
+                jni_sig!(() -> java.lang.String),
+                &[],
+            )?
+            .l()?;
+        let package = env.cast_local::<JString>(package)?.try_to_string(env)?;
+        // The provider the manifest declares.
+        let authority = env.new_string(format!("{package}.fileprovider"))?;
+        // FileProvider comes in the APK, so only the app's class loader has
+        // it, not the one this thread would use.
+        let provider = LoaderContext::FromObject(context).load_class(
+            env,
+            jni_str!("androidx.core.content.FileProvider"),
+            false,
+        )?;
+        let uri = env
+            .call_static_method(
+                &provider,
+                jni_str!("getUriForFile"),
+                jni_sig!((android.content.Context, java.lang.String, java.io.File) -> android.net.Uri),
+                &[JValue::from(context), JValue::from(&authority), JValue::from(&file)],
+            )?
+            .l()?;
+        let view = env.new_string("android.intent.action.VIEW")?;
+        let intent = env.new_object(
+            jni_str!("android/content/Intent"),
+            jni_sig!((java.lang.String) -> void),
+            &[JValue::from(&view)],
+        )?;
+        let apk = env.new_string("application/vnd.android.package-archive")?;
+        env.call_method(
+            &intent,
+            jni_str!("setDataAndType"),
+            jni_sig!((android.net.Uri, java.lang.String) -> android.content.Intent),
+            &[JValue::from(&uri), JValue::from(&apk)],
+        )?;
+        // Intent.FLAG_GRANT_READ_URI_PERMISSION, so the installer can read
+        // the file, and FLAG_ACTIVITY_NEW_TASK, which starting an activity
+        // from outside one needs.
+        const FLAGS: i32 = 0x0000_0001 | 0x1000_0000;
+        env.call_method(
+            &intent,
+            jni_str!("addFlags"),
+            jni_sig!((jint) -> android.content.Intent),
+            &[JValue::Int(FLAGS)],
+        )?;
+        env.call_method(
+            context,
+            jni_str!("startActivity"),
+            jni_sig!((android.content.Intent) -> void),
+            &[JValue::from(&intent)],
+        )?;
+        Ok(())
     })
 }
 
@@ -250,16 +334,18 @@ fn release_multicast(lock: Option<Global<JObject<'static>>>) -> jni::errors::Res
     })
 }
 
-/// A plugin whose init script sets `window.__CINETTE_TV__` on a TV, which
-/// `getPlatform` in `lib/platform.ts` reads.
+/// A plugin whose init script sets `window.__CINETTE_TV__`, true on a TV,
+/// and `window.__CINETTE_STORE__`, which `lib/platform.ts` reads.
 pub fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     let tv = facts().tv;
     tracing::info!("Android device is a TV: {tv}");
-    match read_store() {
-        Ok(store) => tracing::info!("Built for the {store} store"),
-        Err(e) => tracing::warn!("Couldn't read the store from the manifest: {e}"),
-    }
+    let store = store();
+    tracing::info!("Built for the {store} store");
+    // A JSON string is a JavaScript string.
+    let store = serde_json::to_string(store).expect("a string serializes");
     tauri::plugin::Builder::new("android-device")
-        .js_init_script(format!("window.__CINETTE_TV__ = {tv};"))
+        .js_init_script(format!(
+            "window.__CINETTE_TV__ = {tv}; window.__CINETTE_STORE__ = {store};"
+        ))
         .build()
 }

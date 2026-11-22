@@ -1556,7 +1556,7 @@ pub async fn delete_super_category(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallInfo {
-    /// "appimage" | "deb" | "rpm" | "native"
+    /// "appimage" | "deb" | "rpm" | "native" | "apk" | "store"
     pub install_type: String,
     /// The release download URL for manual updates.
     pub release_url: String,
@@ -1564,8 +1564,11 @@ pub struct InstallInfo {
 
 #[command]
 pub fn get_install_info() -> InstallInfo {
-    let install_type = if cfg!(mobile) {
-        // The App Store updates the app.
+    let install_type = if sideloaded_apk() {
+        // The GitHub build for Android updates itself.
+        "apk"
+    } else if cfg!(mobile) {
+        // The App Store, Google Play or the Amazon Appstore updates the app.
         "store"
     } else if cfg!(target_os = "linux") {
         if std::env::var("APPIMAGE").is_ok() {
@@ -1588,9 +1591,75 @@ pub fn get_install_info() -> InstallInfo {
     }
 }
 
-/// The newest release's latest.json, which lists the Linux packages.
+/// Whether this is the GitHub build for Android, which installs its own
+/// updates. The stores' builds can't.
+#[cfg(target_os = "android")]
+fn sideloaded_apk() -> bool {
+    crate::android_device::store() == "github"
+}
+
+#[cfg(not(target_os = "android"))]
+fn sideloaded_apk() -> bool {
+    false
+}
+
+/// The newest release's latest.json, which lists the Linux packages and the
+/// Android APKs.
 const LATEST_RELEASE_JSON: &str =
     "https://github.com/MaxMB15/Cinette/releases/latest/download/latest.json";
+
+/// The key latest.json lists this build's APK under, by the ABI it was
+/// built for.
+const ANDROID_PACKAGE: &str = if cfg!(target_arch = "aarch64") {
+    "android-arm64-v8a"
+} else {
+    "android-armeabi-v7a"
+};
+
+/// Fetches the latest.json at `url`.
+async fn latest_release(url: &str) -> Result<serde_json::Value, String> {
+    mvp_core::http::client().get(url)
+        .send().await.map_err(|e| format!("Failed to fetch latest.json: {e}"))?
+        .json().await.map_err(|e| format!("Failed to parse latest.json: {e}"))
+}
+
+/// A release newer than the app, with the fields the update banner shows.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct NewerRelease {
+    pub version: String,
+    pub body: Option<String>,
+}
+
+/// The newest release, when it's newer than the app and has an APK for this
+/// device. Only the GitHub build for Android asks, since Tauri's updater
+/// doesn't run there.
+#[command]
+pub async fn check_android_update<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Option<NewerRelease>, String> {
+    newer_release(&app.package_info().version, LATEST_RELEASE_JSON, ANDROID_PACKAGE).await
+}
+
+/// The release in the latest.json at `latest_url`, when it's newer than
+/// `current` and lists a `pkg_key` package.
+async fn newer_release(
+    current: &semver::Version,
+    latest_url: &str,
+    pkg_key: &str,
+) -> Result<Option<NewerRelease>, String> {
+    let latest = latest_release(latest_url).await?;
+    let version = latest.get("version")
+        .and_then(|v| v.as_str())
+        .ok_or("latest.json has no version")?;
+    let newer = semver::Version::parse(version)
+        .map_err(|e| format!("latest.json's version {version} isn't valid: {e}"))?
+        > *current;
+    let listed = latest.get("packages").and_then(|p| p.get(pkg_key)).is_some();
+    Ok((newer && listed).then(|| NewerRelease {
+        version: version.to_string(),
+        body: latest.get("notes").and_then(|n| n.as_str()).map(str::to_string),
+    }))
+}
 
 /// Downloads the `pkg_key` package listed in the latest.json at `latest_url` to
 /// a temp file ending in `.extension`, which is deleted when the returned path
@@ -1604,9 +1673,7 @@ async fn download_package<R: Runtime>(
     use tauri::Emitter;
 
     // 1. Fetch latest.json to get the package URL
-    let latest: serde_json::Value = mvp_core::http::client().get(latest_url)
-        .send().await.map_err(|e| format!("Failed to fetch latest.json: {e}"))?
-        .json().await.map_err(|e| format!("Failed to parse latest.json: {e}"))?;
+    let latest = latest_release(latest_url).await?;
 
     let pkg_url = latest.get("packages")
         .and_then(|p| p.get(pkg_key))
@@ -1662,13 +1729,35 @@ async fn download_package<R: Runtime>(
     Ok(tmp_path)
 }
 
-/// Fetch latest.json, download the appropriate package, and install it via pkexec.
+/// Fetch latest.json, download the appropriate package, and install it via
+/// pkexec, or on Android with Android's installer.
 /// Emits "package-update://progress" events with { percent: u8 } payloads.
 #[command]
 pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let info = get_install_info();
+    #[cfg(target_os = "android")]
+    if info.install_type == "apk" {
+        return install_android_update(&app).await;
+    }
     let pkexec = || tokio::process::Command::new("pkexec");
     update_package(&app, &info.install_type, LATEST_RELEASE_JSON, pkexec).await
+}
+
+/// The name the downloaded APK keeps in the temp folder, the app's cache,
+/// while Android's installer reads it. The next start deletes it.
+#[cfg(target_os = "android")]
+pub const UPDATE_APK: &str = "cinette-update.apk";
+
+/// Downloads the newest APK for this device and opens Android's installer on
+/// it. Android asks before it installs, then restarts the app.
+#[cfg(target_os = "android")]
+async fn install_android_update<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let download = download_package(app, LATEST_RELEASE_JSON, ANDROID_PACKAGE, "apk").await?;
+    // The installer reads the file after this returns, so it's kept.
+    let apk = std::env::temp_dir().join(UPDATE_APK);
+    download.persist(&apk).map_err(|e| format!("Failed to keep the update: {e}"))?;
+    crate::android_device::install_apk(&apk)
+        .map_err(|e| format!("Failed to open Android's installer: {e}"))
 }
 
 /// The work of [`package_update`] for an `install_type` install, with the

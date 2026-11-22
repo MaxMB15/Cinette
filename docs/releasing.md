@@ -1,9 +1,9 @@
 # Releasing
 
 A release is a `vX.Y.Z` tag on `main`. Pushing the tag runs
-[`release.yml`](../.github/workflows/release.yml), which builds both platforms and
-uploads everything to a draft GitHub release. Users get nothing until you publish
-the draft.
+[`release.yml`](../.github/workflows/release.yml), which builds macOS, Linux and
+Android and uploads everything to a draft GitHub release. Users get nothing until
+you publish the draft.
 
 ## Before you start
 
@@ -70,12 +70,18 @@ git tag v0.6.0 && git push origin v0.6.0
    two builds, one on an Apple Silicon runner and one on an Intel runner. Both wait
    until you approve them in Actions, then sign and notarize the app when the Apple
    secrets are set (see [macos-signing.md](macos-signing.md)).
-3. Writes `latest.json`, the file the in-app updater reads, and uploads it.
-4. Merges `main` back into `dev` so the version bump reaches `dev`.
+3. Builds the Android APKs at the same time, signs them with the Android key and
+   uploads them. See [android.md](android.md#releases). It takes over an hour
+   when it has to build libmpv, which a tag often does, since a tag can only use
+   the caches saved on `main`.
+4. Writes `latest.json`, the file the in-app updater reads, and uploads it. When the
+   Android job failed, `latest.json` leaves the APKs out, and the computers still
+   get their update. Rerun the failed job to add them.
+5. Merges `main` back into `dev` so the version bump reaches `dev`.
 
 The installers have no version in their names, so the README links to
-`releases/latest/download/<name>` always get the newest build. A release has twelve
-assets:
+`releases/latest/download/<name>` always get the newest build. A release has
+fourteen assets:
 
 | Asset | What it is |
 | --- | --- |
@@ -84,11 +90,13 @@ assets:
 | `Cinette_amd64.AppImage` | Linux AppImage |
 | `Cinette_amd64.deb` | Debian and Ubuntu package |
 | `Cinette_x86_64.rpm` | Fedora package |
+| `Cinette_arm64-v8a.apk` | Android app for 64-bit ARM, for phones and tablets. It updates itself. |
+| `Cinette_armeabi-v7a.apk` | Android app for 32-bit ARM, for Fire TV, Google TV and Android TV, which mostly run 32-bit Android. It updates itself. |
 | `Cinette_<version>_aarch64.app.tar.gz` | Apple Silicon update for the in-app updater |
 | `Cinette_<version>_x64.app.tar.gz` | Intel update for the in-app updater |
 | `Cinette_linux.tar.gz` | AppImage update for the in-app updater |
 | `Cinette_<version>_aarch64.app.tar.gz.sig`, `Cinette_<version>_x64.app.tar.gz.sig`, `Cinette_linux.tar.gz.sig` | Signatures for the three updates |
-| `latest.json` | Update manifest: version, signatures and download links |
+| `latest.json` | Update manifest: version, signatures and download links, the APKs included |
 
 Don't rename these again. Every installed copy fetches `latest.json` by that name
 to find updates, so renaming it would cut them all off. The README and the website
@@ -112,12 +120,14 @@ that package and the `.rpm` obsoletes it, so installing or updating removes the 
 package. Keep those fields.
 
 The iPhone and iPad app isn't part of this. It goes to TestFlight through its own
-manual workflow, described in [ios.md](ios.md#continuous-integration).
+manual workflow, described in [ios.md](ios.md#continuous-integration). The Google Play and
+Amazon Appstore builds aren't either. They're built and uploaded by hand, as
+[amazon-appstore.md](amazon-appstore.md) explains.
 
 ## Publishing
 
 1. Open the draft on the [releases page](https://github.com/MaxMB15/Cinette/releases).
-2. Check that all twelve assets are there.
+2. Check that all fourteen assets are there.
 3. Replace the notes with the version's section from the changelog.
 4. Publish.
 
@@ -160,6 +170,7 @@ are in Settings → Environments → `macos-signing`.
 | `RELEASE_AUTOMATION_PAT` | Secret | Fine-grained token with Contents and Pull requests write access. The release workflows push to `main` and open pull requests with it, because `GITHUB_TOKEN` often isn't allowed to. Required. |
 | `APPLE_CERTIFICATE` and four others | Environment secrets | Optional macOS signing and notarization, in the `macos-signing` environment. See [macos-signing.md](macos-signing.md). |
 | `IOS_CERTIFICATE`, `IOS_CERTIFICATE_PASSWORD`, `IOS_MOBILE_PROVISION` | Environment secrets | Signing for TestFlight uploads, in the `macos-signing` environment. Optional when the API key has the Admin role. See [ios.md](ios.md#testflight-setup). |
+| `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` | Secrets | The key that signs the Android APKs, base64-encoded, with its password and alias. Required. See [The Android signing key](#the-android-signing-key). |
 | `RELEASE_ALLOWED_ACTORS` | Variable | Comma-separated GitHub usernames allowed to run the release workflows. Defaults to the repository owner. |
 
 The updater key pair is created once:
@@ -172,11 +183,41 @@ The public key goes in `plugins.updater.pubkey` in `tauri.conf.json`. Keep the
 private key safe. If it's lost, installed copies can't verify new updates, and
 everyone has to download the next version by hand.
 
+### The Android signing key
+
+Android only installs an update that's signed with the same key as the installed
+app. So every release's APKs are signed with one key, made once. Keep it apart from
+the Appstore's upload key in [amazon-appstore.md](amazon-appstore.md#signing). If it's
+lost or changes, installed copies can't update. Everyone then has to uninstall the
+app, which deletes its providers and settings, and install the new APK by hand.
+
+Make it with the JDK's `keytool`. It asks for a password and a name:
+
+```bash
+keytool -genkeypair -v -storetype PKCS12 -keystore ~/cinette-release.p12 \
+  -alias cinette -keyalg RSA -keysize 4096 -validity 36500
+```
+
+A PKCS12 keystore has one password for the store and the key, and the workflow
+uses it for both. Then add the secrets:
+
+```bash
+base64 < ~/cinette-release.p12 | gh secret set ANDROID_KEYSTORE_BASE64 --repo MaxMB15/Cinette
+gh secret set ANDROID_KEYSTORE_PASSWORD --repo MaxMB15/Cinette   # paste the password
+gh secret set ANDROID_KEY_ALIAS --repo MaxMB15/Cinette --body cinette
+```
+
+Keep the `.p12` file and its password somewhere safe outside the repo, such as a
+password manager. The release job checks the secrets first and stops with an
+error when one is missing or doesn't open the key.
+
 ## If something goes wrong
 
 - **A build job failed.** Fix it on `dev`, then rerun the failed jobs from the
   workflow run. The draft keeps what was already uploaded, and uploads overwrite
-  existing assets.
+  existing assets. A failed Android job doesn't stop `latest.json`, and rerunning
+  it writes `latest.json` again with the APKs. If the fix had to land on `dev`, the
+  tag still builds the old code, so release a patch version instead.
 - **A published release is broken.** Release a fixed patch version. Don't delete
   the release. Installed apps update from whatever release is marked latest.
 - **The app crashes before it can update** (as 0.5.0 and 0.5.1 did on macOS). The

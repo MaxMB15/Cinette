@@ -41,7 +41,9 @@ developer account. So:
 - An Appstore install and an APK signed with another key can't update each other.
   Someone who sideloaded a GitHub APK has to uninstall it first.
 - The upload still has to be signed. Any key works, since Amazon strips the
-  signature. The same key as the Google Play upload key is fine.
+  signature. The same key as the Google Play upload key is fine. Don't use the
+  GitHub APKs' key, which only the release workflow should hold. See
+  [releasing.md](releasing.md#the-android-signing-key).
 
 Make the key once, and keep it and its passwords out of the repo and backed up:
 
@@ -62,7 +64,7 @@ keyPassword=...
 
 A relative `storeFile` is relative to `gen/android`. `app/build.gradle.kts` signs
 release builds with it when the file exists, and leaves them unsigned when it
-doesn't. CI doesn't build release builds.
+doesn't. CI only builds release builds for the GitHub release.
 
 ### Building
 

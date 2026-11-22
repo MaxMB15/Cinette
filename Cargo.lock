@@ -2715,6 +2715,7 @@ dependencies = [
  "rustls",
  "rustls-platform-verifier",
  "security-framework",
+ "semver",
  "serde",
  "serde_json",
  "socket2",

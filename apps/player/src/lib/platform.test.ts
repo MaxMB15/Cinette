@@ -6,6 +6,7 @@ import { platform as osPlatform } from "@tauri-apps/plugin-os";
 import {
 	getPlatform,
 	isMobilePlatform,
+	updatesItself,
 	layoutModeFor,
 	controlsOthers,
 	type Viewport,
@@ -110,6 +111,37 @@ describe("isMobilePlatform", () => {
 		expect(isMobilePlatform("tv")).toBe(true);
 		expect(isMobilePlatform("macos")).toBe(false);
 		expect(isMobilePlatform("linux")).toBe(false);
+	});
+});
+
+describe("updatesItself", () => {
+	afterEach(() => {
+		vi.mocked(osPlatform).mockReset();
+		delete window.__CINETTE_STORE__;
+	});
+
+	it("is true on computers", () => {
+		for (const p of ["macos", "linux", "windows"] as const) expect(updatesItself(p)).toBe(true);
+	});
+
+	it("is false where an app store updates the app", () => {
+		window.__CINETTE_STORE__ = "amazon";
+		for (const p of ["ios", "android", "tv"] as const) expect(updatesItself(p)).toBe(false);
+		delete window.__CINETTE_STORE__;
+		expect(updatesItself("android")).toBe(false);
+	});
+
+	it("is true for the Android build from GitHub, on a TV too", () => {
+		window.__CINETTE_STORE__ = "github";
+		expect(updatesItself("android")).toBe(true);
+		expect(updatesItself("tv")).toBe(true);
+	});
+
+	it("asks the platform when given none", () => {
+		vi.mocked(osPlatform).mockReturnValue("android");
+		expect(updatesItself()).toBe(false);
+		window.__CINETTE_STORE__ = "github";
+		expect(updatesItself()).toBe(true);
 	});
 });
 
