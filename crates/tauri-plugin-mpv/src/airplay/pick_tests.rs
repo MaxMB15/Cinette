@@ -13,6 +13,7 @@ fn stays_muted_until_the_video_is_on_a_receiver() {
     let mut pick = Pick::loaded(now);
     let quiet = Step {
         muted: true,
+        on_receiver: false,
         pause: false,
         not_picked: false,
         ready_after: None,
@@ -27,42 +28,88 @@ fn stays_muted_until_the_video_is_on_a_receiver() {
     assert_eq!(step(&mut pick, true, false, now), ready);
     let out = step(&mut pick, true, true, now);
     assert!(!out.muted);
+    assert!(out.on_receiver);
     assert!(!out.pause);
 }
 
 #[test]
-fn mutes_and_pauses_once_when_the_video_leaves_the_receiver() {
+fn mutes_at_once_and_pauses_once_when_the_video_stays_off_the_receiver() {
     let now = Instant::now();
     let mut pick = Pick::loaded(now);
     step(&mut pick, true, true, now);
-    let left = step(&mut pick, true, false, now);
+    let left = now + Duration::from_secs(60);
+    let quiet = Step {
+        muted: true,
+        on_receiver: true,
+        pause: false,
+        not_picked: false,
+        ready_after: None,
+        reached_after: None,
+        changed: true,
+    };
+    assert_eq!(step(&mut pick, true, false, left), quiet);
+    // It still counts as there, and the grace runs from when it left.
+    let just_short = left + LEAVE_GRACE - Duration::from_millis(1);
     assert_eq!(
-        left,
+        step(&mut pick, true, false, just_short),
         Step {
-            muted: true,
-            pause: true,
-            not_picked: false,
-            ready_after: None,
-            reached_after: None,
-            changed: true,
+            changed: false,
+            ..quiet
         }
     );
-    // Only the change pauses, so a play while it's gone stays quiet,
+    let gone = Step {
+        on_receiver: false,
+        pause: true,
+        changed: false,
+        ..quiet
+    };
+    assert_eq!(step(&mut pick, true, false, left + LEAVE_GRACE), gone);
+    // Only the turn to gone pauses, so a play while it's gone stays quiet,
     // and never counts as no pick, however long it lasts.
-    let later = step(&mut pick, true, false, now + PICK_LIMIT * 2);
     assert_eq!(
-        later,
+        step(&mut pick, true, false, left + PICK_LIMIT * 2),
         Step {
-            muted: true,
             pause: false,
-            not_picked: false,
-            ready_after: None,
-            reached_after: None,
-            changed: false,
+            ..gone
         }
     );
     // Back on the receiver, it's heard there again.
-    assert!(!step(&mut pick, true, true, now + PICK_LIMIT * 2).muted);
+    let back = step(&mut pick, true, true, left + PICK_LIMIT * 2);
+    assert!(!back.muted);
+    assert!(back.on_receiver);
+}
+
+#[test]
+fn the_video_back_on_the_receiver_in_time_never_counts_as_gone() {
+    let now = Instant::now();
+    let mut pick = Pick::loaded(now);
+    step(&mut pick, true, true, now);
+    let left = now + Duration::from_secs(60);
+    step(&mut pick, true, false, left);
+    let back = step(&mut pick, true, true, left + Duration::from_secs(1));
+    assert!(!back.muted);
+    assert!(back.on_receiver);
+    // Past the grace from the first time it left, it's still there.
+    let later = step(&mut pick, true, true, left + LEAVE_GRACE * 2);
+    assert!(later.on_receiver);
+    assert!(!later.pause);
+    // Leaving again starts a new grace.
+    let again = left + LEAVE_GRACE * 3;
+    assert!(step(&mut pick, true, false, again).on_receiver);
+    let short = again + LEAVE_GRACE - Duration::from_millis(1);
+    assert!(!step(&mut pick, true, false, short).pause);
+    assert!(step(&mut pick, true, false, again + LEAVE_GRACE).pause);
+}
+
+#[test]
+fn the_video_counts_as_on_the_receiver_only_once_it_got_there() {
+    let now = Instant::now();
+    let mut pick = Pick::loaded(now);
+    for at in [now, now + LEAVE_GRACE, now + PICK_LIMIT] {
+        let out = step(&mut pick, true, false, at);
+        assert!(!out.on_receiver);
+        assert!(!out.pause);
+    }
 }
 
 #[test]

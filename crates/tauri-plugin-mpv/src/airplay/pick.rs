@@ -3,9 +3,10 @@
 
 //! What a Mac's AVPlayer does as its item plays, since macOS never says
 //! which receiver the picker chose, or whether it chose one. The video
-//! counts as on a receiver only while `isExternalPlaybackActive` says so.
-//! `macos.rs` reads AVPlayer and does what [`Pick::step`] returns, so the
-//! rules can be tested where AVPlayer can't run.
+//! reaches a receiver when `isExternalPlaybackActive` says so, and counts
+//! as gone only once that's been off for [`LEAVE_GRACE`]. `macos.rs` reads
+//! AVPlayer and does what [`Pick::step`] returns, so the rules can be
+//! tested where AVPlayer can't run.
 
 use std::time::{Duration, Instant};
 
@@ -21,12 +22,23 @@ mod tests;
 /// errs long. The device checks in the pull request time it on a TV.
 pub const PICK_LIMIT: Duration = Duration::from_secs(10);
 
+/// How long the video may be off the receiver before it counts as gone.
+/// `isExternalPlaybackActive` can turn off for a moment and back on, as
+/// when a seek far into the item makes the TV load it again. The Mac stays
+/// muted meanwhile, so nothing plays here. A TV that's really gone, such
+/// as one turned off, is lost this much later.
+pub const LEAVE_GRACE: Duration = Duration::from_secs(5);
+
 /// What AVPlayer should do after a reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Step {
     /// Quiet, so nothing plays on the Mac's own speakers.
     pub muted: bool,
-    /// The video just left the receiver. AVPlayer would carry on here.
+    /// The video counts as on the receiver: it's there, or it left less
+    /// than [`LEAVE_GRACE`] ago.
+    pub on_receiver: bool,
+    /// The video just counted as gone from the receiver. AVPlayer would
+    /// carry on here.
     pub pause: bool,
     /// No receiver took the video in time.
     pub not_picked: bool,
@@ -49,6 +61,10 @@ pub struct Pick {
     external: bool,
     /// The video reached a receiver at some point.
     reached: bool,
+    /// When the video last left the receiver, while it's still off.
+    off_since: Option<Instant>,
+    /// It's been off for [`LEAVE_GRACE`], and AVPlayer was paused.
+    gone: bool,
 }
 
 impl Pick {
@@ -59,6 +75,8 @@ impl Pick {
             ready_at: None,
             external: false,
             reached: false,
+            off_since: None,
+            gone: false,
         }
     }
 
@@ -70,17 +88,27 @@ impl Pick {
         if ready_after.is_some() {
             self.ready_at = Some(now);
         }
-        let left = self.external && !external;
         let changed = self.external != external;
         let reached_after = (external && !self.reached).then_some(since_load);
+        if external {
+            self.off_since = None;
+        } else if self.external {
+            self.off_since = Some(now);
+        }
         self.external = external;
         self.reached |= external;
+        let gone = self
+            .off_since
+            .is_some_and(|at| now.saturating_duration_since(at) >= LEAVE_GRACE);
+        let pause = gone && !self.gone;
+        self.gone = gone;
         let waited = self
             .ready_at
             .is_some_and(|at| now.saturating_duration_since(at) >= PICK_LIMIT);
         Step {
             muted: !external,
-            pause: left,
+            on_receiver: external || (self.off_since.is_some() && !gone),
+            pause,
             not_picked: !self.reached && waited,
             ready_after,
             reached_after,
