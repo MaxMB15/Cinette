@@ -1816,14 +1816,16 @@ async fn a_session_that_went_with_the_old_address_connects_again() {
 async fn a_session_that_cant_connect_again_says_the_cast_was_lost() {
     let app = TestApp::new();
     let (events, _got, first) = quiet_cast(&app, Duration::from_secs(1), |_| true).await;
-    first.go_quiet();
-    next_update(&events, "reconnecting");
-    // The receiver can't be reached any more, as when it was turned off.
+    // The receiver can't be reached any more, as when it was turned off. It
+    // moves before the session drops, since trying again starts at once and
+    // would otherwise reach the fake receiver.
     let gone = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
         .unwrap();
     add_receiver(&app, "tv", gone);
+    first.go_quiet();
+    next_update(&events, "reconnecting");
     assert_eq!(
         closed_within(&events, Duration::from_secs(10)),
         Some(json!("timeout"))
