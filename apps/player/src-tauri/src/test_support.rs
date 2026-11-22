@@ -45,6 +45,7 @@ impl TestApp {
     /// An app with an empty cache, the default download settings and a
     /// player that has nothing loaded.
     pub(crate) fn new() -> Self {
+        sidecar_beside_test_binary();
         let dir = tempfile::tempdir().expect("create a folder for the test app");
         let mut context = mock_context(noop_assets());
         // The mock's identifier is blank, which would put files straight in
@@ -106,6 +107,43 @@ impl TestApp {
     pub(crate) fn invoke(&self, command: &str, args: Value) -> Result<Value, Value> {
         invoke_on(self.app.handle(), command, args)
     }
+}
+
+/// Copies the ffmpeg sidecar next to the test binary, where the shell plugin
+/// looks for it.
+///
+/// The build copies the sidecar into the profile's folder, such as
+/// `target/debug`. The plugin looks in the running binary's folder, or one
+/// folder up when that's `deps`, which is where Cargo put test binaries until
+/// Rust 1.100. Since then a test binary is in
+/// `<profile>/build/<package>/<hash>/out`, so the plugin finds nothing there.
+fn sidecar_beside_test_binary() {
+    static COPIED: std::sync::Once = std::sync::Once::new();
+    COPIED.call_once(|| {
+        let exe = std::env::current_exe().expect("find the test binary");
+        let dir = exe.parent().expect("find the test binary's folder");
+        if dir.ends_with("deps") {
+            return;
+        }
+        let Some(profile) = dir
+            .ancestors()
+            .find(|path| path.ends_with("build"))
+            .and_then(std::path::Path::parent)
+        else {
+            return;
+        };
+        let name = format!(
+            "{}{}",
+            crate::downloads::FFMPEG_SIDECAR,
+            std::env::consts::EXE_SUFFIX
+        );
+        // An ffmpeg left from a killed run can still be running the old
+        // copy, and Linux won't write over a running file. It can replace it.
+        let copy = dir.join(format!("{name}.copy"));
+        std::fs::copy(profile.join(&name), &copy)
+            .expect("copy the ffmpeg sidecar next to the test binary");
+        std::fs::rename(&copy, dir.join(&name)).expect("put the ffmpeg sidecar in place");
+    });
 }
 
 /// Poison `mutex` the way a thread that panics while holding it would.

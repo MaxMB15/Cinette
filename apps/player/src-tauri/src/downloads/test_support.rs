@@ -5,10 +5,9 @@
 //! download tests.
 //!
 //! The tests run the real bundled ffmpeg. The build copies it into the
-//! profile's folder, such as `target/debug`, and that's where the shell
-//! plugin looks for a sidecar when a test runs, one folder above the test
-//! binaries in `deps`. So the tests need `scripts/fetch-ffmpeg.sh` to have
-//! run, as every build does.
+//! profile's folder, such as `target/debug`, and `TestApp::new` copies it
+//! next to the test binary when the shell plugin wouldn't look there. So the
+//! tests need `scripts/fetch-ffmpeg.sh` to have run, as every build does.
 
 use super::FFMPEG_SIDECAR;
 use crate::test_support::TestApp;
