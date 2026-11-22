@@ -1680,11 +1680,12 @@ export const PlayerView = () => {
 		!pendingResume;
 	// The bar comes back on the video's own view after it hides.
 	const tvBarChanged = useChanged(tvBarVisible);
-	if (tvBarChanged && !tvBarVisible && tvPlayer.view !== "none") tvPlayer.setView("none");
+	if (tvBarChanged && !tvBarVisible) tvPlayer.setView("none");
 	const tvView = tvBarVisible ? tvPlayer.view : "none";
 
 	// --- A TV's tray ---
 	const liveRewind = usePlayerPref(readLiveRewind, LIVE_REWIND_EVENT);
+	// Stryker disable next-line ArrayDeclaration: a list with no selected track shows no audio option, and the tray asks mpv again before one can open.
 	const [audioTracks, setAudioTracks] = useState<MpvTrack[]>([]);
 	const [speed, setSpeed] = useState(1);
 	// Each load is a new mpv, at normal speed and with tracks of its own.
@@ -1739,9 +1740,8 @@ export const PlayerView = () => {
 					picks: speedPicks(),
 					current: String(speed),
 				};
-			default:
-				return null;
 		}
+		return null;
 	};
 	const tvPick = tvPickFor(tvPanel);
 	/** Plays what was picked from that list. */
@@ -1991,6 +1991,7 @@ export const PlayerView = () => {
 					channel: tvChannel,
 					behind: liveSeek.behind,
 					buffered:
+						// Stryker disable next-line ConditionalExpression: the band only shows behind live, and only a stream that has played has an edge to be behind.
 						buffered && liveEdgeAt !== null
 							? {
 									from: liveEdgeAt - buffered[0],

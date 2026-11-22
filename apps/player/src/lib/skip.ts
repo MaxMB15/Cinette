@@ -53,6 +53,7 @@ export const nextSkip = (
 	// Clamping only ever shortens a skip. It never turns a skip from past
 	// the bounds into a step the other way.
 	const target =
+		// Stryker disable next-line EqualityOperator: a skip of 0 seconds stays where it is either way.
 		seconds < 0
 			? Math.min(from, Math.max(bounds.start, from + seconds))
 			: Math.max(from, Math.min(from + seconds, bounds.end));

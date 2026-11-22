@@ -208,9 +208,10 @@ export const TvSubtitlePanel = ({
 							<TvTextRow
 								label={c.label}
 								end={
+									// Past Text and timing, Off is the only row without a count.
 									"count" in c ? (
 										c.count
-									) : c.key === OFF && selectedFileId === null ? (
+									) : selectedFileId === null ? (
 										<Check aria-label="In use" className="size-[1.25rem]" />
 									) : undefined
 								}

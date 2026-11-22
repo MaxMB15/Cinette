@@ -164,6 +164,7 @@ describe("player-prefs", () => {
 			writeLiveRewind(3);
 			window.removeEventListener(LIVE_REWIND_EVENT, listener);
 			expect(listener).toHaveBeenCalledTimes(1);
+			expect(LIVE_REWIND_EVENT).toBe("mvp-live-rewind");
 			expect(readLiveRewind().minutes).toBe(10);
 			expect(readBackBufferMib()).toBe(400);
 			writeLiveRewind(1);

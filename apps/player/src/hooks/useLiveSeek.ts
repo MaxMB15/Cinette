@@ -27,7 +27,9 @@ export const useLiveSeek = ({ session, playing, position, positionAt }: LiveSeek
 	// Nothing live holds no anchor, so a new stream or none starts over.
 	let anchor = held.session === session ? held.anchor : null;
 	if (session !== null && playing) anchor = nextAnchor(anchor, { position, at: positionAt });
-	if (anchor !== held.anchor || session !== held.session) setHeld({ session, anchor });
+	// An anchor is only kept with the session it started in, and a new
+	// session never keeps the old anchor, so only a new anchor needs saving.
+	if (anchor !== held.anchor) setHeld({ session, anchor });
 	return {
 		edge: anchor ? liveEdge(anchor, positionAt) : null,
 		behind: liveBehind(anchor, position, positionAt),
