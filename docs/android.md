@@ -153,8 +153,7 @@ The arrow keys on a TV remote come through as D-pad events. You can send them wi
 - `app/src/main/res/mipmap-*`: the app icon from `src-tauri/icons/android`, which
   `pnpm tauri icon` writes. Copy it over after changing the icon.
 - `app/src/main/res/drawable-xhdpi/banner.png`, `drawable-xxxhdpi/banner.png`, and
-  the manifest's `android:banner`, activity `android:icon` and `uses-feature` lines:
-  the TV launcher banner.
+  the manifest's `android:banner` and `uses-feature` lines: the TV launcher banner.
 - `app/src/main/java/app/cinette/MainActivity.kt`: hands Back to the page.
 - The manifest's `app.cinette.STORE` meta-data, from the `store` property.
 
@@ -239,12 +238,11 @@ DejaVu Sans Bold, like the Appstore's Fire TV app icon in `docs/images/amazon`. 
 manifest marks the Leanback and touch screen features as not required, so the app
 installs on TVs and phones.
 
-Fire TV's launcher ignores `android:banner` for an app that didn't come from the
-Appstore. It shows the launcher activity's `android:icon` instead, centered in a wide
-tile, so a square icon gets grey on both sides. The Amazon build sets that icon to the
-banner, through the `launcherIcon` placeholder in `app/build.gradle.kts`. The Google
-build keeps the square icon there, which Google TV's apps row shows. The launcher
-caches the tile, so a changed one only shows after uninstalling and installing again.
+Fire TV's launcher ignores `android:banner` for a sideloaded app. It shows the square
+app icon centered in a wide tile, with grey on both sides. Giving the launcher
+activity the banner as its icon doesn't change that, which Fire OS 8.1 showed after
+a full uninstall. Only an Appstore install gets a wide tile, drawn from the Fire TV
+app icon uploaded in the console (see `amazon-appstore.md`).
 
 ## TLS
 
