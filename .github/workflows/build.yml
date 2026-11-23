@@ -210,6 +210,12 @@ jobs:
           output: coverage/rust/badge.svg
           label: Rust coverage
 
+      # The reports sit next to the website, and search engines would list
+      # them. A robots.txt can't keep them out, since crawlers only read one at
+      # the root of maxmb15.github.io, so each page gets a noindex tag.
+      - name: Keep the reports out of search results
+        run: find coverage -name '*.html' -exec sed -i 's|<head>|<head><meta name="robots" content="noindex">|' {} +
+
       - name: Deploy coverage to gh-pages
         id: publish
         continue-on-error: true
