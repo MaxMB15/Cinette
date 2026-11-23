@@ -171,7 +171,7 @@ export const keepUnlessFailed = <T>(load: () => Promise<T>): (() => Promise<T>) 
 		}));
 };
 
-export type Platform = "macos" | "linux";
+export type Platform = "macos" | "linux" | "android";
 
 /**
  * How each installer's name starts, newest first. The app was called Max Video
@@ -187,6 +187,14 @@ export const FILES = [
 	{ id: "appimage", platform: "linux", label: "AppImage", suffix: "amd64.AppImage" },
 	{ id: "deb", platform: "linux", label: "Debian and Ubuntu", suffix: "amd64.deb" },
 	{ id: "rpm", platform: "linux", label: "Fedora", suffix: "x86_64.rpm" },
+	// Most TVs and streaming sticks run 32-bit Android, and phones 64-bit.
+	{ id: "android-tv", platform: "android", label: "TV and Fire TV", suffix: "armeabi-v7a.apk" },
+	{
+		id: "android-phone",
+		platform: "android",
+		label: "Phone and tablet",
+		suffix: "arm64-v8a.apk",
+	},
 ] as const satisfies readonly { id: string; platform: Platform; label: string; suffix: string }[];
 
 export type FileId = (typeof FILES)[number]["id"];

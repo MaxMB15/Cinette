@@ -1,0 +1,224 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`renderGuide draws the same guide each time 1`] = `
+"<div class="guide-inner">
+<div class="ruler">
+<span>
+</span>
+<div class="track">
+<span style="left:calc(10 * var(--m))">8:00 PM</span>
+<span style="left:calc(40 * var(--m))">8:30 PM</span>
+<span style="left:calc(70 * var(--m))">9:00 PM</span>
+<span style="left:calc(100 * var(--m))">9:30 PM</span>
+<span style="left:calc(130 * var(--m))">10:00 PM</span>
+<span style="left:calc(160 * var(--m))">10:30 PM</span>
+<span style="left:calc(190 * var(--m))">11:00 PM</span>
+</div>
+</div>
+<div class="row" style="--r:0">
+<div class="ch">
+<img src="./img/logo-meridian-news.png" alt="" width="30" height="30">
+<span>
+<b>Meridian News 24</b>
+<i>News</i>
+</span>
+</div>
+<div class="track">
+<div class="prog" style="left:calc(0 * var(--m) + 2px);width:calc(10 * var(--m) - 4px)">
+<span>
+</span>
+</div>
+<div class="prog now" style="left:calc(10 * var(--m) + 2px);width:calc(60 * var(--m) - 4px);--done:68.3%">
+<span>Meridian Tonight</span>
+</div>
+<div class="prog" style="left:calc(70 * var(--m) + 2px);width:calc(30 * var(--m) - 4px)">
+<span>World Desk</span>
+</div>
+<div class="prog" style="left:calc(100 * var(--m) + 2px);width:calc(30 * var(--m) - 4px)">
+<span>The Briefing</span>
+</div>
+<div class="prog" style="left:calc(130 * var(--m) + 2px);width:calc(30 * var(--m) - 4px)">
+<span>Weather Hour</span>
+</div>
+<div class="prog" style="left:calc(160 * var(--m) + 2px);width:calc(60 * var(--m) - 4px)">
+<span>Meridian Tonight</span>
+</div>
+</div>
+</div>
+<div class="row" style="--r:1">
+<div class="ch">
+<img src="./img/logo-pulse-sports.png" alt="" width="30" height="30">
+<span>
+<b>Pulse Sports</b>
+<i>Sports</i>
+</span>
+</div>
+<div class="track">
+<div class="prog" style="left:calc(0 * var(--m) + 2px);width:calc(10 * var(--m) - 4px)">
+<span>
+</span>
+</div>
+<div class="prog now" style="left:calc(10 * var(--m) + 2px);width:calc(120 * var(--m) - 4px);--done:34.2%">
+<span>Champions Cup: Semifinal</span>
+</div>
+<div class="prog" style="left:calc(130 * var(--m) + 2px);width:calc(60 * var(--m) - 4px)">
+<span>Pulse Tonight</span>
+</div>
+<div class="prog" style="left:calc(190 * var(--m) + 2px);width:calc(30 * var(--m) - 4px)">
+<span>Fight Night Preview</span>
+</div>
+</div>
+</div>
+<div class="row" style="--r:2">
+<div class="ch">
+<img src="./img/logo-nova-one.png" alt="" width="30" height="30">
+<span>
+<b>Nova One</b>
+<i>Entertainment</i>
+</span>
+</div>
+<div class="track">
+<div class="prog" style="left:calc(0 * var(--m) + 2px);width:calc(25 * var(--m) - 4px)">
+<span>Night Owls</span>
+</div>
+<div class="prog now" style="left:calc(25 * var(--m) + 2px);width:calc(125 * var(--m) - 4px);--done:20.8%">
+<span>The Quiet Meridian</span>
+</div>
+<div class="prog" style="left:calc(150 * var(--m) + 2px);width:calc(60 * var(--m) - 4px)">
+<span>Late Show with Ray Okoro</span>
+</div>
+<div class="prog" style="left:calc(210 * var(--m) + 2px);width:calc(30 * var(--m) - 4px)">
+<span>Night Owls</span>
+</div>
+</div>
+</div>
+<div class="row" style="--r:3">
+<div class="ch">
+<img src="./img/logo-lumen-cinema.png" alt="" width="30" height="30">
+<span>
+<b>Lumen Cinema</b>
+<i>Movies</i>
+</span>
+</div>
+<div class="track">
+<div class="prog now" style="left:calc(0 * var(--m) + 2px);width:calc(131 * var(--m) - 4px);--done:38.9%">
+<span>Ember Valley</span>
+</div>
+<div class="prog" style="left:calc(131 * var(--m) + 2px);width:calc(122 * var(--m) - 4px)">
+<span>Glass Cathedral</span>
+</div>
+</div>
+</div>
+<div class="row" style="--r:4">
+<div class="ch">
+<img src="./img/logo-velocity.png" alt="" width="30" height="30">
+<span>
+<b>Velocity Motor</b>
+<i>Sports</i>
+</span>
+</div>
+<div class="track">
+<div class="prog" style="left:calc(0 * var(--m) + 2px);width:calc(25 * var(--m) - 4px)">
+<span>Rally Highlights</span>
+</div>
+<div class="prog now" style="left:calc(25 * var(--m) + 2px);width:calc(90 * var(--m) - 4px);--done:28.9%">
+<span>Grand Prix Qualifying</span>
+</div>
+<div class="prog" style="left:calc(115 * var(--m) + 2px);width:calc(30 * var(--m) - 4px)">
+<span>Pit Lane</span>
+</div>
+<div class="prog" style="left:calc(145 * var(--m) + 2px);width:calc(60 * var(--m) - 4px)">
+<span>Rally Highlights</span>
+</div>
+<div class="prog" style="left:calc(205 * var(--m) + 2px);width:calc(30 * var(--m) - 4px)">
+<span>Pit Lane</span>
+</div>
+</div>
+</div>
+<div class="row" style="--r:5">
+<div class="ch">
+<img src="./img/logo-northwind-news.png" alt="" width="30" height="30">
+<span>
+<b>Northwind News</b>
+<i>News</i>
+</span>
+</div>
+<div class="track">
+<div class="prog" style="left:calc(0 * var(--m) + 2px);width:calc(40 * var(--m) - 4px)">
+<span>Northwind Live</span>
+</div>
+<div class="prog now" style="left:calc(40 * var(--m) + 2px);width:calc(60 * var(--m) - 4px);--done:18.3%">
+<span>Northwind Evening</span>
+</div>
+<div class="prog" style="left:calc(100 * var(--m) + 2px);width:calc(30 * var(--m) - 4px)">
+<span>Late Edition</span>
+</div>
+<div class="prog" style="left:calc(130 * var(--m) + 2px);width:calc(60 * var(--m) - 4px)">
+<span>Northwind Evening</span>
+</div>
+<div class="prog" style="left:calc(190 * var(--m) + 2px);width:calc(90 * var(--m) - 4px)">
+<span>Northwind Live</span>
+</div>
+</div>
+</div>
+<div class="row" style="--r:6">
+<div class="ch">
+<img src="./img/logo-atlas-nature.png" alt="" width="30" height="30">
+<span>
+<b>Atlas Nature</b>
+<i>Documentary</i>
+</span>
+</div>
+<div class="track">
+<div class="prog" style="left:calc(0 * var(--m) + 2px);width:calc(20 * var(--m) - 4px)">
+<span>Wild Coasts</span>
+</div>
+<div class="prog now" style="left:calc(20 * var(--m) + 2px);width:calc(60 * var(--m) - 4px);--done:51.7%">
+<span>Summit</span>
+</div>
+<div class="prog" style="left:calc(80 * var(--m) + 2px);width:calc(60 * var(--m) - 4px)">
+<span>Wild Coasts</span>
+</div>
+<div class="prog" style="left:calc(140 * var(--m) + 2px);width:calc(60 * var(--m) - 4px)">
+<span>Summit</span>
+</div>
+<div class="prog" style="left:calc(200 * var(--m) + 2px);width:calc(60 * var(--m) - 4px)">
+<span>Wild Coasts</span>
+</div>
+</div>
+</div>
+<div class="row" style="--r:7">
+<div class="ch">
+<img src="./img/logo-echo-comedy.png" alt="" width="30" height="30">
+<span>
+<b>Echo Comedy</b>
+<i>Entertainment</i>
+</span>
+</div>
+<div class="track">
+<div class="prog" style="left:calc(0 * var(--m) + 2px);width:calc(10 * var(--m) - 4px)">
+<span>
+</span>
+</div>
+<div class="prog now" style="left:calc(10 * var(--m) + 2px);width:calc(60 * var(--m) - 4px);--done:68.3%">
+<span>Stand-Up Hour</span>
+</div>
+<div class="prog" style="left:calc(70 * var(--m) + 2px);width:calc(30 * var(--m) - 4px)">
+<span>Flatmates</span>
+</div>
+<div class="prog" style="left:calc(100 * var(--m) + 2px);width:calc(30 * var(--m) - 4px)">
+<span>Flatmates</span>
+</div>
+<div class="prog" style="left:calc(130 * var(--m) + 2px);width:calc(30 * var(--m) - 4px)">
+<span>Office Hours</span>
+</div>
+<div class="prog" style="left:calc(160 * var(--m) + 2px);width:calc(60 * var(--m) - 4px)">
+<span>Stand-Up Hour</span>
+</div>
+</div>
+</div>
+<div class="nowline" style="left:calc(var(--chw) + 51 * var(--m))">
+<span>8:41 PM</span>
+</div>
+</div>"
+`;

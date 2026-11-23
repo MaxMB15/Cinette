@@ -54,9 +54,14 @@ const LINUX_TVS_AND_PHONES = [
 	"Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/605.1.15",
 ];
 
-const ANDROID_CHROMEOS_WINDOWS = [
+/** A phone, a Fire TV's Silk browser and a Google TV. */
+const ANDROIDS = [
 	"Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
 	"Mozilla/5.0 (Linux; Android 9; AFTMM Build/PS7633) AppleWebKit/537.36 (KHTML, like Gecko) Silk/130.0.0 like Chrome/130.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Linux; Android 12; Chromecast) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+];
+
+const CHROMEOS_WINDOWS = [
 	"Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
 	"",
@@ -70,15 +75,17 @@ const AGENTS: [userAgent: string, maxTouchPoints: number][] = [
 	[MAC_FIREFOX, 0],
 	[IPHONE, 5],
 	[IPAD, 5],
-	...[...LINUX_DESKTOPS, ...LINUX_TVS_AND_PHONES, ...ANDROID_CHROMEOS_WINDOWS].map(
+	...[...LINUX_DESKTOPS, ...LINUX_TVS_AND_PHONES, ...ANDROIDS, ...CHROMEOS_WINDOWS].map(
 		(userAgent): [string, number] => [userAgent, 0]
 	),
 ];
 
-test("the page has one script, inline", () => {
-	expect(scripts).toHaveLength(1);
+test("the script that picks the downloads runs first, inline, before the page's module", () => {
+	expect(scripts).toHaveLength(2);
 	expect(scripts[0].hasAttribute("src")).toBe(false);
 	expect(scripts[0].text.trim()).not.toBe("");
+	expect(scripts[1].getAttribute("type")).toBe("module");
+	expect(scripts[1].getAttribute("src")).toBe("./src/main.ts");
 });
 
 test("the script tells a Mac from an iPad, which asks for the Mac site", () => {
@@ -105,8 +112,14 @@ test("the script offers every download to Linux TVs and phones", () => {
 	}
 });
 
-test("the script offers every download to Android, ChromeOS and Windows", () => {
-	for (const userAgent of ANDROID_CHROMEOS_WINDOWS) {
+test("the script knows Android phones and TVs, Fire TV included", () => {
+	for (const userAgent of ANDROIDS) {
+		expect(osFor(userAgent)).toBe("android");
+	}
+});
+
+test("the script offers every download to ChromeOS and Windows", () => {
+	for (const userAgent of CHROMEOS_WINDOWS) {
 		expect(osFor(userAgent)).toBe("other");
 	}
 });
@@ -134,6 +147,8 @@ test("the release fills every marker in the page", () => {
 	const walker = FILLED.createTreeWalker(FILLED, NodeFilter.SHOW_COMMENT);
 	while (walker.nextNode()) comments.push((walker.currentNode as Comment).data.trim());
 	expect(comments.filter((comment) => comment.startsWith("release:"))).toEqual([]);
+	expect(comments).not.toContain("guide");
+	expect(FILLED.querySelectorAll(".guide .row").length).toBeGreaterThan(0);
 	const links = attributes(FILLED, "a[href]", "href");
 	for (const { suffix } of FILES) {
 		expect(links).toContain(
@@ -158,16 +173,20 @@ test("each id is used once", () => {
 });
 
 test("each image has alt text or is marked as decoration", () => {
-	const images = [...PAGE.querySelectorAll("img")];
+	const images = [...FILLED.querySelectorAll("img")];
 	expect(images.length).toBeGreaterThan(0);
 	for (const image of images) {
 		expect(image.hasAttribute("alt")).toBe(true);
 	}
 });
 
-test("images and styles come from the repo, not another site", () => {
+test("images, scripts and styles come from the repo, not another site", () => {
 	const sources = [
-		...attributes(PAGE, "img", "src"),
+		...attributes(FILLED, "img", "src"),
+		...attributes(FILLED, "img[srcset]", "srcset").flatMap((set) =>
+			set.split(",").map((source) => source.trim().split(" ")[0])
+		),
+		...attributes(FILLED, "script[src]", "src"),
 		...attributes(PAGE, 'link:not([rel="canonical"])', "href"),
 	];
 	expect(sources.length).toBeGreaterThan(0);

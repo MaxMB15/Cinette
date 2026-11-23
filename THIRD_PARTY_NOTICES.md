@@ -174,6 +174,15 @@ The times the player offers to skip come from two online databases.
 - Contains information from [SkipDB](https://skipdb.tv), which is made available here under the [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
 - Intro data provided by [IntroDB](https://introdb.app).
 
+## Website
+
+The website in `site/` uses these, which aren't part of the app:
+
+- [Motion](https://motion.dev) for the effects that follow the scroll, under the MIT license.
+- The [Archivo](https://github.com/Omnibus-Type/Archivo) typeface, copyright 2020 The Archivo Project Authors, from [Fontsource](https://fontsource.org/fonts/archivo), under the [SIL Open Font License 1.1](https://openfontlicense.org).
+- Apple's Download on the App Store badge, as Apple's [marketing guidelines](https://developer.apple.com/app-store/marketing/guidelines/) allow. Apple and App Store are trademarks of Apple Inc.
+- Photos from [Unsplash](https://unsplash.com), through [Lorem Picsum](https://picsum.photos), under the [Unsplash License](https://unsplash.com/license). They're the posters and stills in the screenshots of the app, on the website and in the App Store listing.
+
 ## Rust crates and npm packages
 
 Cinette is built with [Tauri](https://tauri.app), [React](https://react.dev) and many other Rust crates and npm packages, each under its own license. Most use the MIT, Apache-2.0 or BSD licenses. [Cargo.lock](Cargo.lock) and [pnpm-lock.yaml](pnpm-lock.yaml) list every one, with the exact version.

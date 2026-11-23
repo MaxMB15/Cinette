@@ -38,7 +38,7 @@ It used to be called Max Video Player.
 | **macOS** | [**Apple Silicon (.dmg)**](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_aarch64.dmg) · [Intel (.dmg)](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_x64.dmg) | macOS 15 Sequoia or later |
 | **Linux** | [**AppImage**](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_amd64.AppImage) · [Debian / Ubuntu (.deb)](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_amd64.deb) · [Fedora (.rpm)](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_x86_64.rpm) | x86_64 |
 | Windows | Planned | |
-| iOS, iPadOS | Coming soon to the App Store | |
+| **iOS, iPadOS** | [**App Store**](https://apps.apple.com/us/app/cinette/id6824008116) | iOS and iPadOS 17.5 or later |
 | **Android, Fire TV, Google TV** | [**TV and Fire TV (.apk)**](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_armeabi-v7a.apk) · [Phone and tablet (.apk)](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_arm64-v8a.apk) | Android 9 or later, Fire OS 7 or later |
 
 These links always point at the newest version. Older versions and release notes are on the [releases page](https://github.com/MaxMB15/Cinette/releases), and the [changelog](CHANGELOG.md) lists what changed in each one. Once installed, the app updates itself.
