@@ -56,6 +56,22 @@
 			"browser_download_url": "https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_x86_64.rpm"
 		},
 		{
+			"name": "Cinette_armeabi-v7a.apk",
+			"content_type": "application/vnd.android.package-archive",
+			"state": "uploaded",
+			"size": 98765432,
+			"digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+			"browser_download_url": "https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_armeabi-v7a.apk"
+		},
+		{
+			"name": "Cinette_arm64-v8a.apk",
+			"content_type": "application/vnd.android.package-archive",
+			"state": "uploaded",
+			"size": 101234567,
+			"digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			"browser_download_url": "https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_arm64-v8a.apk"
+		},
+		{
 			"name": "Cinette_linux.tar.gz",
 			"content_type": "application/gzip",
 			"state": "uploaded",

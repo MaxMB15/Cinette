@@ -6,88 +6,126 @@
 @source "../index.html";
 @source "./lib";
 
-@theme {
-	/* The system font, as in the app. */
-	--font-sans:
-		ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
-		"Segoe UI Symbol", "Noto Color Emoji";
-
-	--color-background: hsl(var(--background));
-	--color-foreground: hsl(var(--foreground));
-	--color-card: hsl(var(--card));
-	--color-muted: hsl(var(--muted));
-	--color-muted-foreground: hsl(var(--muted-foreground));
-	--color-border: hsl(var(--border));
-	--color-primary: hsl(var(--primary));
-	--color-ring: hsl(var(--ring));
-}
-
 @layer base {
-	/* The light theme keeps the app's blue, darkened so links and buttons have
-	   enough contrast on white. */
+	/* The app's dark theme. The page has no light theme. */
 	:root {
-		--background: 220 20% 98%;
-		--foreground: 220 25% 10%;
-		--card: 0 0% 100%;
-		--muted: 220 16% 94%;
-		--muted-foreground: 220 9% 38%;
-		--border: 220 14% 86%;
-		--primary: 214 84% 48%;
-		--ring: 214 84% 48%;
-		--radius: 0.625rem;
-		/* White text on the app's own blue is too faint for small text, so
-		   filled buttons use this one in both themes. White on it is 4.89:1,
-		   and the darker hover is 6.05:1. */
-		--button: 214 84% 48%;
-		--button-hover: 214 84% 42%;
-		color-scheme: light;
-	}
+		--page: #0f1318;
+		--panel: #161b22;
+		--block: #1c232d;
+		--line: #262e3a;
+		--text: #eceff4;
+		--soft: #b9c1cd;
+		--dim: #929cad;
+		--blue: #4792f6;
+		--blue-hover: #6aa6f8;
+		/* Text on the blue: 5.7:1. */
+		--blue-ink: #06111f;
+		--live: #ef4444;
+		--gutter: max(20px, env(safe-area-inset-left, 0px));
+		/* The hero's guide: the width of a minute and of the channel column. */
+		--m: 6px;
+		--chw: 176px;
+		color-scheme: dark;
 
-	/* The app's colors, from apps/player/src/styles/globals.css. */
-	@media (prefers-color-scheme: dark) {
-		:root {
-			--background: 220 14% 7%;
-			--foreground: 220 10% 95%;
-			--card: 220 13% 10%;
-			--muted: 220 12% 14%;
-			--muted-foreground: 220 8% 55%;
-			--border: 220 12% 20%;
-			--primary: 214 91% 62%;
-			--ring: 214 91% 62%;
-			color-scheme: dark;
+		@media (width < 1000px) {
+			--m: 4.2px;
+			--chw: 46px;
 		}
 	}
 
+	/* Set here as well as on body, so the body clips what's wider than the
+	   screen instead of passing its overflow on to the window. */
 	html {
+		overflow-x: clip;
 		scroll-behavior: smooth;
-		scroll-padding-top: 4.5rem;
+		scroll-padding-top: 72px;
 		-webkit-text-size-adjust: 100%;
-	}
 
-	@media (prefers-reduced-motion: reduce) {
-		html {
+		@media (prefers-reduced-motion: reduce) {
 			scroll-behavior: auto;
 		}
 	}
 
 	body {
-		background: var(--color-background);
-		color: var(--color-foreground);
-		font-family: var(--font-sans);
-		line-height: 1.6;
+		background: var(--page);
+		color: var(--text);
+		font:
+			400 17px/1.6 "Archivo Variable",
+			system-ui,
+			sans-serif;
 		-webkit-font-smoothing: antialiased;
+		overflow-x: clip;
+	}
+
+	h1,
+	h2,
+	h3 {
+		font-weight: 760;
+		font-stretch: 116%;
+		letter-spacing: -0.022em;
+		text-wrap: balance;
+	}
+
+	h2 {
+		font-size: clamp(30px, 4.2vw, 50px);
+		line-height: 1.04;
+	}
+
+	h3 {
+		font-size: 20px;
+		line-height: 1.25;
+		letter-spacing: -0.01em;
+	}
+
+	p,
+	li {
+		text-wrap: pretty;
+	}
+
+	a {
+		color: var(--blue);
+		text-decoration: underline;
+		text-decoration-thickness: 1px;
+		text-underline-offset: 0.18em;
+
+		&:hover {
+			text-decoration-thickness: 2px;
+		}
 	}
 
 	:focus-visible {
-		outline: 2px solid var(--color-ring);
+		outline: 2px solid var(--blue);
 		outline-offset: 3px;
-		border-radius: 4px;
+		border-radius: 6px;
 	}
 
 	code,
 	kbd,
 	pre {
-		font-size: 0.875em;
+		font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+		font-size: 0.85em;
+	}
+
+	:not(pre) > code,
+	kbd {
+		padding: 1px 6px;
+		border-radius: 5px;
+		background: var(--block);
+		overflow-wrap: anywhere;
+	}
+
+	kbd {
+		border: 1px solid var(--line);
+	}
+
+	pre {
+		margin: 12px 0;
+		padding: 12px 16px;
+		border-radius: 10px;
+		background: var(--panel);
+		border: 1px solid var(--line);
+		overflow-x: auto;
+		line-height: 1.55;
 	}
 
 	summary {
@@ -97,210 +135,138 @@
 
 @layer components {
 	.wrap {
-		max-width: 72rem;
+		width: min(1200px, 100% - 2 * var(--gutter));
 		margin-inline: auto;
-		padding-inline: 1rem;
+	}
 
-		@media (width >= 40rem) {
-			padding-inline: 1.5rem;
-		}
+	.nw {
+		white-space: nowrap;
 	}
 
 	.skip-link {
 		position: absolute;
-		left: 1rem;
-		top: -4rem;
-		z-index: 20;
-		padding: 0.5rem 1rem;
-		border-radius: var(--radius);
-		background: var(--color-card);
-		border: 1px solid var(--color-border);
+		left: var(--gutter);
+		top: -60px;
+		z-index: 30;
+		padding: 8px 14px;
+		border-radius: 8px;
+		background: var(--panel);
+		border: 1px solid var(--line);
+		color: var(--text);
 
 		&:focus {
-			top: 0.75rem;
+			top: 12px;
 		}
 	}
 
-	/* Text with links, code and lists in it. */
-	.copy {
-		& a {
-			color: var(--color-primary);
-			text-decoration: underline;
-			text-decoration-thickness: 1px;
-			text-underline-offset: 0.18em;
+	/* The header */
+	.bar {
+		position: sticky;
+		top: 0;
+		z-index: 20;
+		backdrop-filter: blur(14px) saturate(1.4);
+		-webkit-backdrop-filter: blur(14px) saturate(1.4);
+		background: color-mix(in srgb, var(--page) 86%, transparent);
+		border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+
+		& .wrap {
+			display: flex;
+			align-items: center;
+			gap: 24px;
+			height: 60px;
+		}
+
+		& nav {
+			margin-left: auto;
+			display: flex;
+			align-items: center;
+			gap: 22px;
+			font-size: 15px;
+		}
+
+		& nav a {
+			color: var(--dim);
+			text-decoration: none;
 
 			&:hover {
-				text-decoration-thickness: 2px;
+				color: var(--text);
 			}
 		}
 
-		& p + p,
-		& p + ul,
-		& ul + p,
-		& p + ol,
-		& ol + p,
-		& pre + p,
-		& p + pre,
-		& p + details,
-		& details + p {
-			margin-top: 0.875rem;
+		& nav .get {
+			color: var(--blue-ink);
+			background: var(--blue);
+			padding: 6px 14px;
+			border-radius: 99px;
+			font-weight: 600;
+
+			&:hover {
+				color: var(--blue-ink);
+				background: var(--blue-hover);
+			}
 		}
 
-		& :not(pre) > code {
-			padding: 0.1em 0.35em;
-			border-radius: 0.3rem;
-			background: var(--color-muted);
-			overflow-wrap: anywhere;
-		}
-
-		& pre {
-			padding: 0.75rem 1rem;
-			border: 1px solid var(--color-border);
-			border-radius: var(--radius);
-			background: var(--color-muted);
-			overflow-x: auto;
-			line-height: 1.7;
-		}
-
-		& kbd {
-			padding: 0 0.4em;
-			border: 1px solid var(--color-border);
-			border-bottom-width: 2px;
-			border-radius: 0.3rem;
-		}
-
-		& ul {
-			list-style: disc;
-			padding-left: 1.25rem;
-		}
-
-		& ol {
-			list-style: decimal;
-			padding-left: 1.5rem;
-		}
-
-		& li + li {
-			margin-top: 0.5rem;
-		}
-
-		& li::marker {
-			color: var(--color-muted-foreground);
-		}
-	}
-
-	.site-header {
-		position: sticky;
-		top: 0;
-		z-index: 10;
-		border-bottom: 1px solid var(--color-border);
-		background: color-mix(in srgb, var(--color-background) 88%, transparent);
-		backdrop-filter: blur(12px);
-	}
-
-	.header-inner {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 1rem;
-		height: 3.5rem;
-	}
-
-	.brand {
-		display: flex;
-		align-items: center;
-		gap: 0.625rem;
-		font-weight: 700;
-		letter-spacing: -0.01em;
-		white-space: nowrap;
-	}
-
-	.site-nav {
-		display: flex;
-		gap: 1.25rem;
-		font-size: 0.9375rem;
-		color: var(--color-muted-foreground);
-
-		& a:hover {
-			color: var(--color-foreground);
-		}
-
-		@media (width < 40rem) {
-			& .nav-wide {
+		@media (width < 640px) {
+			& nav .wide {
 				display: none;
 			}
 		}
 	}
 
-	.section {
-		padding-block: 4rem;
+	.brand {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		color: var(--text);
+		text-decoration: none;
+		font-size: 18px;
+		font-weight: 700;
+		font-stretch: 112%;
+		letter-spacing: -0.01em;
 
-		@media (width >= 48rem) {
-			padding-block: 4.5rem;
+		& img {
+			border-radius: 7px;
 		}
 	}
 
-	.section-title {
-		font-size: clamp(1.75rem, 1.35rem + 1.4vw, 2.375rem);
-		font-weight: 750;
-		letter-spacing: -0.025em;
-		line-height: 1.15;
-	}
-
-	.section-lead {
-		margin-top: 0.75rem;
-		max-width: 60ch;
-		color: var(--color-muted-foreground);
-		font-size: 1.0625rem;
-	}
-
-	.note {
-		margin-top: 1.5rem;
-		max-width: 72ch;
-		font-size: 0.9375rem;
-		color: var(--color-muted-foreground);
-	}
-
-	/* The first screen. */
+	/* The hero */
 	.hero {
-		padding-top: 3rem;
-		overflow-x: clip;
+		position: relative;
+		padding: clamp(48px, 9vw, 112px) 0 40px;
+		overflow: clip;
 
-		@media (width >= 48rem) {
-			padding-top: 5rem;
+		& .wrap {
+			position: relative;
+			z-index: 2;
+		}
+
+		& h1 {
+			font-size: clamp(38px, 4.6vw, 66px);
+			line-height: 1;
+			max-width: 12ch;
+			font-weight: 800;
+			font-stretch: 112%;
+			letter-spacing: -0.028em;
+		}
+
+		@media (width >= 1000px) {
+			min-height: min(780px, 92vh);
+			display: flex;
+			align-items: center;
 		}
 	}
 
-	/* The icon file is square, so the page rounds its corners. */
-	.app-icon {
-		border-radius: 22.5%;
+	.hero-copy {
+		@media (width >= 1000px) {
+			width: 44%;
+		}
 	}
 
-	.hero-title {
-		margin-top: 1.5rem;
-		font-size: clamp(2.5rem, 1.4rem + 4.6vw, 4.75rem);
-		font-weight: 800;
-		letter-spacing: -0.04em;
-		line-height: 1;
-	}
-
-	.hero-pitch {
-		margin-top: 1.25rem;
-		max-width: 30ch;
-		font-size: clamp(1.25rem, 1.05rem + 0.8vw, 1.75rem);
-		font-weight: 600;
-		letter-spacing: -0.015em;
-		line-height: 1.3;
-	}
-
-	.hero-lead {
-		margin-top: 0.875rem;
-		max-width: 54ch;
-		font-size: 1.0625rem;
-		color: var(--color-muted-foreground);
-	}
-
-	.hero-download {
-		margin-top: 2rem;
+	.lede {
+		margin-top: 24px;
+		max-width: 34em;
+		font-size: clamp(17px, 1.5vw, 19px);
+		color: #c3cad6;
 	}
 
 	/* The script in index.html sets data-os before the page draws. Without
@@ -313,356 +279,888 @@
 	:root[data-os="other"] .os-pick[data-for="other"],
 	:root[data-os="mac"] .os-pick[data-for="mac"],
 	:root[data-os="linux"] .os-pick[data-for="linux"],
+	:root[data-os="android"] .os-pick[data-for="android"],
 	:root[data-os="ios"] .os-pick[data-for="ios"] {
 		display: block;
 	}
 
-	.btn-row {
+	.cta {
+		margin-top: 32px;
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.75rem;
+		gap: 12px;
+		align-items: center;
+	}
 
-		@media (width < 30rem) {
-			& > .btn {
-				flex: 1 1 100%;
-			}
-		}
+	.cta-note {
+		margin-top: 14px;
+		max-width: 38em;
+		font-size: 14px;
+		color: var(--dim);
 	}
 
 	.btn {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.75rem;
-		min-height: 3.25rem;
-		padding: 0.625rem 1.25rem;
-		border-radius: var(--radius);
+		gap: 10px;
+		height: 52px;
+		padding: 0 22px;
+		border-radius: 12px;
+		text-decoration: none;
+		font-size: 16px;
 		font-weight: 650;
-		line-height: 1.25;
-		transition:
-			background-color 0.15s,
-			border-color 0.15s;
+
+		& svg {
+			width: 20px;
+			height: 20px;
+		}
+
+		& small {
+			font-size: 14px;
+			font-weight: 450;
+		}
 	}
 
-	.btn-primary {
-		background: hsl(var(--button));
-		color: #fff;
+	.btn-main {
+		background: var(--blue);
+		color: var(--blue-ink);
 
 		&:hover {
-			background: hsl(var(--button-hover));
+			background: var(--blue-hover);
+		}
+
+		& small {
+			opacity: 0.72;
+
+			@media (width < 480px) {
+				display: none;
+			}
 		}
 	}
 
-	.btn-secondary {
-		border: 1px solid var(--color-border);
-		background: var(--color-card);
+	.btn-alt {
+		background: var(--panel);
+		border: 1px solid var(--line);
+		color: var(--text);
 
 		&:hover {
-			border-color: var(--color-primary);
+			border-color: var(--blue);
+		}
+
+		& small {
+			color: var(--dim);
 		}
 	}
 
-	.btn-soon {
-		border: 1px dashed var(--color-border);
-		color: var(--color-muted-foreground);
-	}
+	.badge {
+		display: block;
+		height: 52px;
 
-	.btn-icon {
-		flex: none;
-		width: 1.25rem;
-		height: 1.25rem;
-	}
-
-	.btn-text {
-		display: flex;
-		flex-direction: column;
-	}
-
-	.btn-note {
-		font-size: 0.8125rem;
-		font-weight: 500;
-		font-variant-numeric: tabular-nums;
-	}
-
-	.hero-note {
-		margin-top: 0.875rem;
-		max-width: 62ch;
-		font-size: 0.9375rem;
-		color: var(--color-muted-foreground);
-
-		& a {
-			color: var(--color-primary);
-			text-decoration: underline;
-			text-underline-offset: 0.18em;
+		& img {
+			height: 100%;
+			width: auto;
 		}
 	}
 
-	/* The app on a screen, with the light a screen gives off in a dark room. */
-	.hero-shot {
+	/* The hero's TV guide. guide.ts builds it. */
+	.guide {
 		position: relative;
-		isolation: isolate;
-		margin-top: 3.5rem;
+		margin: 56px 0 0 var(--gutter);
 
-		&::before {
+		/* Beside the text, from just past 47% of the content's width to the
+		   edge of the window. */
+		@media (width >= 1000px) {
+			--wrap: min(1200px, 100% - 2 * var(--gutter));
+			position: absolute;
+			z-index: 1;
+			margin: 0;
+			left: calc((100% - var(--wrap)) / 2 + var(--wrap) * 0.47);
+			right: 0;
+			top: 50%;
+			translate: 0 -46%;
+		}
+	}
+
+	.guide-inner {
+		position: relative;
+		mask-image: linear-gradient(90deg, #000 80%, transparent);
+
+		@media (width < 1000px) {
+			mask-image: linear-gradient(90deg, #000 85%, transparent);
+		}
+	}
+
+	.ruler,
+	.row {
+		display: grid;
+		grid-template-columns: var(--chw) 1fr;
+	}
+
+	.ruler {
+		height: 30px;
+		font-size: 12px;
+		color: var(--dim);
+		font-stretch: 80%;
+		font-variant-numeric: tabular-nums;
+
+		& .track {
+			height: 100%;
+		}
+
+		& .track span {
+			position: absolute;
+			top: 6px;
+			translate: -50% 0;
+			white-space: nowrap;
+		}
+	}
+
+	.track {
+		position: relative;
+		overflow: hidden;
+	}
+
+	.row {
+		height: 52px;
+		align-items: center;
+
+		& .track {
+			height: 44px;
+		}
+
+		/* Phones show six channels. */
+		@media (width < 1000px) {
+			&:nth-child(n + 7 of .row) {
+				display: none;
+			}
+		}
+	}
+
+	.ch {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		min-width: 0;
+		padding-right: 12px;
+
+		& img {
+			width: 30px;
+			height: 30px;
+			border-radius: 6px;
+			flex: none;
+		}
+
+		& span {
+			min-width: 0;
+		}
+
+		& b {
+			display: block;
+			font-size: 14px;
+			font-weight: 600;
+			font-stretch: 90%;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+
+		& i {
+			display: block;
+			font-style: normal;
+			font-size: 12px;
+			color: var(--dim);
+			font-stretch: 85%;
+		}
+
+		@media (width < 1000px) {
+			& span {
+				display: none;
+			}
+		}
+	}
+
+	.prog {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		display: flex;
+		align-items: center;
+		padding: 0 12px;
+		border-radius: 8px;
+		background: var(--block);
+		border: 1px solid rgb(255 255 255 / 0.045);
+		color: #aab3c1;
+		font-size: 13px;
+		font-weight: 500;
+		font-stretch: 86%;
+		white-space: nowrap;
+		overflow: hidden;
+
+		& span {
+			position: relative;
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+
+		&.now {
+			background: #1d2a3d;
+			border-color: rgb(71 146 246 / 0.55);
+			color: #fff;
+
+			/* How much of the program has played, up to the red line. */
+			&::before {
+				content: "";
+				position: absolute;
+				inset: 0 auto 0 0;
+				width: var(--done);
+				background: rgb(71 146 246 / 0.42);
+			}
+		}
+	}
+
+	.nowline {
+		position: absolute;
+		top: 24px;
+		bottom: 0;
+		z-index: 3;
+		width: 2px;
+		border-radius: 2px;
+		background: var(--live);
+		box-shadow: 0 0 18px rgb(239 68 68 / 0.55);
+		transform-origin: top;
+
+		& span {
+			position: absolute;
+			top: -22px;
+			left: 50%;
+			translate: -50% 0;
+			padding: 2px 7px;
+			border-radius: 99px;
+			background: var(--live);
+			color: #fff;
+			font-size: 11px;
+			font-weight: 650;
+			font-stretch: 85%;
+			white-space: nowrap;
+		}
+	}
+
+	/* The app in a window, under the hero */
+	.showcase {
+		padding-top: 24px;
+		perspective: 1600px;
+	}
+
+	.window {
+		border-radius: 14px;
+		overflow: hidden;
+		background: var(--panel);
+		border: 1px solid #2b3340;
+		box-shadow:
+			0 60px 120px -30px rgb(0 0 0 / 0.8),
+			0 0 0 1px rgb(0 0 0 / 0.4);
+		transform-origin: 50% 0;
+
+		& > img {
+			display: block;
+			width: 100%;
+			height: auto;
+		}
+	}
+
+	.chrome {
+		height: 30px;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 0 12px;
+		background: #1b2028;
+		border-bottom: 1px solid #262d38;
+		font-size: 12px;
+		color: var(--dim);
+
+		& i {
+			width: 12px;
+			height: 12px;
+			border-radius: 50%;
+		}
+
+		& i:nth-child(1) {
+			background: #ff5f57;
+		}
+
+		& i:nth-child(2) {
+			background: #febc2e;
+		}
+
+		& i:nth-child(3) {
+			background: #28c840;
+		}
+
+		& span {
+			margin: 0 auto;
+			padding-right: 60px;
+		}
+	}
+
+	/* Sections */
+	.section {
+		padding-top: clamp(80px, 11vw, 150px);
+	}
+
+	.intro {
+		display: grid;
+		gap: 18px;
+		max-width: 760px;
+		margin-bottom: 48px;
+
+		& p {
+			max-width: 38em;
+			color: var(--soft);
+		}
+	}
+
+	.note {
+		margin-top: 20px;
+		font-size: 14px;
+		color: var(--dim);
+
+		& p + p {
+			margin-top: 8px;
+		}
+	}
+
+	/* Where it runs, drawn like the guide's channel column */
+	.devices {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+		border-top: 1px solid var(--line);
+
+		@media (width >= 760px) {
+			column-gap: 48px;
+		}
+	}
+
+	.device {
+		display: grid;
+		grid-template-columns: 44px 1fr auto;
+		gap: 16px;
+		align-items: center;
+		padding: 18px 4px;
+		border-bottom: 1px solid var(--line);
+
+		& svg {
+			width: 44px;
+			height: 44px;
+			padding: 10px;
+			border-radius: 10px;
+			background: var(--panel);
+			border: 1px solid var(--line);
+			color: var(--blue);
+		}
+
+		& b {
+			display: block;
+			font-weight: 650;
+			font-stretch: 104%;
+		}
+
+		& small {
+			display: block;
+			color: var(--dim);
+			font-size: 14px;
+		}
+
+		& a,
+		& em {
+			font-size: 14px;
+			font-weight: 600;
+			font-style: normal;
+			white-space: nowrap;
+			text-decoration: none;
+		}
+
+		& em {
+			color: var(--dim);
+			font-weight: 500;
+		}
+	}
+
+	/* Features: the text scrolls on the left while the app stays on the right */
+	.stage {
+		display: grid;
+		gap: 40px;
+
+		@media (width >= 1000px) {
+			grid-template-columns: 5fr 7fr;
+			gap: 64px;
+			align-items: start;
+		}
+	}
+
+	.steps {
+		display: grid;
+		gap: 64px;
+
+		@media (width >= 1000px) {
+			gap: 0;
+		}
+	}
+
+	.step {
+		display: grid;
+		gap: 14px;
+		align-content: center;
+
+		& p {
+			max-width: 31em;
+			color: var(--soft);
+		}
+
+		& .shot {
+			margin: 18px auto 0;
+			width: min(64%, 300px);
+
+			&.land {
+				width: 100%;
+			}
+		}
+
+		@media (width >= 1000px) {
+			min-height: 78vh;
+
+			& .shot {
+				display: none;
+			}
+		}
+	}
+
+	.bar-track {
+		width: 180px;
+		height: 4px;
+		border-radius: 4px;
+		background: var(--block);
+		overflow: hidden;
+	}
+
+	.bar-fill {
+		height: 100%;
+		background: var(--blue);
+		transform-origin: left;
+		scale: 0.35 1;
+	}
+
+	/* Below the header, the window stays in the middle of the screen. */
+	.stage-view {
+		display: none;
+
+		@media (width >= 1000px) {
+			display: flex;
+			flex-direction: column;
+			justify-content: center;
+			position: sticky;
+			top: 60px;
+			height: calc(100vh - 60px);
+		}
+	}
+
+	.frames {
+		position: relative;
+		aspect-ratio: 1600 / 1000;
+
+		& img {
+			position: absolute;
+			inset: 0;
+			width: 100%;
+			height: 100%;
+			object-fit: cover;
+			opacity: 0;
+			transition: opacity 0.5s ease;
+
+			@media (prefers-reduced-motion: reduce) {
+				transition: none;
+			}
+		}
+
+		& img.on {
+			opacity: 1;
+		}
+	}
+
+	/* Phones and TVs */
+	/* The bezel is the screen's margin, since a margin counts from the phone's
+	   own width and padding would count from its parent's. */
+	.handset {
+		border-radius: 17% / 7.8%;
+		background: linear-gradient(150deg, #6b6e74, #1a1b1e 40%, #3a3c41 80%, #73767c);
+		box-shadow:
+			0 40px 70px -20px rgb(0 0 0 / 0.85),
+			inset 0 0 0 1px rgb(255 255 255 / 0.08);
+
+		& img {
+			display: block;
+			width: 93.6%;
+			height: auto;
+			margin: 3.2%;
+			border-radius: 14% / 6.4%;
+		}
+
+		&.land {
+			border-radius: 7.8% / 17%;
+
+			& img {
+				width: 97%;
+				margin: 1.5%;
+				border-radius: 6.4% / 14%;
+			}
+		}
+	}
+
+	.duo {
+		display: grid;
+		gap: 48px;
+		align-items: center;
+
+		& .intro {
+			margin: 0;
+		}
+
+		@media (width >= 1000px) {
+			grid-template-columns: 5fr 7fr;
+			gap: 64px;
+		}
+	}
+
+	.duo-art {
+		position: relative;
+		padding-bottom: 8%;
+
+		& .handset {
+			position: absolute;
+			right: 3%;
+			bottom: -10%;
+			width: 30%;
+		}
+
+		/* The phone covers the right of the TV. */
+		& .tv-ui {
+			right: 37%;
+		}
+	}
+
+	.tv {
+		position: relative;
+		padding: 1.1%;
+		border-radius: 10px;
+		background: linear-gradient(#2a2f37, #15181d);
+		box-shadow: 0 50px 100px -30px rgb(0 0 0 / 0.8);
+
+		& img {
+			display: block;
+			width: 100%;
+			height: auto;
+			aspect-ratio: 16 / 9;
+			object-fit: cover;
+			border-radius: 4px;
+		}
+
+		&::after {
 			content: "";
 			position: absolute;
-			inset: 6% 4% -6%;
-			z-index: -1;
-			background: radial-gradient(closest-side, hsl(var(--primary) / 0.35), transparent);
-			filter: blur(48px);
-		}
-
-		& img {
-			width: 100%;
-			height: auto;
-			border: 1px solid var(--color-border);
-			border-radius: calc(var(--radius) + 0.25rem);
-			box-shadow: 0 2rem 4rem -1.5rem hsl(220 40% 2% / 0.45);
+			left: 50%;
+			bottom: -26px;
+			width: 22%;
+			height: 26px;
+			translate: -50% 0;
+			background: linear-gradient(#1c2027, #0c0e11);
+			clip-path: polygon(30% 0, 70% 0, 100% 100%, 0 100%);
 		}
 	}
 
-	.why-grid {
+	.tv-ui {
+		position: absolute;
+		left: 4%;
+		right: 4%;
+		bottom: 7%;
 		display: grid;
-		gap: 2.5rem;
-		margin-top: 2.5rem;
+		gap: 6px;
+		font-size: clamp(9px, 1.1vw, 13px);
 
-		@media (width >= 56rem) {
-			grid-template-columns: repeat(3, minmax(0, 1fr));
-			gap: 3rem;
-		}
-
-		& h3 {
-			font-size: 1.25rem;
-			font-weight: 700;
-			letter-spacing: -0.01em;
-		}
-
-		& h3 + p {
-			margin-top: 0.625rem;
-		}
-	}
-
-	.feature-grid {
-		display: grid;
-		gap: 2.5rem 3rem;
-		margin-top: 2.5rem;
-
-		@media (width >= 48rem) {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-
-		& h3 {
-			margin-bottom: 1rem;
-			padding-bottom: 0.625rem;
-			border-bottom: 1px solid var(--color-border);
-			font-size: 1.125rem;
-			font-weight: 700;
-		}
-	}
-
-	.shot-grid {
-		display: grid;
-		gap: 2rem 1.5rem;
-		margin-top: 2.5rem;
-
-		@media (width >= 48rem) {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-
-		& img {
-			width: 100%;
-			height: auto;
-			border: 1px solid var(--color-border);
-			border-radius: var(--radius);
-		}
-
-		& figcaption {
-			margin-top: 0.625rem;
-			font-size: 0.9375rem;
-			color: var(--color-muted-foreground);
-		}
-	}
-
-	/* Downloads. The sizes are the thing to read here, so they're the largest
-	   text in each row. */
-	.band {
-		border-block: 1px solid var(--color-border);
-		background: var(--color-card);
-	}
-
-	.release-meta {
-		margin-top: 0.75rem;
-		font-size: 1.0625rem;
-		color: var(--color-muted-foreground);
-
-		& a {
-			color: var(--color-primary);
-			text-decoration: underline;
-			text-underline-offset: 0.18em;
-		}
-	}
-
-	.platforms {
-		display: grid;
-		gap: 2.5rem 2rem;
-		margin-top: 2.5rem;
-
-		@media (width >= 48rem) {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-
-		@media (width >= 64rem) {
-			grid-template-columns: repeat(3, minmax(0, 1fr));
-		}
-	}
-
-	.platform h3 {
-		font-size: 1.25rem;
-		font-weight: 700;
-	}
-
-	.requirement,
-	.platform-note {
-		font-size: 0.9375rem;
-		color: var(--color-muted-foreground);
-	}
-
-	.platform-note {
-		margin-top: 0.75rem;
-	}
-
-	.file-list,
-	.later-list {
-		display: grid;
-		gap: 0.625rem;
-		margin-top: 1rem;
-	}
-
-	.file-row {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		grid-template-areas:
-			"label size"
-			"name size";
-		align-items: center;
-		column-gap: 1rem;
-		padding: 0.875rem 1rem;
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius);
-		background: var(--color-background);
-		transition: border-color 0.15s;
-
-		&:hover {
-			border-color: var(--color-primary);
-		}
-	}
-
-	.file-label {
-		grid-area: label;
-		font-weight: 650;
-	}
-
-	.file-name {
-		grid-area: name;
-		font-size: 0.8125rem;
-		color: var(--color-muted-foreground);
-		/* render.ts lets the name break after its underscore, and a long one can
-		   break anywhere after that. */
-		overflow-wrap: anywhere;
-	}
-
-	.file-size {
-		grid-area: size;
-		font-size: 1.5rem;
-		font-weight: 750;
-		font-variant-numeric: tabular-nums;
-		letter-spacing: -0.02em;
-		white-space: nowrap;
-		color: var(--color-primary);
-	}
-
-	.later-list li {
-		display: flex;
-		flex-wrap: wrap;
-		justify-content: space-between;
-		gap: 0.25rem 1rem;
-		padding: 0.875rem 1rem;
-		border: 1px dashed var(--color-border);
-		border-radius: var(--radius);
-		color: var(--color-muted-foreground);
-
-		& span:first-child {
-			color: var(--color-foreground);
+		& b {
 			font-weight: 650;
 		}
 	}
 
+	.seek {
+		height: 4px;
+		border-radius: 4px;
+		background: rgb(255 255 255 / 0.3);
+
+		& i {
+			display: block;
+			width: 47%;
+			height: 100%;
+			border-radius: 4px;
+			background: #fff;
+		}
+	}
+
+	/* What's in the app */
+	.groups {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+		gap: 40px 48px;
+
+		& > div {
+			padding-top: 22px;
+			border-top: 1px solid var(--line);
+		}
+
+		& h3 {
+			font-size: 18px;
+		}
+
+		& ul {
+			margin-top: 12px;
+			padding-left: 1.1em;
+			list-style: disc;
+			color: var(--soft);
+			font-size: 16px;
+		}
+
+		& li + li {
+			margin-top: 8px;
+		}
+
+		& li::marker {
+			color: var(--dim);
+		}
+	}
+
+	/* Privacy */
+	.facts {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+		gap: 0 40px;
+		border-top: 1px solid var(--line);
+
+		& div {
+			display: grid;
+			gap: 6px;
+			padding: 22px 0;
+			border-bottom: 1px solid var(--line);
+		}
+
+		& b {
+			font-weight: 650;
+			font-stretch: 104%;
+		}
+
+		& span {
+			color: var(--dim);
+			font-size: 15px;
+		}
+	}
+
+	/* Downloads. render.ts builds the rows. */
+	.release-meta {
+		color: var(--soft);
+	}
+
+	.dl {
+		border-top: 1px solid var(--line);
+	}
+
+	.dl-row {
+		display: grid;
+		gap: 10px 24px;
+		padding: 22px 0;
+		border-bottom: 1px solid var(--line);
+		align-items: center;
+
+		& h3 {
+			font-size: 19px;
+		}
+
+		& .req {
+			color: var(--dim);
+			font-size: 15px;
+		}
+
+		& .badge {
+			height: 44px;
+		}
+
+		@media (width >= 860px) {
+			grid-template-columns: 300px 1fr;
+		}
+	}
+
+	.files {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+
+	.file {
+		display: inline-flex;
+		align-items: baseline;
+		gap: 8px;
+		padding: 9px 14px;
+		border-radius: 10px;
+		background: var(--panel);
+		border: 1px solid var(--line);
+		color: var(--text);
+		text-decoration: none;
+		font-size: 15px;
+		font-weight: 600;
+
+		&:hover {
+			border-color: var(--blue);
+		}
+
+		& small {
+			color: var(--dim);
+			font-size: 13px;
+			font-weight: 450;
+		}
+
+		&.main {
+			background: var(--blue);
+			border-color: var(--blue);
+			color: var(--blue-ink);
+
+			&:hover {
+				background: var(--blue-hover);
+			}
+
+			& small {
+				color: rgb(6 17 31 / 0.7);
+			}
+		}
+	}
+
+	.dl-note {
+		margin-top: 10px;
+		font-size: 14px;
+		color: var(--dim);
+	}
+
 	.checksums {
-		margin-top: 2.5rem;
-		font-size: 0.875rem;
-		color: var(--color-muted-foreground);
+		margin-top: 20px;
+		font-size: 14px;
+		color: var(--dim);
 
 		& summary {
-			width: fit-content;
+			font-weight: 600;
 		}
 
 		& dl {
 			display: grid;
-			gap: 0.75rem;
-			margin-top: 1rem;
+			gap: 12px;
+			margin-top: 14px;
 		}
 
 		& dt {
-			color: var(--color-foreground);
+			color: var(--text);
 			font-weight: 600;
 		}
 
 		& code {
-			font-size: 0.8125rem;
+			font-size: 13px;
 			word-break: break-all;
 		}
 	}
 
-	.install-grid {
+	/* Installing */
+	.install {
 		display: grid;
-		/* minmax keeps a long command in a pre from widening the page. */
-		grid-template-columns: minmax(0, 1fr);
-		gap: 3rem;
-		margin-top: 2.5rem;
-
-		@media (width >= 56rem) {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
+		gap: 56px 64px;
+		color: var(--soft);
 
 		& h3 {
-			font-size: 1.125rem;
-			font-weight: 700;
+			margin-bottom: 12px;
+			color: var(--text);
 		}
 
-		& h3 + * {
-			margin-top: 0.5rem;
+		& p + p,
+		& p + ol,
+		& ol + p,
+		& p + pre,
+		& pre + p {
+			margin-top: 12px;
 		}
 
-		& * + h3 {
-			margin-top: 2rem;
+		& ol {
+			padding-left: 1.3em;
+			list-style: decimal;
 		}
 
-		& .disclosure {
-			border-top: 1px solid var(--color-border);
+		& li + li {
+			margin-top: 8px;
 		}
 	}
 
-	/* Questions and the Gatekeeper help open in place. */
 	.disclosure {
-		border-bottom: 1px solid var(--color-border);
+		margin-top: 14px;
 
-		& > summary {
-			display: flex;
-			align-items: center;
-			justify-content: space-between;
-			gap: 1rem;
-			padding-block: 1.125rem;
-			font-weight: 650;
+		& summary {
+			color: var(--blue);
+			font-weight: 600;
+		}
+
+		& summary + p {
+			margin-top: 12px;
+		}
+	}
+
+	/* Getting started: three steps in order */
+	.start {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+		gap: 32px 48px;
+		counter-reset: step;
+		color: var(--soft);
+
+		& li {
+			padding-top: 20px;
+			border-top: 1px solid var(--line);
+			counter-increment: step;
+		}
+
+		& li::before {
+			content: counter(step);
+			display: block;
+			margin-bottom: 14px;
+			color: var(--blue);
+			font-size: 40px;
+			font-weight: 760;
+			font-stretch: 116%;
+			line-height: 1;
+		}
+
+		& strong {
+			color: var(--text);
+		}
+	}
+
+	/* Questions */
+	.faq {
+		max-width: 860px;
+		border-top: 1px solid var(--line);
+
+		& details {
+			border-bottom: 1px solid var(--line);
+		}
+
+		& summary {
+			position: relative;
+			padding: 20px 40px 20px 0;
 			list-style: none;
+			font-size: 18px;
+			font-weight: 600;
+			font-stretch: 104%;
 
 			&::-webkit-details-marker {
 				display: none;
@@ -670,104 +1168,115 @@
 
 			&::after {
 				content: "";
-				flex: none;
-				width: 0.55rem;
-				height: 0.55rem;
-				margin-right: 0.25rem;
-				border-right: 2px solid var(--color-muted-foreground);
-				border-bottom: 2px solid var(--color-muted-foreground);
-				transform: translateY(-25%) rotate(45deg);
+				position: absolute;
+				right: 6px;
+				top: 50%;
+				width: 10px;
+				height: 10px;
+				border-right: 2px solid var(--dim);
+				border-bottom: 2px solid var(--dim);
+				transform: translateY(-70%) rotate(45deg);
 				transition: transform 0.2s;
 			}
 		}
 
-		&[open] > summary::after {
-			transform: translateY(25%) rotate(-135deg);
+		& details[open] summary::after {
+			transform: translateY(-30%) rotate(225deg);
 		}
 
-		& > .answer {
-			padding-bottom: 1.25rem;
-			max-width: 72ch;
+		& p {
+			max-width: 44em;
+			padding-bottom: 22px;
+			color: var(--soft);
 		}
 
-		@media (prefers-reduced-motion: reduce) {
-			& > summary::after {
-				transition: none;
-			}
-		}
-	}
-
-	.disclosure-list {
-		margin-top: 2rem;
-		border-top: 1px solid var(--color-border);
-
-		& summary {
-			font-size: 1.0625rem;
+		& p + p {
+			margin-top: -10px;
 		}
 	}
 
-	.steps {
-		display: grid;
-		gap: 1.25rem;
-		max-width: 46rem;
-		margin-top: 2rem;
-		counter-reset: step;
-
-		& li {
-			display: grid;
-			grid-template-columns: 2rem minmax(0, 1fr);
-			gap: 0.75rem;
-			counter-increment: step;
-
-			&::before {
-				content: counter(step);
-				font-size: 1.375rem;
-				font-weight: 800;
-				line-height: 1.3;
-				color: var(--color-primary);
-				font-variant-numeric: tabular-nums;
-			}
-		}
-	}
-
+	/* Privacy, contributing, disclaimer and license */
 	.fine-print {
 		display: grid;
-		gap: 3rem;
+		gap: 48px 64px;
+		padding-top: 48px;
+		border-top: 1px solid var(--line);
+		font-size: 15px;
+		color: var(--soft);
 
-		@media (width >= 64rem) {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-			gap: 4rem;
+		& h2 {
+			margin-bottom: 12px;
+			font-size: 22px;
+			color: var(--text);
 		}
 
-		& .section-title {
-			font-size: clamp(1.375rem, 1.2rem + 0.6vw, 1.75rem);
+		& p + p,
+		& p + ul,
+		& ul + p {
+			margin-top: 12px;
 		}
 
-		& .copy {
-			margin-top: 1rem;
-			font-size: 0.9375rem;
+		& ul {
+			padding-left: 1.2em;
+			list-style: disc;
 		}
-	}
 
-	.site-footer {
-		padding-block: 2.5rem 3rem;
-		border-top: 1px solid var(--color-border);
-		font-size: 0.9375rem;
-		color: var(--color-muted-foreground);
-	}
+		& li + li {
+			margin-top: 6px;
+		}
 
-	.footer-nav {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.75rem 1.5rem;
-		color: var(--color-foreground);
-
-		& a:hover {
-			color: var(--color-primary);
+		@media (width >= 860px) {
+			grid-template-columns: 1fr 1fr;
 		}
 	}
 
-	.footer-credit {
-		margin-top: 1.25rem;
+	footer {
+		margin-top: clamp(80px, 11vw, 150px);
+		padding: 40px 0 calc(48px + env(safe-area-inset-bottom, 0px));
+		border-top: 1px solid var(--line);
+		font-size: 14px;
+		color: var(--dim);
+
+		& .wrap {
+			display: grid;
+			gap: 16px;
+		}
+
+		& nav {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px 22px;
+		}
+
+		& nav a {
+			color: var(--text);
+			text-decoration: none;
+		}
+	}
+}
+
+/* The one moment on load: the guide fills in row by row, then the red line
+   drops in. Nothing is hidden when motion is off. */
+@media (prefers-reduced-motion: no-preference) {
+	.prog {
+		animation: prog-in 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+		animation-delay: calc(0.15s + var(--r) * 0.06s);
+	}
+
+	.nowline {
+		animation: line-in 0.7s cubic-bezier(0.3, 0.8, 0.2, 1) 0.75s backwards;
+	}
+}
+
+@keyframes prog-in {
+	from {
+		opacity: 0;
+		translate: 18px 0;
+	}
+}
+
+@keyframes line-in {
+	from {
+		scale: 1 0;
 	}
 }

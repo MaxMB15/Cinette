@@ -28,106 +28,139 @@ exports[`renderChecksums lists each file that has a checksum 1`] = `
 <code>dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd</code>
 </dd>
 </div>
+<div>
+<dt>Cinette_armeabi-v7a.apk</dt>
+<dd>
+<code>ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff</code>
+</dd>
+</div>
+<div>
+<dt>Cinette_arm64-v8a.apk</dt>
+<dd>
+<code>0000000000000000000000000000000000000000000000000000000000000000</code>
+</dd>
+</div>
 </dl>
 </details>"
 `;
 
 exports[`renderHero offers each system its own download 1`] = `
 "<div class="os-pick" data-for="mac">
-<div class="btn-row">
-<a class="btn btn-primary" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_aarch64.dmg">
-<svg class="btn-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<div class="cta">
+<a class="btn btn-main" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_aarch64.dmg">
+<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
 <path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>
-</svg>
-<span class="btn-text">
-<span class="btn-title">Download for Mac</span>
-<span class="btn-note">Apple Silicon, 70.1 MB</span>
-</span>
+</svg>Download for Mac <small>Apple Silicon, 70.1 MB</small>
 </a>
-<a class="btn btn-secondary" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_x64.dmg">
-<span class="btn-text">
-<span class="btn-title">Intel Mac</span>
-<span class="btn-note">72.3 MB</span>
-</span>
+<a class="badge" href="https://apps.apple.com/us/app/cinette/id6824008116">
+<img src="./img/app-store-badge.svg" alt="Download on the App Store" width="156" height="52">
 </a>
 </div>
-<p class="hero-note">Version 1.2.3 for macOS 15 Sequoia or later. About This Mac in the Apple menu shows which chip your Mac has.</p>
+<p class="cta-note">Version 1.2.3 for macOS 15 Sequoia or later. For an Intel Mac, <a href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_x64.dmg">download the Intel build</a> (72.3 MB).</p>
 </div>
 <div class="os-pick" data-for="linux">
-<div class="btn-row">
-<a class="btn btn-primary" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.AppImage">
-<svg class="btn-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<div class="cta">
+<a class="btn btn-main" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.AppImage">
+<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
 <path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>
-</svg>
-<span class="btn-text">
-<span class="btn-title">Download for Linux</span>
-<span class="btn-note">AppImage, 181.2 MB</span>
-</span>
+</svg>Download for Linux <small>AppImage, 181.2 MB</small>
+</a>
+<a class="badge" href="https://apps.apple.com/us/app/cinette/id6824008116">
+<img src="./img/app-store-badge.svg" alt="Download on the App Store" width="156" height="52">
 </a>
 </div>
-<p class="hero-note">Version 1.2.3 for x86_64. Packages for Debian, Ubuntu and Fedora are under <a href="#download">Download</a>.</p>
+<p class="cta-note">Version 1.2.3 for x86_64. Packages for Debian, Ubuntu and Fedora are under <a href="#download">Download</a>.</p>
+</div>
+<div class="os-pick" data-for="android">
+<div class="cta">
+<a class="btn btn-main" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_arm64-v8a.apk">
+<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+<path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>
+</svg>Download for Android <small>Phone and tablet, 101.2 MB</small>
+</a>
+<a class="btn btn-alt" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_armeabi-v7a.apk">TV and Fire TV <small>98.8 MB</small>
+</a>
+</div>
+<p class="cta-note">Version 1.2.3 for Android 9 or later. A TV takes an app like Downloader to install it, as <a href="#install-tv">the TV steps</a> show.</p>
 </div>
 <div class="os-pick" data-for="ios">
-<div class="btn-row">
-<span class="btn btn-soon">Coming soon to the App Store</span>
+<div class="cta">
+<a class="badge" href="https://apps.apple.com/us/app/cinette/id6824008116">
+<img src="./img/app-store-badge.svg" alt="Download on the App Store" width="156" height="52">
+</a>
 </div>
-<p class="hero-note">The iPhone and iPad app is on its way. Version 1.2.3 is out for <a href="#download">macOS and Linux</a>.</p>
+<p class="cta-note">Free on the App Store for iOS and iPadOS 17.5 or later. Version 1.2.3 is also out for <a href="#download">Mac, Linux and Android</a>.</p>
 </div>
 <div class="os-pick" data-for="other">
-<div class="btn-row">
-<a class="btn btn-primary" href="#download">See all downloads</a>
+<div class="cta">
+<a class="btn btn-main" href="#download">See all downloads</a>
+<a class="badge" href="https://apps.apple.com/us/app/cinette/id6824008116">
+<img src="./img/app-store-badge.svg" alt="Download on the App Store" width="156" height="52">
+</a>
 </div>
-<p class="hero-note">Version 1.2.3 is out for macOS and Linux. Windows and Android are planned.</p>
+<p class="cta-note">Version 1.2.3 is out for Mac, Linux and Android, and the iPhone and iPad app is on the App Store.</p>
 </div>"
 `;
 
 exports[`renderPlatforms lists each file with its size 1`] = `
-"<div class="platform">
-<h3>macOS</h3>
-<p class="requirement">macOS 15 Sequoia or later</p>
-<ul class="file-list">
-<li>
-<a class="file-row" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_aarch64.dmg">
-<span class="file-label">Apple Silicon</span>
-<span class="file-name">Cinette_<wbr>aarch64.dmg</span>
-<span class="file-size">70.1 MB</span>
-</a>
-</li>
-<li>
-<a class="file-row" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_x64.dmg">
-<span class="file-label">Intel</span>
-<span class="file-name">Cinette_<wbr>x64.dmg</span>
-<span class="file-size">72.3 MB</span>
-</a>
-</li>
-</ul>
-<p class="platform-note">Pick the build for your Mac's chip, which About This Mac shows.</p>
+"<div class="dl-row">
+<div>
+<h3>Mac</h3>
+<p class="req">macOS 15 Sequoia or later</p>
 </div>
-<div class="platform">
+<div>
+<div class="files">
+<a class="file main" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_aarch64.dmg">Apple Silicon <small>70.1 MB</small>
+</a>
+<a class="file" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_x64.dmg">Intel <small>72.3 MB</small>
+</a>
+</div>
+<p class="dl-note">Pick the build for your Mac's chip, which About This Mac shows.</p>
+</div>
+</div>
+<div class="dl-row">
+<div>
+<h3>iPhone and iPad</h3>
+<p class="req">iOS and iPadOS 17.5 or later</p>
+</div>
+<div>
+<div class="files">
+<a class="badge" href="https://apps.apple.com/us/app/cinette/id6824008116">
+<img src="./img/app-store-badge.svg" alt="Download on the App Store" width="156" height="52">
+</a>
+</div>
+</div>
+</div>
+<div class="dl-row">
+<div>
 <h3>Linux</h3>
-<p class="requirement">x86_64</p>
-<ul class="file-list">
-<li>
-<a class="file-row" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.AppImage">
-<span class="file-label">AppImage</span>
-<span class="file-name">Cinette_<wbr>amd64.AppImage</span>
-<span class="file-size">181.2 MB</span>
+<p class="req">x86_64</p>
+</div>
+<div>
+<div class="files">
+<a class="file main" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.AppImage">AppImage <small>181.2 MB</small>
 </a>
-</li>
-<li>
-<a class="file-row" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.deb">
-<span class="file-label">Debian and Ubuntu</span>
-<span class="file-name">Cinette_<wbr>amd64.deb</span>
-<span class="file-size">41.2 MB</span>
+<a class="file" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.deb">Debian and Ubuntu <small>41.2 MB</small>
 </a>
-</li>
-<li>
-<a class="file-row" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_x86_64.rpm">
-<span class="file-label">Fedora</span>
-<span class="file-name">Cinette_<wbr>x86_64.rpm</span>
-<span class="file-size">41.2 MB</span>
+<a class="file" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_x86_64.rpm">Fedora <small>41.2 MB</small>
 </a>
-</li>
-</ul>
+</div>
+</div>
+</div>
+<div class="dl-row">
+<div>
+<h3>Fire TV, Google TV and Android</h3>
+<p class="req">Android 9 or later, Fire OS 7 or later</p>
+</div>
+<div>
+<div class="files">
+<a class="file main" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_armeabi-v7a.apk">TV and Fire TV <small>98.8 MB</small>
+</a>
+<a class="file" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_arm64-v8a.apk">Phone and tablet <small>101.2 MB</small>
+</a>
+</div>
+<p class="dl-note">A TV takes an app like Downloader to install it. <a href="#install-tv">Read the TV steps</a>
+</p>
+</div>
 </div>"
 `;

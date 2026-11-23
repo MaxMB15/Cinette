@@ -20,7 +20,6 @@ on:
     branches: [main, dev]
     paths:
       - "site/**"
-      - "docs/images/**"
       - "apps/player/src-tauri/icons/**"
       - "README.md"
       - "pnpm-lock.yaml"
@@ -31,7 +30,6 @@ on:
     branches: [main]
     paths:
       - "site/**"
-      - "docs/images/**"
       - "apps/player/src-tauri/icons/**"
       - "README.md"
       - "pnpm-lock.yaml"

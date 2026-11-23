@@ -78,6 +78,18 @@ test("parseRelease keeps the tag, the date and each file's name, size, checksum 
 			},
 			{ name: "Cinette_x86_64.rpm", size: 41239999, digest: null, state: "uploaded" },
 			{
+				name: "Cinette_armeabi-v7a.apk",
+				size: 98765432,
+				digest: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+				state: "uploaded",
+			},
+			{
+				name: "Cinette_arm64-v8a.apk",
+				size: 101234567,
+				digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+				state: "uploaded",
+			},
+			{
 				name: "Cinette_linux.tar.gz",
 				size: 180000000,
 				digest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
@@ -426,6 +438,8 @@ test("FILES lists the downloads in the order the page shows them", () => {
 		["appimage", "linux", "AppImage", "amd64.AppImage"],
 		["deb", "linux", "Debian and Ubuntu", "amd64.deb"],
 		["rpm", "linux", "Fedora", "x86_64.rpm"],
+		["android-tv", "android", "TV and Fire TV", "armeabi-v7a.apk"],
+		["android-phone", "android", "Phone and tablet", "arm64-v8a.apk"],
 	]);
 });
 
@@ -473,6 +487,20 @@ test("pickDownloads links each file the release has in that release", () => {
 			url: "https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_x86_64.rpm",
 			bytes: 41239999,
 			sha256: null,
+		},
+		{
+			...FILES[5],
+			file: "Cinette_armeabi-v7a.apk",
+			url: "https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_armeabi-v7a.apk",
+			bytes: 98765432,
+			sha256: "f".repeat(64),
+		},
+		{
+			...FILES[6],
+			file: "Cinette_arm64-v8a.apk",
+			url: "https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_arm64-v8a.apk",
+			bytes: 101234567,
+			sha256: "0".repeat(64),
 		},
 	]);
 });

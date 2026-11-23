@@ -4,32 +4,46 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Cinette</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<title>Cinette: Free IPTV Player for Mac, iPhone, Android and Linux</title>
 		<meta
 			name="description"
-			content="A fast, private IPTV player for macOS and Linux. Add your M3U playlist or Xtream Codes account and watch live TV, movies and series in one app."
+			content="A free, open-source IPTV player for Mac, iPhone, iPad, Linux, Android and Fire TV. Add an M3U playlist or Xtream Codes login and watch live TV, movies and series."
 		/>
-		<meta name="color-scheme" content="light dark" />
-		<meta name="theme-color" content="#f9fafb" media="(prefers-color-scheme: light)" />
-		<meta name="theme-color" content="#0f1114" media="(prefers-color-scheme: dark)" />
+		<meta name="color-scheme" content="dark" />
+		<meta name="theme-color" content="#0f1318" />
 		<link rel="canonical" href="https://maxmb15.github.io/Cinette/" />
 		<meta property="og:type" content="website" />
-		<meta property="og:title" content="Cinette" />
+		<meta property="og:site_name" content="Cinette" />
+		<meta property="og:title" content="Cinette: a free IPTV player" />
 		<meta
 			property="og:description"
-			content="A fast, private IPTV player for macOS and Linux. Add your M3U playlist or Xtream Codes account and watch live TV, movies and series in one app."
+			content="Live TV, movies and series from your own M3U playlist or Xtream Codes login, on Mac, iPhone, iPad, Linux, Android and Fire TV."
 		/>
 		<meta property="og:url" content="https://maxmb15.github.io/Cinette/" />
-		<meta property="og:image" content="https://maxmb15.github.io/Cinette/assets/channels.jpg" />
+		<meta property="og:image" content="https://maxmb15.github.io/Cinette/og.png" />
+		<meta property="og:image:width" content="1200" />
+		<meta property="og:image:height" content="630" />
+		<meta
+			property="og:image:alt"
+			content="Cinette's TV guide next to the app on a Mac and an iPhone"
+		/>
 		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="apple-itunes-app" content="app-id=6824008116" />
+		<link rel="icon" type="image/svg+xml" href="../apps/player/src-tauri/icons/icon.svg" />
 		<link rel="icon" type="image/png" href="../apps/player/src-tauri/icons/32x32.png" />
+		<link
+			rel="apple-touch-icon"
+			href="../apps/player/src-tauri/icons/ios/AppIcon-60x60@3x.png"
+		/>
 		<link rel="stylesheet" href="./src/styles.css" />
+		<!-- release:jsonld -->
 		<script>
 			// Shows the download buttons for the visitor's system before the page
 			// draws. iPads ask for the Mac site, so a Mac with a touch screen is an
-			// iPad. Phones, TVs and Chromebooks that say Linux get every download,
-			// as they do without this script.
+			// iPad. Android covers Fire TV, whose browser says Android too. TVs,
+			// ChromeOS and Linux phones that say Linux get every download, as they
+			// do without this script.
 			(() => {
 				const ua = navigator.userAgent;
 				const apple = /Macintosh|iPhone|iPad|iPod/.test(ua);
@@ -38,21 +52,23 @@
 						? "ios"
 						: apple
 							? "mac"
-							: /Linux|X11/.test(ua) &&
-								  !/Android|CrOS|SmartTV|SMART-TV|Tizen|Web0S|Mobile/.test(ua)
-								? "linux"
-								: "other";
+							: /Android/.test(ua)
+								? "android"
+								: /Linux|X11/.test(ua) &&
+									  !/CrOS|SmartTV|SMART-TV|Tizen|Web0S|Mobile/.test(ua)
+									? "linux"
+									: "other";
 			})();
 		</script>
+		<script type="module" src="./src/main.ts"></script>
 	</head>
 	<body>
 		<a class="skip-link" href="#main">Skip to the content</a>
 
-		<header class="site-header">
-			<div class="wrap header-inner">
+		<header class="bar">
+			<div class="wrap">
 				<a class="brand" href="#top">
 					<img
-						class="app-icon"
 						src="../apps/player/src-tauri/icons/64x64.png"
 						width="28"
 						height="28"
@@ -60,11 +76,11 @@
 					/>
 					Cinette
 				</a>
-				<nav class="site-nav" aria-label="Sections">
-					<a class="nav-wide" href="#features">Features</a>
-					<a href="#download">Download</a>
-					<a class="nav-wide" href="#faq">FAQ</a>
-					<a href="https://github.com/MaxMB15/Cinette">GitHub</a>
+				<nav aria-label="Sections">
+					<a class="wide" href="#features">Features</a>
+					<a class="wide" href="#faq">FAQ</a>
+					<a class="wide" href="https://github.com/MaxMB15/Cinette">GitHub</a>
+					<a class="get" href="#download">Download</a>
 				</nav>
 			</div>
 		</header>
@@ -72,87 +88,147 @@
 		<main id="main">
 			<section class="hero" id="top" aria-labelledby="title">
 				<div class="wrap">
-					<img
-						class="app-icon"
-						src="../apps/player/src-tauri/icons/128x128@2x.png"
-						width="88"
-						height="88"
-						alt=""
-					/>
-					<h1 class="hero-title" id="title">Cinette</h1>
-					<p class="hero-pitch">A fast, private IPTV player for macOS and Linux.</p>
-					<p class="hero-lead">
-						Add your M3U playlist or Xtream Codes account and watch live TV, movies and
-						series in one app. It's open source, with no accounts, ads or tracking.
-					</p>
-					<div class="hero-download">
+					<div class="hero-copy">
+						<h1 id="title">Live TV, movies and series from your own playlist</h1>
+						<p class="lede">
+							Cinette is a free, open-source IPTV player for Mac, iPhone, iPad, Linux,
+							Android and Fire TV. Add an M3U playlist or Xtream Codes login, and see
+							what's on in a TV guide.
+						</p>
 						<!-- release:hero -->
 					</div>
-					<div class="hero-shot">
-						<img
-							src="../docs/images/channels.jpg"
-							width="1600"
-							height="1000"
-							alt="The live TV tab: recently played channels, category filters, and a TV guide timeline for each channel"
-						/>
-					</div>
 				</div>
+				<div class="guide" aria-hidden="true"><!-- guide --></div>
 			</section>
 
-			<section class="section" id="why" aria-labelledby="why-title">
+			<div class="showcase wrap">
+				<div class="window" id="win">
+					<div class="chrome"><i></i><i></i><i></i><span>Cinette</span></div>
+					<img
+						src="./img/desk-movies.jpg"
+						srcset="./img/desk-movies.jpg 1600w, ./img/desk-movies-2560.jpg 2560w"
+						sizes="(min-width: 1240px) 1200px, calc(100vw - 40px)"
+						width="1600"
+						height="1000"
+						alt="Cinette on a Mac: the Movies tab with genre filters and a grid of movie posters"
+						fetchpriority="high"
+					/>
+				</div>
+			</div>
+
+			<section class="section" aria-labelledby="where-title">
 				<div class="wrap">
-					<h2 class="section-title" id="why-title">Why Cinette</h2>
-					<div class="why-grid copy">
-						<div>
-							<h3>It's fast</h3>
-							<p>
-								The app is built in Rust with <a href="https://tauri.app">Tauri</a>,
-								which uses the web view your system already has instead of shipping
-								its own copy of Chromium the way Electron apps do. Video plays
-								through <a href="https://mpv.io">mpv</a> with your computer's
-								hardware decoder, and mpv draws it itself instead of handing it to
-								the web page that holds the controls.
-							</p>
-							<p>
-								Playlists and TV guides are parsed in Rust and saved in a local
-								database, and the app only downloads them again when they're due on
-								the schedule you set. The channel list only draws the rows you can
-								see, however long the playlist is.
-							</p>
+					<div class="intro">
+						<h2 id="where-title">One app on the screens you already use</h2>
+						<p>
+							It's the same app on each, laid out for a mouse, a touch screen or a TV
+							remote.
+						</p>
+					</div>
+					<div class="devices">
+						<div class="device">
+							<svg
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.6"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<rect x="4" y="5" width="16" height="11" rx="1.5" />
+								<path d="M2 19h20" />
+							</svg>
+							<div>
+								<b>Mac</b><small>macOS 15 or later, Apple Silicon and Intel</small>
+							</div>
+							<a href="#download">Download</a>
 						</div>
-						<div>
-							<h3>It collects nothing</h3>
-							<p>
-								There are no accounts, ads, analytics or telemetry, and the
-								developer gets no data from the app. Your playlists, logins,
-								favorites and history stay on your computer, unless you copy them to
-								another of your devices.
-							</p>
-							<p>
-								You don't have to take that on trust. All of the code is
-								<a href="https://github.com/MaxMB15/Cinette">on GitHub</a>
-								for anyone to read, every release is built from it by GitHub
-								Actions, and the
-								<a
-									href="https://github.com/MaxMB15/Cinette/blob/main/docs/privacy.md"
-									>privacy policy</a
-								>
-								lists each service the app talks to and what it sends.
-							</p>
+						<div class="device">
+							<svg
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.6"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<rect x="7" y="2.5" width="10" height="19" rx="2.5" />
+								<path d="M10.5 5h3" />
+							</svg>
+							<div>
+								<b>iPhone and iPad</b><small>iOS and iPadOS 17.5 or later</small>
+							</div>
+							<a href="https://apps.apple.com/us/app/cinette/id6824008116"
+								>App Store</a
+							>
 						</div>
-						<div>
-							<h3>You set it up your way</h3>
-							<p>
-								Choose how often each provider and its guide refresh. Pin, rename,
-								reorder and create categories. Pick whether intros, recaps and
-								credits are skipped automatically, with a button or not at all, and
-								how far the back and forward buttons jump.
-							</p>
-							<p>
-								Set the default volume and hardware decoding, where downloads go,
-								how many run at once and how long they're kept, and how early
-								recordings start and how late they run.
-							</p>
+						<div class="device">
+							<svg
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.6"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<rect x="3" y="4" width="18" height="16" rx="2" />
+								<path d="m7 10 3 2.5L7 15m5 0h5" />
+							</svg>
+							<div>
+								<b>Linux</b><small>AppImage, Debian, Ubuntu and Fedora</small>
+							</div>
+							<a href="#download">Download</a>
+						</div>
+						<div class="device">
+							<svg
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.6"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<rect x="2" y="4" width="20" height="13" rx="1.5" />
+								<path d="M8 21h8M12 17v4" />
+							</svg>
+							<div>
+								<b>Fire TV and Google TV</b
+								><small>Fire OS 7 or Android TV 9 or later</small>
+							</div>
+							<a href="#install-tv">TV steps</a>
+						</div>
+						<div class="device">
+							<svg
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.6"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<rect x="6" y="2.5" width="12" height="19" rx="2" />
+								<path d="M11 18.5h2" />
+							</svg>
+							<div>
+								<b>Android phones and tablets</b><small>Android 9 or later</small>
+							</div>
+							<a href="#download">Download</a>
+						</div>
+						<div class="device">
+							<svg
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.6"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<path
+									d="M3 5.5 10.5 4.5v7H3zM12 4.3 21 3v8.5h-9zM3 13h7.5v7L3 19zM12 13h9v8l-9-1.3z"
+								/>
+							</svg>
+							<div><b>Windows</b><small>Not out yet</small></div>
+							<em>Planned</em>
 						</div>
 					</div>
 				</div>
@@ -160,21 +236,157 @@
 
 			<section class="section" id="features" aria-labelledby="features-title">
 				<div class="wrap">
-					<h2 class="section-title" id="features-title">Features</h2>
-					<div class="feature-grid copy">
+					<div class="intro">
+						<h2 id="features-title">Made for watching, not for managing</h2>
+					</div>
+					<div class="stage">
+						<div class="steps">
+							<article class="step" data-shot="0">
+								<div class="bar-track"><div class="bar-fill"></div></div>
+								<h3>See what's on across every channel</h3>
+								<p>
+									The guide shows now and next for each live channel on one
+									timeline, and you can search by program name. Cinette uses the
+									XMLTV guide that comes with your playlist, or one you add.
+								</p>
+								<div class="shot handset">
+									<img
+										src="./img/phone-live.jpg"
+										width="552"
+										height="1200"
+										loading="lazy"
+										alt="The live TV guide on iPhone: channels with what's on now and next"
+									/>
+								</div>
+							</article>
+							<article class="step" data-shot="1">
+								<div class="bar-track"><div class="bar-fill"></div></div>
+								<h3>Know a movie before you press play</h3>
+								<p>
+									Movies and series come with the plot, cast and ratings from IMDb
+									and Rotten Tomatoes. Anything you start picks up where you
+									stopped, and series go on to the next episode by themselves,
+									skipping intros and credits if you like.
+								</p>
+								<div class="shot handset">
+									<img
+										src="./img/phone-series-detail.jpg"
+										width="552"
+										height="1200"
+										loading="lazy"
+										alt="A series' details on iPhone: poster, ratings, cast, plot and seasons"
+									/>
+								</div>
+							</article>
+							<article class="step" data-shot="2">
+								<div class="bar-track"><div class="bar-fill"></div></div>
+								<h3>Plays nearly any stream</h3>
+								<p>
+									Video runs through mpv with hardware decoding, so HLS, MPEG-TS,
+									RTMP and RTSP all play. When the stream or your Wi-Fi drops,
+									Cinette reconnects and carries on. Add subtitles from
+									OpenSubtitles and switch audio tracks while you watch.
+								</p>
+								<div class="shot handset land">
+									<img
+										src="./img/phone-player.jpg"
+										width="1600"
+										height="736"
+										loading="lazy"
+										alt="A movie playing on iPhone in landscape, with the seek bar and controls"
+									/>
+								</div>
+							</article>
+						</div>
+						<div class="stage-view" aria-hidden="true">
+							<div class="window">
+								<div class="chrome"><i></i><i></i><i></i><span>Cinette</span></div>
+								<div class="frames">
+									<img
+										class="on"
+										src="./img/desk-live.jpg"
+										width="1600"
+										height="1000"
+										alt=""
+									/>
+									<img
+										src="./img/desk-series-detail.jpg"
+										width="1600"
+										height="1000"
+										loading="lazy"
+										alt=""
+									/>
+									<img
+										src="./img/desk-player.jpg"
+										width="1600"
+										height="1000"
+										loading="lazy"
+										alt=""
+									/>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="section" aria-labelledby="tv-title">
+				<div class="wrap duo">
+					<div class="intro">
+						<h2 id="tv-title">Start on your phone, finish on the TV</h2>
+						<p>
+							Send a channel, movie or episode to an Apple TV with AirPlay, or from a
+							Mac or Linux PC to a Chromecast. A movie or episode carries on from
+							where it was. With Cinette on the TV too, your phone becomes the remote:
+							play, pause, seek and change subtitles from the couch.
+						</p>
+					</div>
+					<div class="duo-art" aria-hidden="true">
+						<div class="tv">
+							<img
+								src="./img/still-84.jpg"
+								width="1400"
+								height="787"
+								loading="lazy"
+								alt=""
+							/>
+							<div class="tv-ui">
+								<b>Harbor Lights, Container 41</b>
+								<div class="seek"><i></i></div>
+							</div>
+						</div>
+						<div class="handset">
+							<img
+								src="./img/phone-remote.jpg"
+								width="552"
+								height="1200"
+								loading="lazy"
+								alt=""
+							/>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="section" aria-labelledby="list-title">
+				<div class="wrap">
+					<div class="intro">
+						<h2 id="list-title">What's in the app</h2>
+					</div>
+					<div class="groups">
 						<div>
 							<h3>Your playlists</h3>
 							<ul>
 								<li>
 									M3U and M3U+ playlists from a URL or a file, and Xtream Codes
-									accounts
+									logins
 								</li>
 								<li>
 									Several providers side by side, each refreshed on a schedule you
 									choose
 								</li>
 								<li>
-									XMLTV TV guide (EPG), shown as a timeline of what's on for each
+									An XMLTV TV guide, shown as a timeline of what's on for each
 									live channel
 								</li>
 							</ul>
@@ -183,39 +395,28 @@
 							<h3>Browsing</h3>
 							<ul>
 								<li>
-									Separate tabs for live TV, movies and series, plus favorites,
-									downloads and watch history
+									Tabs for live TV, movies and series, plus favorites and watch
+									history
 								</li>
 								<li>Search by channel or title, and on live TV by program name</li>
 								<li>
 									Pin, rename, reorder and create categories, so a playlist with
 									thousands of channels stays manageable
 								</li>
+								<li>Optional category sorting with Google Gemini</li>
 							</ul>
 						</div>
 						<div>
 							<h3>Playback</h3>
 							<ul>
 								<li>
-									Plays nearly every IPTV stream format, including HLS, MPEG-TS,
-									RTMP and RTSP, through mpv with hardware decoding
+									Resumes movies and episodes, with next episode and autoplay for
+									series
 								</li>
 								<li>
-									Reconnects on its own when the stream or your network drops, and
-									picks up where it left off
-								</li>
-								<li>
-									Resumes movies and episodes where you stopped, with next episode
-									and autoplay for series
-								</li>
-								<li>
-									Skips intros, recaps and credits with a button or automatically,
+									Skips intros, recaps and credits with a button or by itself,
 									using times from <a href="https://skipdb.tv">SkipDB</a> and
 									<a href="https://introdb.app">IntroDB</a>
-								</li>
-								<li>
-									Keyboard shortcuts for playback, which <kbd>?</kbd> in the
-									player lists
 								</li>
 								<li>
 									Subtitles from OpenSubtitles, with timing and position
@@ -225,122 +426,75 @@
 							</ul>
 						</div>
 						<div>
-							<h3>More</h3>
+							<h3>Between your devices</h3>
+							<ul>
+								<li>AirPlay from iPhone, iPad and Mac</li>
+								<li>Chromecast from Mac and Linux</li>
+								<li>Control Cinette on another device from your phone</li>
+								<li>Copy your watch history or providers to another device</li>
+							</ul>
+						</div>
+						<div>
+							<h3>On Mac and Linux</h3>
 							<ul>
 								<li>Download movies, episodes or whole seasons to watch offline</li>
 								<li>
 									Record a live channel now, a program from the guide or any time
 									range
 								</li>
-								<li>Plot, cast and ratings for movies and series from OMDb</li>
-								<li>Optional category sorting with Google Gemini</li>
-								<li>Automatic updates</li>
+								<li>
+									Keyboard shortcuts for playback, which <kbd>?</kbd> in the
+									player lists
+								</li>
 							</ul>
 						</div>
 					</div>
 					<p class="note">
 						OpenSubtitles, OMDb and Gemini each need a free API key, which you add in
-						Settings. Skip times need the OMDb key too.
+						Settings. Ratings and skip times need the OMDb key.
 					</p>
 				</div>
 			</section>
 
-			<section class="section" id="screenshots" aria-labelledby="screenshots-title">
+			<section class="section" aria-labelledby="privacy-title">
 				<div class="wrap">
-					<h2 class="section-title" id="screenshots-title">Screenshots</h2>
-					<div class="shot-grid">
-						<figure>
-							<img
-								src="../docs/images/movies.jpg"
-								width="1600"
-								height="1000"
-								loading="lazy"
-								alt="The movies tab: a poster grid with genre filters, favorites and download status"
-							/>
-							<figcaption>
-								Movies, with genre filters and what you've downloaded
-							</figcaption>
-						</figure>
-						<figure>
-							<img
-								src="../docs/images/movie-details.jpg"
-								width="1600"
-								height="1000"
-								loading="lazy"
-								alt="A movie's details: poster, rating, cast, plot, source picker, and Play and Download buttons"
-							/>
-							<figcaption>A movie's details, with ratings, cast and plot</figcaption>
-						</figure>
-						<figure>
-							<img
-								src="../docs/images/series.jpg"
-								width="1600"
-								height="1000"
-								loading="lazy"
-								alt="The series tab: recently played shows and a grid of series with favorite and download buttons"
-							/>
-							<figcaption>Series, starting with the ones you watched last</figcaption>
-						</figure>
-						<figure>
-							<img
-								src="../docs/images/series-details.jpg"
-								width="1600"
-								height="1000"
-								loading="lazy"
-								alt="A series' details: rating, creator, cast, plot, a partially downloaded tag, and a download button for each season"
-							/>
-							<figcaption>
-								A series' details, with a download button for each season
-							</figcaption>
-						</figure>
-						<figure>
-							<img
-								src="../docs/images/playlists.jpg"
-								width="1600"
-								height="1000"
-								loading="lazy"
-								alt="The playlists page: the form for adding an M3U or Xtream Codes provider, and two providers already added"
-							/>
-							<figcaption>
-								Adding an M3U playlist or an Xtream Codes account
-							</figcaption>
-						</figure>
-						<figure>
-							<img
-								src="../docs/images/settings.jpg"
-								width="1600"
-								height="1000"
-								loading="lazy"
-								alt="Settings: hardware decoding, default volume, and the Gemini and OMDb API key fields"
-							/>
-							<figcaption>Settings for playback and the optional API keys</figcaption>
-						</figure>
+					<div class="intro">
+						<h2 id="privacy-title">Cinette doesn't know who you are</h2>
+						<p>
+							There's no account to make, and the app sends nothing to the developer.
+							Your playlists, logins and history stay on your devices. All the code is
+							<a href="https://github.com/MaxMB15/Cinette">on GitHub</a>, and the
+							<a href="https://github.com/MaxMB15/Cinette/blob/main/docs/privacy.md"
+								>privacy policy</a
+							>
+							lists each service the app talks to and what it sends.
+						</p>
 					</div>
-					<p class="note">Screenshots use made-up channels and titles.</p>
+					<div class="facts">
+						<div><b>No account</b><span>Open the app and add a playlist.</span></div>
+						<div><b>No ads, analytics or telemetry</b><span>On any device.</span></div>
+						<div>
+							<b>Open source</b
+							><span
+								><span class="nw">GPL-3.0</span>, so anyone can read and check the
+								code.</span
+							>
+						</div>
+					</div>
 				</div>
 			</section>
 
-			<section class="section band" id="download" aria-labelledby="download-title">
+			<section class="section" id="download" aria-labelledby="download-title">
 				<div class="wrap">
-					<h2 class="section-title" id="download-title">Download</h2>
-					<!-- release:meta -->
-					<div class="platforms">
+					<div class="intro">
+						<h2 id="download-title">Download Cinette</h2>
+						<!-- release:meta -->
+					</div>
+					<div class="dl">
 						<!-- release:platforms -->
-						<div class="platform">
-							<h3>Other devices</h3>
-							<p class="requirement">Not out yet</p>
-							<ul class="later-list">
-								<li>
-									<span>iPhone and iPad</span
-									><span>Coming soon to the App Store</span>
-								</li>
-								<li><span>Windows</span><span>Planned</span></li>
-								<li><span>Android and Fire TV</span><span>Planned</span></li>
-							</ul>
-						</div>
 					</div>
 					<!-- release:checksums -->
-					<div class="note copy">
+					<div class="note">
 						<p>
 							These links always point at the newest version. Older versions and
 							release notes are on the
@@ -358,61 +512,94 @@
 
 			<section class="section" id="install" aria-labelledby="install-title">
 				<div class="wrap">
-					<h2 class="section-title" id="install-title">Installing</h2>
-					<div class="install-grid copy">
+					<div class="intro">
+						<h2 id="install-title">Installing</h2>
+					</div>
+					<div class="install">
 						<div>
-							<h3>macOS</h3>
+							<h3>Mac</h3>
 							<p>Open the DMG and drag Cinette into Applications.</p>
 							<details class="disclosure">
 								<summary>macOS says the app can't be opened or is damaged</summary>
-								<div class="answer copy">
-									<p>
-										Releases that aren't notarized by Apple are blocked by
-										Gatekeeper the first time you open them. To open the app
-										anyway, follow these steps.
-									</p>
-									<ol>
-										<li>Try to open Cinette once and close the warning.</li>
-										<li>
-											Open System Settings and go to Privacy &amp; Security.
-											Scroll down and click <strong>Open Anyway</strong> next
-											to the message about Cinette.
-										</li>
-										<li>Confirm with your password or Touch ID.</li>
-									</ol>
-									<p>
-										If macOS says the app is damaged, run this in Terminal and
-										open it again.
-									</p>
-									<pre><code>xattr -dr com.apple.quarantine /Applications/Cinette.app</code></pre>
-								</div>
+								<p>
+									Releases that aren't notarized by Apple are blocked by
+									Gatekeeper the first time you open them. To open the app anyway,
+									follow these steps.
+								</p>
+								<ol>
+									<li>Try to open Cinette once and close the warning.</li>
+									<li>
+										Open System Settings and go to Privacy &amp; Security.
+										Scroll down and click <strong>Open Anyway</strong> next to
+										the message about Cinette.
+									</li>
+									<li>Confirm with your password or Touch ID.</li>
+								</ol>
+								<p>
+									If macOS says the app is damaged, run this in Terminal and open
+									it again.
+								</p>
+								<pre><code>xattr -dr com.apple.quarantine /Applications/Cinette.app</code></pre>
 							</details>
 						</div>
 						<div>
-							<h3>Linux AppImage</h3>
-							<p>It includes libmpv, so there's nothing else to install.</p>
+							<h3>Linux</h3>
+							<p>The AppImage includes libmpv, so there's nothing else to install.</p>
 							<pre><code>chmod +x Cinette_amd64.AppImage
 ./Cinette_amd64.AppImage</code></pre>
 							<p>
-								The AppImage needs glibc 2.38 or later, which Ubuntu 24.04, Debian
-								13 and current Fedora releases have.
+								It needs glibc 2.38 or later, which Ubuntu 24.04, Debian 13 and
+								current Fedora releases have.
 							</p>
-							<h3>Debian and Ubuntu</h3>
 							<p>
-								<code>sudo apt install ./Cinette_amd64.deb</code> installs the app
-								and the libraries it needs, including libmpv. It needs Debian 12,
-								Ubuntu 24.04 or a later release.
-							</p>
-							<h3>Fedora</h3>
-							<p><code>sudo dnf install ./Cinette_x86_64.rpm</code></p>
-							<p>
-								Both packages need WebKitGTK 2.40 or later, which all of these
-								releases have.
+								On Debian and Ubuntu,
+								<code>sudo apt install ./Cinette_amd64.deb</code>
+								installs the app and the libraries it needs, including libmpv. It
+								needs Debian 12, Ubuntu 24.04 or a later release. On Fedora, run
+								<code>sudo dnf install ./Cinette_x86_64.rpm</code>. Both packages
+								need WebKitGTK 2.40 or later, which all of these releases have.
 							</p>
 							<p>
 								Ubuntu 22.04 and releases based on it, such as Linux Mint 21 and
 								Pop!_OS 22.04, aren't supported. Their libmpv is too old for the
 								app, and their glibc is too old for the AppImage.
+							</p>
+						</div>
+						<div id="install-tv">
+							<h3>Fire TV, Google TV and Android TV</h3>
+							<p>
+								Most TVs and streaming sticks run 32-bit Android, so they take the
+								TV and Fire TV build.
+							</p>
+							<ol>
+								<li>
+									Install an app that can download files, such as Downloader by
+									AFTVnews, from the Amazon Appstore or Google Play.
+								</li>
+								<li>
+									Let that app install apps. On a Fire TV, that's Settings → My
+									Fire TV → Developer Options → Install unknown apps. If Developer
+									Options isn't there, open About under My Fire TV and select your
+									Fire TV's name seven times. On Google TV and Android TV, it's
+									Settings → Apps → Security &amp; restrictions → Unknown sources.
+								</li>
+								<li>
+									In Downloader, enter this address and install the file it
+									downloads.
+									<pre><code>https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_armeabi-v7a.apk</code></pre>
+								</li>
+							</ol>
+						</div>
+						<div>
+							<h3>Android phones and tablets</h3>
+							<p>
+								Open the phone and tablet build's link on the device, and let your
+								browser install apps when Android asks.
+							</p>
+							<p>
+								When a new version is out, Cinette shows Update available. Install
+								downloads it and opens Android's installer, where you press Install
+								or Update.
 							</p>
 						</div>
 					</div>
@@ -421,24 +608,20 @@
 
 			<section class="section" id="getting-started" aria-labelledby="getting-started-title">
 				<div class="wrap">
-					<h2 class="section-title" id="getting-started-title">Getting started</h2>
-					<ol class="steps">
+					<div class="intro">
+						<h2 id="getting-started-title">Getting started</h2>
+					</div>
+					<ol class="start">
 						<li>
-							<p>
-								Open <strong>Playlists</strong> and add a provider. That can be an
-								M3U URL, an M3U file, or an Xtream Codes server with your username
-								and password.
-							</p>
+							Open <strong>Playlists</strong> and add a provider. That can be an M3U
+							URL, an M3U file, or an Xtream Codes server with your username and
+							password.
 						</li>
 						<li>
-							<p>
-								If your playlist doesn't come with a TV guide, open the provider's
-								settings and add an EPG (XMLTV) URL.
-							</p>
+							If your playlist doesn't come with a TV guide, open the provider's
+							settings and add an EPG (XMLTV) URL.
 						</li>
-						<li>
-							<p>Go to <strong>Channels</strong> and pick something to watch.</p>
-						</li>
+						<li>Go to <strong>Channels</strong> and pick something to watch.</li>
 					</ol>
 					<p class="note">
 						Cinette doesn't come with any channels or content. You need a playlist from
@@ -449,237 +632,233 @@
 
 			<section class="section" id="faq" aria-labelledby="faq-title">
 				<div class="wrap">
-					<h2 class="section-title" id="faq-title">FAQ</h2>
-					<div class="disclosure-list">
-						<details class="disclosure">
+					<div class="intro">
+						<h2 id="faq-title">Questions</h2>
+					</div>
+					<div class="faq">
+						<details>
+							<summary>Does Cinette come with channels?</summary>
+							<p>
+								No. Cinette is only a player. You add a playlist from a provider
+								you're allowed to use, as an M3U link or file, or as an Xtream Codes
+								login.
+							</p>
+						</details>
+						<details>
+							<summary>Is it free?</summary>
+							<p>
+								Yes. There's no paid version, subscription or ads. If you find it
+								useful, you can
+								<a href="https://buymeacoffee.com/MaxMB15">buy me a coffee</a>.
+							</p>
+						</details>
+						<details>
+							<summary>How do I install it on a Fire TV?</summary>
+							<p>
+								Install Downloader from the Amazon Appstore, let it install apps,
+								and open the TV build's link in it.
+								<a href="#install-tv">The TV steps</a> go through it.
+							</p>
+						</details>
+						<details>
 							<summary>Does Cinette collect any data?</summary>
-							<div class="answer copy">
-								<p>
-									No. There are no accounts, analytics or telemetry. The app
-									connects to the providers you add, to GitHub to check for
-									updates, and to OMDb, OpenSubtitles or Google Gemini only if you
-									add a key for them. When OMDb finds a title, the app also
-									fetches extra ratings for it from
-									<a href="https://whatson-api.onrender.com">whatson-api</a>, and
-									times to skip from SkipDB and IntroDB. Your playlists, favorites
-									and history stay in a database on your computer.
-								</p>
-							</div>
+							<p>
+								No. There are no accounts, analytics or telemetry. The app connects
+								to the providers you add, to GitHub to check for updates, and to
+								OMDb, OpenSubtitles or Google Gemini only if you add a key for them.
+								When OMDb finds a title, the app also fetches extra ratings for it
+								from
+								<a href="https://whatson-api.onrender.com">whatson-api</a>, and
+								times to skip from SkipDB and IntroDB. Your playlists, favorites and
+								history stay in a database on your device.
+							</p>
 						</details>
-						<details class="disclosure">
+						<details>
 							<summary>Where does the app keep its data?</summary>
-							<div class="answer copy">
-								<p>
-									In
-									<code>~/Library/Application Support/app.cinette</code> on macOS
-									and <code>~/.local/share/app.cinette</code> on Linux. Downloads
-									go to the <code>downloads</code> folder inside it. Before 0.8.0,
-									these folders were named <code>com.maxvideoplayer.app</code>,
-									and the first launch of 0.8.0 renames them.
-								</p>
-							</div>
+							<p>
+								In <code>~/Library/Application Support/app.cinette</code> on macOS
+								and <code>~/.local/share/app.cinette</code> on Linux. Downloads go
+								to the <code>downloads</code> folder inside it. Before 0.8.0, these
+								folders were named <code>com.maxvideoplayer.app</code>, and the
+								first launch of 0.8.0 renames them. On iPhone, iPad and Android,
+								deleting the app deletes its data.
+							</p>
 						</details>
-						<details class="disclosure">
+						<details>
 							<summary>Is this the app that was called Max Video Player?</summary>
-							<div class="answer copy">
-								<p>
-									Yes. Max Video Player was renamed Cinette, and updating keeps
-									your playlists, favorites, settings and downloads. They move to
-									the folders above.
-								</p>
-								<p>
-									On a Mac, an update from inside the app keeps the old file name,
-									so the app is still called Max Video Player in Applications. You
-									can rename it to Cinette there. If you install Cinette from the
-									DMG instead, delete the old Max Video Player app. On Linux,
-									installing the
-									<code>cinette</code> package removes the
-									<code>max-video-player</code> package.
-								</p>
-							</div>
+							<p>
+								Yes. Max Video Player was renamed Cinette, and updating keeps your
+								playlists, favorites, settings and downloads. They move to the
+								folders above.
+							</p>
+							<p>
+								On a Mac, an update from inside the app keeps the old file name, so
+								the app is still called Max Video Player in Applications. You can
+								rename it to Cinette there. If you install Cinette from the DMG
+								instead, delete the old Max Video Player app. On Linux, installing
+								the <code>cinette</code> package removes the
+								<code>max-video-player</code> package.
+							</p>
 						</details>
-						<details class="disclosure">
+						<details>
 							<summary>A stream won't play</summary>
-							<div class="answer copy">
-								<p>
-									Check whether the same URL plays in
-									<a href="https://mpv.io">mpv</a> or VLC. If it does,
-									<a
-										href="https://github.com/MaxMB15/Cinette/issues/new?template=bug_report.yml"
-										>open a bug report</a
-									>
-									with your OS and app version. Leave out your playlist URL and
-									login details.
-								</p>
-							</div>
+							<p>
+								Check whether the same URL plays in
+								<a href="https://mpv.io">mpv</a> or VLC. If it does,
+								<a
+									href="https://github.com/MaxMB15/Cinette/issues/new?template=bug_report.yml"
+									>open a bug report</a
+								>
+								with your device and app version. Leave out your playlist URL and
+								login details.
+							</p>
 						</details>
-						<details class="disclosure">
+						<details>
 							<summary>
 								The app won't open on my Mac after updating to 0.5.0 or 0.5.1
 							</summary>
-							<div class="answer copy">
-								<p>
-									Versions 0.5.0 and 0.5.1 crash at launch, before they can check
-									for updates. Install the
-									<a href="#download">latest version</a> over the old one. Your
-									playlists and settings are kept.
-								</p>
-							</div>
+							<p>
+								Versions 0.5.0 and 0.5.1 crash at launch, before they can check for
+								updates. Install the <a href="#download">latest version</a> over the
+								old one. Your playlists and settings are kept.
+							</p>
 						</details>
 					</div>
 				</div>
 			</section>
 
-			<section
-				class="section band"
-				aria-label="Privacy, contributing, disclaimer and license"
-			>
+			<section class="section" aria-label="Privacy, contributing, disclaimer and license">
 				<div class="wrap fine-print">
 					<div id="privacy">
-						<h2 class="section-title">Privacy</h2>
-						<div class="copy">
-							<p>
-								The app sends nothing to the developer. The
-								<a
-									href="https://github.com/MaxMB15/Cinette/blob/main/docs/privacy.md"
-									>privacy policy</a
-								>
-								lists what it keeps on your device, which services it connects to
-								and what it sends them.
-							</p>
-							<p>
-								This website has no cookies, analytics or scripts from other sites.
-								GitHub Pages hosts it, so
-								<a
-									href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement"
-									>GitHub's privacy statement</a
-								>
-								covers the requests your browser makes to it.
-							</p>
-						</div>
+						<h2>Privacy</h2>
+						<p>
+							The app sends nothing to the developer. The
+							<a href="https://github.com/MaxMB15/Cinette/blob/main/docs/privacy.md"
+								>privacy policy</a
+							>
+							lists what it keeps on your device, which services it connects to and
+							what it sends them.
+						</p>
+						<p>
+							This website has no cookies, analytics or scripts from other sites.
+							GitHub Pages hosts it, so
+							<a
+								href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement"
+								>GitHub's privacy statement</a
+							>
+							covers the requests your browser makes to it.
+						</p>
 					</div>
 					<div id="contributing">
-						<h2 class="section-title">Contributing</h2>
-						<div class="copy">
-							<p>
-								Bug reports, ideas and pull requests are welcome. Read
-								<a
-									href="https://github.com/MaxMB15/Cinette/blob/main/CONTRIBUTING.md"
-									>CONTRIBUTING.md</a
-								>
-								to get started, and
-								<a
-									href="https://github.com/MaxMB15/Cinette/blob/main/docs/development.md"
-									>docs/development.md</a
-								>
-								to build the app from source. Report security issues privately as
-								described in
-								<a href="https://github.com/MaxMB15/Cinette/blob/main/SECURITY.md"
-									>SECURITY.md</a
-								>.
-							</p>
-							<p>
-								If you find the app useful, you can
-								<a href="https://buymeacoffee.com/MaxMB15">buy me a coffee</a>.
-							</p>
-						</div>
+						<h2>Contributing</h2>
+						<p>
+							Bug reports, ideas and pull requests are welcome. Read
+							<a href="https://github.com/MaxMB15/Cinette/blob/main/CONTRIBUTING.md"
+								>CONTRIBUTING.md</a
+							>
+							to get started, and
+							<a
+								href="https://github.com/MaxMB15/Cinette/blob/main/docs/development.md"
+								>docs/development.md</a
+							>
+							to build the app from source. Report security issues privately as
+							described in
+							<a href="https://github.com/MaxMB15/Cinette/blob/main/SECURITY.md"
+								>SECURITY.md</a
+							>.
+						</p>
+						<p>
+							If you find the app useful, you can
+							<a href="https://buymeacoffee.com/MaxMB15">buy me a coffee</a>.
+						</p>
 					</div>
 					<div id="disclaimer">
-						<h2 class="section-title">Disclaimer</h2>
-						<div class="copy">
-							<p>
-								Cinette is only a player. It doesn't include, host, sell or link to
-								any channels, playlists or streams. You add your own sources, and
-								the author has no control over, and no knowledge of, what you add or
-								watch.
-							</p>
-							<p>
-								The app is meant for content you have the legal right to watch, such
-								as a service you subscribe to legally or streams you own. It isn't
-								meant for pirated or otherwise illegally obtained content, and the
-								author doesn't support using it that way.
-							</p>
-							<p>
-								You're responsible for what you play with it and for following the
-								copyright and broadcasting laws where you live.
-							</p>
-							<p>
-								The app is provided as is, without warranty of any kind. As far as
-								the law allows, the author and contributors aren't liable for any
-								claim, damage or other loss arising from the app, from how anyone
-								uses it, or from any content played with it. The
-								<a href="https://github.com/MaxMB15/Cinette/blob/main/LICENSE"
-									>license</a
-								>
-								has the full terms, and
-								<a href="https://github.com/MaxMB15/Cinette/blob/main/NOTICE"
-									>NOTICE</a
-								>
-								has the full legal notice.
-							</p>
-						</div>
+						<h2>Disclaimer</h2>
+						<p>
+							Cinette is only a player. It doesn't include, host, sell or link to any
+							channels, playlists or streams. You add your own sources, and the author
+							has no control over, and no knowledge of, what you add or watch.
+						</p>
+						<p>
+							The app is meant for content you have the legal right to watch, such as
+							a service you subscribe to legally or streams you own. It isn't meant
+							for pirated or otherwise illegally obtained content, and the author
+							doesn't support using it that way.
+						</p>
+						<p>
+							You're responsible for what you play with it and for following the
+							copyright and broadcasting laws where you live.
+						</p>
+						<p>
+							The app is provided as is, without warranty of any kind. As far as the
+							law allows, the author and contributors aren't liable for any claim,
+							damage or other loss arising from the app, from how anyone uses it, or
+							from any content played with it. The
+							<a href="https://github.com/MaxMB15/Cinette/blob/main/LICENSE"
+								>license</a
+							>
+							has the full terms, and
+							<a href="https://github.com/MaxMB15/Cinette/blob/main/NOTICE">NOTICE</a>
+							has the full legal notice.
+						</p>
 					</div>
 					<div id="license">
-						<h2 class="section-title">License</h2>
-						<div class="copy">
-							<p>
-								Cinette is free software. Anyone can use it for any purpose, and you
-								can study, change and share the code under the
-								<a href="https://github.com/MaxMB15/Cinette/blob/main/LICENSE"
-									>GNU General Public License version 3</a
-								>. Anything you distribute that's based on it has to use the same
-								license and come with its source code.
-							</p>
-							<p>
-								The license has a few
-								<a href="https://github.com/MaxMB15/Cinette/blob/main/NOTICE"
-									>additional terms</a
-								>, which section 7 of the GPL allows.
-							</p>
-							<ul>
-								<li>
-									Modified versions have to keep the credit "Based on Cinette by
-									Max Boksem" on their About screen.
-								</li>
-								<li>
-									Modified versions need their own name and icon. The license
-									grants no trademark rights in the Cinette or Max Video Player
-									names or logos. See
-									<a
-										href="https://github.com/MaxMB15/Cinette/blob/main/TRADEMARKS.md"
-										>TRADEMARKS.md</a
-									>.
-								</li>
-								<li>
-									The author's name and the names Cinette and Max Video Player
-									can't be used to endorse or promote another product without
-									permission. Accurate statements such as "based on Cinette" don't
-									need it.
-								</li>
-							</ul>
-							<p>
-								If you need other terms, for example to ship it in a closed-source
-								product, a commercial license is available. Get in touch through
-								<a href="https://github.com/MaxMB15">github.com/MaxMB15</a>.
-							</p>
-							<p>
-								Releases up to and including 0.5.3 were published under the PolyForm
-								Noncommercial License 1.0.0.
-							</p>
-							<p>
-								Under either name, it's an independent project and isn't affiliated
-								with MaxPlayer, Max, Warner Bros. Discovery, or any product with a
-								similar name.
-							</p>
-						</div>
+						<h2>License</h2>
+						<p>
+							Cinette is free software. Anyone can use it for any purpose, and you can
+							study, change and share the code under the
+							<a href="https://github.com/MaxMB15/Cinette/blob/main/LICENSE"
+								>GNU General Public License version 3</a
+							>. Anything you distribute that's based on it has to use the same
+							license and come with its source code.
+						</p>
+						<p>
+							The license has a few
+							<a href="https://github.com/MaxMB15/Cinette/blob/main/NOTICE"
+								>additional terms</a
+							>, which section 7 of the GPL allows.
+						</p>
+						<ul>
+							<li>
+								Modified versions have to keep the credit "Based on Cinette by Max
+								Boksem" on their About screen.
+							</li>
+							<li>
+								Modified versions need their own name and icon. The license grants
+								no trademark rights in the Cinette or Max Video Player names or
+								logos. See
+								<a href="https://github.com/MaxMB15/Cinette/blob/main/TRADEMARKS.md"
+									>TRADEMARKS.md</a
+								>.
+							</li>
+							<li>
+								The author's name and the names Cinette and Max Video Player can't
+								be used to endorse or promote another product without permission.
+								Accurate statements such as "based on Cinette" don't need it.
+							</li>
+						</ul>
+						<p>
+							If you need other terms, for example to ship it in a closed-source
+							product, a commercial license is available. Get in touch through
+							<a href="https://github.com/MaxMB15">github.com/MaxMB15</a>.
+						</p>
+						<p>
+							Releases up to and including 0.5.3 were published under the PolyForm
+							Noncommercial License 1.0.0.
+						</p>
+						<p>
+							Under either name, it's an independent project and isn't affiliated with
+							MaxPlayer, Max, Warner Bros. Discovery, or any product with a similar
+							name.
+						</p>
 					</div>
 				</div>
 			</section>
 		</main>
 
-		<footer class="site-footer">
+		<footer>
 			<div class="wrap">
-				<nav class="footer-nav" aria-label="Project">
+				<nav aria-label="Project">
 					<a href="https://github.com/MaxMB15/Cinette">GitHub</a>
 					<a href="https://github.com/MaxMB15/Cinette/releases">Releases</a>
 					<a href="https://github.com/MaxMB15/Cinette/blob/main/CHANGELOG.md"
@@ -688,9 +867,10 @@
 					<a href="https://github.com/MaxMB15/Cinette/blob/main/CONTRIBUTING.md"
 						>Contributing</a
 					>
+					<a href="#privacy">Privacy</a>
 					<a href="https://buymeacoffee.com/MaxMB15">Buy me a coffee</a>
 				</nav>
-				<p class="footer-credit copy">
+				<p>
 					Built with <a href="https://tauri.app">Tauri</a>,
 					<a href="https://mpv.io">mpv</a>, <a href="https://ffmpeg.org">FFmpeg</a> and
 					<a href="https://react.dev">React</a>.

@@ -4,10 +4,15 @@
 
 import { expect, test } from "vitest";
 import { parseRelease, pickDownloads, type FileId, type Release } from "./release";
+import { renderGuide } from "./guide";
 import {
+	APP_STORE_URL,
+	SITE_URL,
 	fillPage,
+	listOf,
 	renderChecksums,
 	renderHero,
+	renderJsonLd,
 	renderPlatforms,
 	renderReleaseMeta,
 } from "./render";
@@ -59,12 +64,18 @@ test("renderHero offers each system its own download", () => {
 test("renderHero has one choice for each system", () => {
 	const html = renderHero(FULL, pickDownloads(FULL));
 	const choices = [...parse(html).querySelectorAll<HTMLElement>("[data-for]")];
-	expect(choices.map((choice) => choice.dataset.for)).toEqual(["mac", "linux", "ios", "other"]);
+	expect(choices.map((choice) => choice.dataset.for)).toEqual([
+		"mac",
+		"linux",
+		"android",
+		"ios",
+		"other",
+	]);
 });
 
-test("renderHero names Apple Silicon and offers Intel next to it", () => {
+test("renderHero offers Apple Silicon and links Intel in the note", () => {
 	expect(picks(renderHero(FULL, pickDownloads(FULL))).mac).toBe(
-		"Download for Mac Apple Silicon, 70.1 MB Intel Mac 72.3 MB Version 1.2.3 for macOS 15 Sequoia or later. About This Mac in the Apple menu shows which chip your Mac has."
+		"Download for Mac Apple Silicon, 70.1 MB Version 1.2.3 for macOS 15 Sequoia or later. For an Intel Mac, download the Intel build (72.3 MB)."
 	);
 });
 
@@ -74,18 +85,18 @@ test("renderHero leaves Intel out of a release without it and says the app needs
 	expect(picks(html).mac).toBe(
 		"Download for Mac Apple Silicon, 70.1 MB Version 1.2.3 for Apple Silicon, macOS 15 Sequoia or later."
 	);
-	expect([...parse(html).querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
+	expect(
+		[...parse(html).querySelectorAll('[data-for="mac"] a')].map((a) => a.getAttribute("href"))
+	).toEqual([
 		"https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_aarch64.dmg",
-		"https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.AppImage",
-		"#download",
-		"#download",
+		APP_STORE_URL,
 	]);
 });
 
 test("renderHero sends Macs to every download when there's no Apple Silicon build", () => {
 	const release = only("mac-intel", "appimage");
 	expect(picks(renderHero(release, pickDownloads(release))).mac).toBe(
-		"See all downloads Version 1.2.3 is out for macOS and Linux. Windows and Android are planned."
+		"See all downloads Version 1.2.3 is out for Mac and Linux, and the iPhone and iPad app is on the App Store."
 	);
 });
 
@@ -111,14 +122,65 @@ test("renderHero only points to the packages when there are some", () => {
 test("renderHero sends Linux to every download when there's no AppImage", () => {
 	const release = only("deb", "rpm");
 	expect(picks(renderHero(release, pickDownloads(release))).linux).toBe(
-		"See all downloads Version 1.2.3 is out for macOS and Linux. Windows and Android are planned."
+		"See all downloads Version 1.2.3 is out for Linux, and the iPhone and iPad app is on the App Store."
 	);
 });
 
-test("renderHero tells iPhone and iPad visitors the app is coming", () => {
-	expect(picks(renderHero(FULL, pickDownloads(FULL))).ios).toBe(
-		"Coming soon to the App Store The iPhone and iPad app is on its way. Version 1.2.3 is out for macOS and Linux ."
+test("renderHero offers Android the phone build and the TV build next to it", () => {
+	const html = renderHero(FULL, pickDownloads(FULL));
+	expect(picks(html).android).toBe(
+		"Download for Android Phone and tablet, 101.2 MB TV and Fire TV 98.8 MB Version 1.2.3 for Android 9 or later. A TV takes an app like Downloader to install it, as the TV steps show."
 	);
+	expect(
+		[...parse(html).querySelectorAll('[data-for="android"] a')].map((a) =>
+			a.getAttribute("href")
+		)
+	).toEqual([
+		"https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_arm64-v8a.apk",
+		"https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_armeabi-v7a.apk",
+		"#install-tv",
+	]);
+});
+
+test("renderHero leaves the TV out of a release without its build", () => {
+	const release = only("android-phone", "mac-arm");
+	expect(picks(renderHero(release, pickDownloads(release))).android).toBe(
+		"Download for Android Phone and tablet, 101.2 MB Version 1.2.3 for Android 9 or later."
+	);
+});
+
+test("renderHero sends Android to every download when there's no phone build", () => {
+	const release = only("android-tv", "mac-arm");
+	expect(picks(renderHero(release, pickDownloads(release))).android).toBe(
+		"See all downloads Version 1.2.3 is out for Mac and Android, and the iPhone and iPad app is on the App Store."
+	);
+});
+
+test("renderHero sends iPhone and iPad to the App Store", () => {
+	const html = renderHero(FULL, pickDownloads(FULL));
+	expect(picks(html).ios).toBe(
+		"Free on the App Store for iOS and iPadOS 17.5 or later. Version 1.2.3 is also out for Mac, Linux and Android ."
+	);
+	expect(
+		[...parse(html).querySelectorAll('[data-for="ios"] a')].map((a) => a.getAttribute("href"))
+	).toEqual([APP_STORE_URL, "#download"]);
+	expect(parse(html).querySelector('[data-for="ios"] img')?.getAttribute("alt")).toBe(
+		"Download on the App Store"
+	);
+});
+
+test("renderHero names only the systems the release has", () => {
+	const release = only("mac-arm");
+	expect(picks(renderHero(release, pickDownloads(release))).other).toBe(
+		"See all downloads Version 1.2.3 is out for Mac, and the iPhone and iPad app is on the App Store."
+	);
+});
+
+test("listOf joins names as a sentence does", () => {
+	expect(listOf([])).toBe("");
+	expect(listOf(["Mac"])).toBe("Mac");
+	expect(listOf(["Mac", "Linux"])).toBe("Mac and Linux");
+	expect(listOf(["Mac", "Linux", "Android"])).toBe("Mac, Linux and Android");
 });
 
 test("renderReleaseMeta shows the version, the date and the release notes", () => {
@@ -131,33 +193,76 @@ test("renderPlatforms lists each file with its size", () => {
 	expect(lines(renderPlatforms(pickDownloads(FULL)))).toMatchSnapshot();
 });
 
-test("renderPlatforms only asks about the Mac's chip when there's a choice", () => {
-	const release = only("mac-arm", "appimage");
-	const [mac, linux] = parse(renderPlatforms(pickDownloads(release))).children;
-	expect(mac.querySelector("h3")?.textContent).toBe("macOS");
-	expect(linux.querySelector("h3")?.textContent).toBe("Linux");
-	// Nothing, not even text, follows the Mac's one file.
-	expect(mac.lastChild?.nodeName).toBe("UL");
-	expect(mac.querySelectorAll("li")).toHaveLength(1);
+/** Each row's title, requirement, files and note, as text. The note is everything after the files. */
+const rows = (release: Release): string[][] =>
+	[...parse(renderPlatforms(pickDownloads(release))).querySelectorAll(".dl-row")].map((row) => {
+		const files = row.querySelector(".files") as Element;
+		const after = [...(files.parentElement as Element).childNodes].filter(
+			(node) => node !== files
+		);
+		return [
+			row.querySelector("h3")?.textContent ?? "",
+			row.querySelector(".req")?.textContent ?? "",
+			textOf(files),
+			after.map((node) => node.textContent).join(""),
+		];
+	});
+
+test("renderPlatforms has a row for each system, with the main file first", () => {
+	expect(rows(FULL)).toEqual([
+		[
+			"Mac",
+			"macOS 15 Sequoia or later",
+			"Apple Silicon 70.1 MB Intel 72.3 MB",
+			"Pick the build for your Mac's chip, which About This Mac shows.",
+		],
+		["iPhone and iPad", "iOS and iPadOS 17.5 or later", "", ""],
+		["Linux", "x86_64", "AppImage 181.2 MB Debian and Ubuntu 41.2 MB Fedora 41.2 MB", ""],
+		[
+			"Fire TV, Google TV and Android",
+			"Android 9 or later, Fire OS 7 or later",
+			"TV and Fire TV 98.8 MB Phone and tablet 101.2 MB",
+			"A TV takes an app like Downloader to install it. Read the TV steps",
+		],
+	]);
+	const main = [...parse(renderPlatforms(pickDownloads(FULL))).querySelectorAll(".file.main")];
+	expect(main.map((link) => link.textContent)).toEqual([
+		"Apple Silicon 70.1 MB",
+		"AppImage 181.2 MB",
+		"TV and Fire TV 98.8 MB",
+	]);
 });
 
 test("renderPlatforms names the chip when the Mac has one build", () => {
-	const requirement = (release: Release): string | null | undefined =>
-		parse(renderPlatforms(pickDownloads(release))).querySelector(".requirement")?.textContent;
-	expect(requirement(FULL)).toBe("macOS 15 Sequoia or later");
-	expect(requirement(only("mac-arm", "appimage"))).toBe(
-		"Apple Silicon, macOS 15 Sequoia or later"
-	);
-	expect(requirement(only("mac-intel", "appimage"))).toBe("Intel, macOS 15 Sequoia or later");
+	expect(rows(only("mac-arm", "appimage"))[0]).toEqual([
+		"Mac",
+		"Apple Silicon, macOS 15 Sequoia or later",
+		"Apple Silicon 70.1 MB",
+		"",
+	]);
+	expect(rows(only("mac-intel", "appimage"))[0]).toEqual([
+		"Mac",
+		"Intel, macOS 15 Sequoia or later",
+		"Intel 72.3 MB",
+		"",
+	]);
+});
+
+test("renderPlatforms only points to the TV steps when there's a TV build", () => {
+	expect(rows(only("android-phone"))[1]).toEqual([
+		"Fire TV, Google TV and Android",
+		"Android 9 or later, Fire OS 7 or later",
+		"Phone and tablet 101.2 MB",
+		"",
+	]);
 });
 
 test("renderPlatforms leaves out a system the release has no files for", () => {
-	const linux = only("deb");
-	expect(renderPlatforms(pickDownloads(linux))).toBe(
-		'<div class="platform"><h3>Linux</h3><p class="requirement">x86_64</p><ul class="file-list"><li><a class="file-row" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.deb"><span class="file-label">Debian and Ubuntu</span><span class="file-name">Cinette_<wbr>amd64.deb</span><span class="file-size">41.2 MB</span></a></li></ul></div>'
+	expect(rows(only("deb")).map(([title]) => title)).toEqual(["iPhone and iPad", "Linux"]);
+	expect(rows(only("mac-intel")).map(([title]) => title)).toEqual(["Mac", "iPhone and iPad"]);
+	expect(renderPlatforms(pickDownloads(only("deb")))).toBe(
+		`<div class="dl-row"><div><h3>iPhone and iPad</h3><p class="req">iOS and iPadOS 17.5 or later</p></div><div><div class="files"><a class="badge" href="${APP_STORE_URL}"><img src="./img/app-store-badge.svg" alt="Download on the App Store" width="156" height="52"></a></div></div></div><div class="dl-row"><div><h3>Linux</h3><p class="req">x86_64</p></div><div><div class="files"><a class="file main" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.deb">Debian and Ubuntu <small>41.2 MB</small></a></div></div></div>`
 	);
-	const mac = only("mac-intel");
-	expect(renderPlatforms(pickDownloads(mac))).not.toContain("Linux");
 });
 
 test("renderChecksums lists each file that has a checksum", () => {
@@ -168,20 +273,81 @@ test("renderChecksums is empty when no file has a checksum", () => {
 	expect(renderChecksums(pickDownloads(only("rpm")))).toBe("");
 });
 
-const PAGE =
-	"<header><!-- release:hero --></header><main><!-- release:meta --><div><!-- release:platforms --></div><!-- release:checksums --></main>";
+/** The schema.org data in the script that renderJsonLd makes. */
+const jsonLd = (release: Release): Record<string, unknown> => {
+	const script = parse(renderJsonLd(release, pickDownloads(release))).querySelector("script");
+	expect(script?.getAttribute("type")).toBe("application/ld+json");
+	return JSON.parse(script?.textContent ?? "") as Record<string, unknown>;
+};
 
-test("fillPage puts each part of the release in place of its marker", () => {
+test("renderJsonLd describes the site and the app for search engines", () => {
+	expect(jsonLd(FULL)).toEqual({
+		"@context": "https://schema.org",
+		"@graph": [
+			{
+				"@type": "WebSite",
+				"@id": "https://maxmb15.github.io/Cinette/#website",
+				url: "https://maxmb15.github.io/Cinette/",
+				name: "Cinette",
+			},
+			{
+				"@type": "SoftwareApplication",
+				"@id": "https://maxmb15.github.io/Cinette/#app",
+				name: "Cinette",
+				url: "https://maxmb15.github.io/Cinette/",
+				description:
+					"A free, open-source IPTV player. Add an M3U playlist or Xtream Codes login and watch live TV, movies and series with a TV guide.",
+				applicationCategory: "MultimediaApplication",
+				operatingSystem: "macOS 15, iOS 17.5, iPadOS 17.5, Linux, Android 9",
+				softwareVersion: "1.2.3",
+				downloadUrl: "https://github.com/MaxMB15/Cinette/releases/latest",
+				image: "https://maxmb15.github.io/Cinette/og.png",
+				license: "https://www.gnu.org/licenses/gpl-3.0.html",
+				isAccessibleForFree: true,
+				offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+				sameAs: [APP_STORE_URL, "https://github.com/MaxMB15/Cinette"],
+			},
+		],
+	});
+	expect(SITE_URL).toBe("https://maxmb15.github.io/Cinette/");
+	expect(APP_STORE_URL).toBe("https://apps.apple.com/us/app/cinette/id6824008116");
+});
+
+test("renderJsonLd only names the systems the release has files for", () => {
+	const app = (jsonLd(only("deb"))["@graph"] as Record<string, unknown>[])[1];
+	expect(app.operatingSystem).toBe("iOS 17.5, iPadOS 17.5, Linux");
+	const mac = (jsonLd(only("mac-arm", "android-tv"))["@graph"] as Record<string, unknown>[])[1];
+	expect(mac.operatingSystem).toBe("macOS 15, iOS 17.5, iPadOS 17.5, Android 9");
+});
+
+test("renderJsonLd leaves no < inside its script", () => {
+	const html = renderJsonLd(FULL, pickDownloads(FULL));
+	expect(html.slice(35, -9)).not.toContain("<");
+	expect(html.startsWith('<script type="application/ld+json">{')).toBe(true);
+	expect(html.endsWith("}</script>")).toBe(true);
+});
+
+const PAGE =
+	"<head><!-- release:jsonld --></head><header><!-- release:hero --><!-- guide --></header><main><!-- release:meta --><div><!-- release:platforms --></div><!-- release:checksums --></main>";
+
+test("fillPage puts each part in place of its marker", () => {
 	const release = only("mac-arm", "rpm");
 	const downloads = pickDownloads(release);
 	expect(fillPage(PAGE, release)).toBe(
-		`<header>${renderHero(release, downloads)}</header><main>${renderReleaseMeta(release)}<div>${renderPlatforms(downloads)}</div>${renderChecksums(downloads)}</main>`
+		`<head>${renderJsonLd(release, downloads)}</head><header>${renderHero(release, downloads)}${renderGuide()}</header><main>${renderReleaseMeta(release)}<div>${renderPlatforms(downloads)}</div>${renderChecksums(downloads)}</main>`
 	);
 });
 
 test("fillPage fails when a marker is missing or there twice", () => {
-	for (const name of ["hero", "meta", "platforms", "checksums"]) {
-		const marker = `<!-- release:${name} -->`;
+	for (const name of [
+		"guide",
+		"release:hero",
+		"release:meta",
+		"release:platforms",
+		"release:checksums",
+		"release:jsonld",
+	]) {
+		const marker = `<!-- ${name} -->`;
 		expect(() => fillPage(PAGE.replace(marker, ""), FULL)).toThrow(
 			new Error(`index.html needs one ${marker} marker.`)
 		);
