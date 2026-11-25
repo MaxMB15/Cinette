@@ -371,9 +371,11 @@ fn link_clocked(
 const GRACE: Duration = Duration::from_secs(30);
 
 /// The app's limits, but the link looks at the clock every 50 ms rather than
-/// every 2 s, and waits a tenth as long between attempts. A test that waits
-/// for a timeout then sees it soon after it runs out.
+/// every 2 s, waits a tenth as long between attempts, and stops trying a
+/// first connection that's refused after 300 ms. A test that waits for a
+/// timeout then sees it soon after it runs out.
 const QUICK: Limits = Limits {
+    first_try: Duration::from_millis(300),
     nap: Duration::from_millis(50),
     backoff: quick_backoff,
     ..Limits::STANDARD
@@ -479,6 +481,60 @@ async fn a_device_that_does_not_answer_is_unreachable() {
         refused.handle.command(Command::Stop).await,
         Err(LinkError::NotConnected)
     );
+}
+
+#[tokio::test]
+async fn keeps_trying_while_the_first_connection_is_refused() {
+    // macOS and iOS refuse it while they ask the user about the local
+    // network, and take it once the user allows it.
+    let t = target(ControlMode::Always).await;
+    let closed_port = {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let port = t.port;
+    let looks = Arc::new(AtomicUsize::new(0));
+    let counted = looks.clone();
+    let limits = Limits {
+        first_try: Duration::from_secs(3),
+        ..QUICK
+    };
+    let mut link = link_timed(
+        &t,
+        Arc::new(move || {
+            let allowed = counted.fetch_add(1, Ordering::SeqCst) >= 2;
+            let port = if allowed { port } else { closed_port };
+            vec![SocketAddr::from(([127, 0, 0, 1], port))]
+        }),
+        GRACE,
+        limits,
+    );
+    link.until_phase(Phase::Connected).await;
+    assert_eq!(looks.load(Ordering::SeqCst), 3);
+    // To the user it's still the first connection.
+    let phases = link.phases();
+    let connecting = phases.iter().filter(|p| **p == Phase::Connecting).count();
+    assert_eq!(connecting, 1, "{phases:?}");
+    assert!(
+        !phases
+            .iter()
+            .any(|p| matches!(p, Phase::Reconnecting { .. } | Phase::Closed { .. })),
+        "{phases:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_first_connection_that_runs_out_of_time_is_not_tried_again() {
+    let t = target(ControlMode::Always).await;
+    let (port, _full) = full_listener().await;
+    // Unlike a refusal, a connection that hangs isn't the system asking.
+    let limits = Limits {
+        connect: Duration::from_millis(200),
+        first_try: Duration::from_secs(60),
+        ..QUICK
+    };
+    let mut link = link_timed(&t, at(vec![port]), GRACE, limits);
+    assert_eq!(link.closed().await, Ended::Unreachable);
 }
 
 #[tokio::test]
@@ -1400,7 +1456,7 @@ async fn a_name_changed_while_a_connection_is_being_opened_goes_with_it() {
     link.until_phase(Phase::Connecting).await;
     link.handle.rename("Attic".into());
     // The first address takes the link's whole connect timeout.
-    let connected = timeout(CONNECT_TIMEOUT + WAIT, async {
+    let connected = timeout(QUICK.connect + WAIT, async {
         while !link.phases().contains(&Phase::Connected) {
             link.changes.recv().await.unwrap();
         }
