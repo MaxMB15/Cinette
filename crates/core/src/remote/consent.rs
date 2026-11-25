@@ -6,35 +6,32 @@
 //! Only the first request is on screen. A few more wait behind it, and every
 //! request runs out [`CONSENT_TIMEOUT`] after it arrived. Nothing but Allow
 //! grants anything: a denial, a dismissed dialog, a request that ran out or
-//! one the controller withdrew all refuse. After a denial, the same device
-//! is refused without a dialog for [`DENIAL_COOLDOWN`], so it can't keep a
-//! dialog on screen. The target also blocks a device denied control until
-//! the user unblocks it; a dismissed dialog refuses only that request.
+//! one the controller withdrew all refuse. A denial answers only the request
+//! it's for. The target also blocks a device denied control until the user
+//! unblocks it.
 //!
-//! A device can make up a new id for each request, so a denial, or a
-//! request that ran out, also turns away every new request for a while,
-//! from any device, with [`CloseReason::Busy`]. That's [`DENIAL_BACKOFF`] at
-//! first, twice as long after each one that follows, and never more than
-//! [`DENIAL_COOLDOWN`]. Without it for a request that ran out, a device
-//! could keep a dialog up for good by asking again each time.
-//! Allowing a request, or a cooldown's time with no denial after the wait
+//! So that no device can keep a dialog on screen, even one that makes up a
+//! new id for each request, a denial or a request that ran out turns away
+//! every new request for a while, from any device, with
+//! [`CloseReason::Busy`]. That's [`DENIAL_BACKOFF`] at first, twice as long
+//! after each one that follows, and never more than [`MAX_BACKOFF`].
+//! Allowing a request, or [`MAX_BACKOFF`] with no denial after the wait
 //! ends, starts it again from the beginning. Requests already waiting stay.
 
 use super::handshake::{Peer, VerificationCode};
-use super::identity::DeviceId;
 use super::message::{CloseReason, RequestKind};
 use super::ConnId;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// How long a request waits for an answer.
 pub const CONSENT_TIMEOUT: Duration = Duration::from_secs(30);
 /// The request on screen and the ones behind it.
 pub const MAX_WAITING: usize = 4;
-/// How long a denied device is refused without a dialog.
-pub const DENIAL_COOLDOWN: Duration = Duration::from_secs(60);
 /// How long every new request is refused after the first denial.
 pub const DENIAL_BACKOFF: Duration = Duration::from_secs(5);
+/// The longest every new request is refused after a denial.
+pub const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 pub type RequestId = u64;
 
@@ -75,7 +72,6 @@ pub struct Resolved {
 #[derive(Debug, Default)]
 pub struct ConsentQueue {
     waiting: VecDeque<ConsentRequest>,
-    denied_until: HashMap<DeviceId, Instant>,
     /// Denials since the backoff last started again.
     denials: u32,
     /// Until when every new request is refused.
@@ -89,9 +85,8 @@ impl ConsentQueue {
     }
 
     /// Adds a request. A device asking again replaces its earlier request,
-    /// which comes back as cancelled. Refuses a device denied a moment ago,
-    /// any request right after a denial, and any request when the queue is
-    /// full.
+    /// which comes back as cancelled. Refuses any request while
+    /// [`Self::pausing`], and any request when the queue is full.
     pub fn submit(
         &mut self,
         now: Instant,
@@ -100,14 +95,7 @@ impl ConsentQueue {
         code: VerificationCode,
         kind: RequestKind,
     ) -> Result<(RequestId, Vec<Resolved>), CloseReason> {
-        if self
-            .denied_until
-            .get(&peer.id)
-            .is_some_and(|&until| now < until)
-        {
-            return Err(CloseReason::Denied);
-        }
-        if self.quiet_until.is_some_and(|until| now < until) {
+        if self.pausing(now) {
             return Err(CloseReason::Busy);
         }
         let earlier = self.waiting.iter().position(|r| r.peer.id == peer.id);
@@ -134,6 +122,12 @@ impl ConsentQueue {
             expires_at: now + CONSENT_TIMEOUT,
         });
         Ok((id, replaced))
+    }
+
+    /// Whether new requests are turned away for now, after a denial or a
+    /// request that ran out.
+    pub fn pausing(&self, now: Instant) -> bool {
+        self.quiet_until.is_some_and(|until| now < until)
     }
 
     /// The request to show, if any.
@@ -164,8 +158,6 @@ impl ConsentQueue {
                 Outcome::Granted
             }
             Answer::Deny => {
-                self.denied_until
-                    .insert(request.peer.id.clone(), now + DENIAL_COOLDOWN);
                 self.back_off(now);
                 Outcome::Refused(CloseReason::Denied)
             }
@@ -179,21 +171,16 @@ impl ConsentQueue {
     fn back_off(&mut self, now: Instant) {
         if self
             .quiet_until
-            .is_some_and(|until| now >= until + DENIAL_COOLDOWN)
+            .is_some_and(|until| now >= until + MAX_BACKOFF)
         {
             self.denials = 0;
         }
-        // 5 s, 10 s, 20 s, 40 s, then the cooldown.
+        // 5 s, 10 s, 20 s, 40 s, then a minute.
         let wait = DENIAL_BACKOFF
             .saturating_mul(1 << self.denials.min(4))
-            .min(DENIAL_COOLDOWN);
+            .min(MAX_BACKOFF);
         self.denials = self.denials.saturating_add(1);
         self.quiet_until = Some(now + wait);
-    }
-
-    /// Forgets a denial of `device`, so it can ask again at once.
-    pub fn forgive(&mut self, device: &DeviceId) {
-        self.denied_until.remove(device);
     }
 
     /// The controller on `conn` stopped asking or hung up.
@@ -208,11 +195,6 @@ impl ConsentQueue {
 
     /// Takes out the requests that ran out, and backs off as for a denial.
     pub fn expire(&mut self, now: Instant) -> Vec<Resolved> {
-        // Only forgets denials whose cooldown is over. Keeping one until the
-        // moment after it ends changes nothing, since `submit` already lets
-        // the device in then.
-        // mutants: skip BinaryOperator: <= only keeps a denial that no longer refuses anything.
-        self.denied_until.retain(|_, until| now < *until);
         let (gone, kept): (Vec<_>, Vec<_>) =
             self.waiting.drain(..).partition(|r| now >= r.expires_at);
         self.waiting = kept.into();

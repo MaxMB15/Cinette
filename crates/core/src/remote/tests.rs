@@ -7,7 +7,7 @@
 
 use super::catalog::{CatalogItem, CatalogQuery};
 use super::channel::{Channel, FrameReader};
-use super::consent::{Answer, CONSENT_TIMEOUT, DENIAL_COOLDOWN};
+use super::consent::{Answer, CONSENT_TIMEOUT, DENIAL_BACKOFF};
 use super::controller::{Controller, Event, Output, GIVE_UP_AFTER};
 use super::handshake::{Next, Peer, TargetHandshake};
 use super::identity::DeviceKey;
@@ -686,8 +686,8 @@ fn a_denied_device_is_blocked_until_the_user_unblocks_it() {
     }];
     assert_eq!(net.last_blocked(), Some(&blocked));
     assert_eq!(net.target.blocked(), blocked);
-    // After a denial's minute, and under Always allow too.
-    net.advance(DENIAL_COOLDOWN);
+    // Once the pause after the denial ends, and under Always allow too.
+    net.advance(DENIAL_BACKOFF);
     net.set_mode(ControlMode::Always);
     let again = net.connect_with(key.clone(), "Neighbor", None);
     assert_eq!(
@@ -707,19 +707,6 @@ fn a_denied_device_is_blocked_until_the_user_unblocks_it() {
     net.set_mode(ControlMode::Ask);
     net.connect_with(key, "Neighbor", None);
     assert!(net.prompt().is_some());
-}
-
-#[test]
-fn unblocking_lets_a_device_ask_within_its_denials_minute() {
-    let mut net = Net::new(RemoteSettings::default());
-    let key = DeviceKey::generate();
-    net.connect_with(key.clone(), "Neighbor", None);
-    net.answer(Answer::Deny);
-    net.advance(super::consent::DENIAL_BACKOFF);
-    let actions = net.target.unblock(&key.device_id());
-    net.handle(actions);
-    net.connect_with(key, "Neighbor", None);
-    assert_eq!(net.prompt().unwrap().name, "Neighbor");
 }
 
 #[test]

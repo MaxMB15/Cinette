@@ -6,7 +6,7 @@
 //! grant that can't be used twice.
 
 use super::channel::FrameReader;
-use super::consent::{Answer, CONSENT_TIMEOUT};
+use super::consent::{Answer, CONSENT_TIMEOUT, DENIAL_BACKOFF};
 use super::controller::{AskError, Event};
 use super::message::{ErrorCode, Message};
 use super::settings::{ControlMode, RemoteSettings};
@@ -339,7 +339,7 @@ fn an_import_the_target_cant_export_is_refused() {
 }
 
 #[test]
-fn a_denied_transfer_leaves_control_alone_and_cools_down() {
+fn a_denied_transfer_leaves_control_alone_and_asks_again_after_a_pause() {
     let (mut net, phone) = connected();
     ask(&mut net, phone, Direction::Send);
     net.answer(Answer::Deny);
@@ -350,11 +350,19 @@ fn a_denied_transfer_leaves_control_alone_and_cools_down() {
     // Denying a transfer doesn't block the device from control.
     assert!(net.target.blocked().is_empty());
 
-    // Asking again at once gets no dialog.
+    // Asking again at once is told to wait, with no dialog.
     net.clients[phone].events.clear();
     ask(&mut net, phone, Direction::Send);
-    assert_eq!(refused(&net, phone), Some(ErrorCode::Denied));
+    assert_eq!(refused(&net, phone), Some(ErrorCode::RateLimited));
     assert_eq!(net.prompt(), None);
+
+    // After the pause the same device gets a dialog again.
+    wait(&mut net, phone, DENIAL_BACKOFF);
+    net.clients[phone].events.clear();
+    ask(&mut net, phone, Direction::Send);
+    assert_eq!(net.prompt().unwrap().name, "Phone");
+    assert_eq!(refused(&net, phone), None);
+    assert!(net.clients[phone].connected());
 }
 
 #[test]
@@ -1136,7 +1144,7 @@ fn a_target_that_only_takes_history_refuses_providers() {
 }
 
 #[test]
-fn a_request_right_after_another_devices_denial_is_busy() {
+fn a_request_right_after_another_devices_denial_is_told_to_wait() {
     let mut net = Net::with_mode(ControlMode::Always);
     net.target.offer(true, true);
     let phone = net.connect("Phone");
@@ -1144,7 +1152,7 @@ fn a_request_right_after_another_devices_denial_is_busy() {
     ask(&mut net, phone, Direction::Send);
     net.answer(Answer::Deny);
     ask(&mut net, laptop, Direction::Send);
-    assert_eq!(refused(&net, laptop), Some(ErrorCode::Busy));
+    assert_eq!(refused(&net, laptop), Some(ErrorCode::RateLimited));
 }
 
 #[test]

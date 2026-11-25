@@ -307,7 +307,6 @@ impl Target {
 
     /// Lets the device with this id ask again, from now on.
     pub fn unblock(&mut self, device: &DeviceId) -> Vec<Action> {
-        self.consent.forgive(device);
         let before = self.blocked.len();
         self.blocked.retain(|b| b.device_id != *device);
         if self.blocked.len() == before {
@@ -1302,9 +1301,17 @@ impl Target {
             }
         };
         let (peer, code) = (auth.peer.clone(), auth.code);
-        match self.consent.submit(now, conn, peer, code, asked.kind()) {
-            Err(reason) => {
-                let code = refusal(reason);
+        // A pause after a denial isn't another request in the way, so the
+        // controller hears it apart from busy and can say to wait.
+        let submitted = if self.consent.pausing(now) {
+            Err(ErrorCode::RateLimited)
+        } else {
+            self.consent
+                .submit(now, conn, peer, code, asked.kind())
+                .map_err(refusal)
+        };
+        match submitted {
+            Err(code) => {
                 self.reply(conn, &Message::Error { re: Some(id), code }, actions);
             }
             Ok((_, replaced)) => {

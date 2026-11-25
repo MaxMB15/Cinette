@@ -117,6 +117,9 @@ describe("refusalText", () => {
 		expect(refusalText("TV", "busy")).toBe(
 			"TV is busy with another request. Try again in a moment."
 		);
+		expect(refusalText("TV", "rate_limited")).toBe(
+			"TV is pausing new requests. Try again in a minute."
+		);
 		expect(refusalText("TV", "cancelled")).toBe("It was cancelled.");
 		expect(refusalText("TV", "unsupported")).toBe(
 			"TV can't take this. It may need a newer Cinette."

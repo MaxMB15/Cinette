@@ -87,6 +87,8 @@ export const refusalText = (name: string, code: RemoteErrorCode): string => {
 			return `No one answered on ${name} in time.`;
 		case "busy":
 			return `${name} is busy with another request. Try again in a moment.`;
+		case "rate_limited":
+			return `${name} is pausing new requests. Try again in a minute.`;
 		case "cancelled":
 			return "It was cancelled.";
 		case "unsupported":

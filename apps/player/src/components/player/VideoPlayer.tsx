@@ -30,7 +30,7 @@ import { castControlMessage, showsCastButton } from "@/lib/cast";
 import { convertWarning, tvFailureMessage } from "@/lib/device-picker";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { remoteItem, type CatalogItem } from "@/lib/cinette-destination";
+import { remoteControlMessage, remoteItem, type CatalogItem } from "@/lib/cinette-destination";
 import type { ExternalSubtitle, PlaybackDestination } from "@/lib/destination";
 import { usePublishRemoteState } from "@/hooks/useRemoteTarget";
 import { setProgressSaver } from "@/lib/player-progress";
@@ -133,8 +133,8 @@ interface PlayerNotice {
  * What the player says when a control failed on `tv`, called `name`, from
  * a key or a click, or `null`. A cast says why in its own words while it's
  * connected, and says for itself when it's going. AirPlay says why a seek
- * failed; the rest shows on the TV. Another Cinette device couldn't be
- * reached.
+ * failed; the rest shows on the TV. Another Cinette device says whether
+ * it couldn't be reached or turned the command down.
  */
 const controlFailure = (
 	tv: PlaybackDestination,
@@ -146,7 +146,7 @@ const controlFailure = (
 		return tv.getState().connection === "connected"
 			? { text: castControlMessage(name, error), cast: true }
 			: null;
-	if (tv.kind === "cinette") return { text: `Couldn't reach ${name}.`, cast: false };
+	if (tv.kind === "cinette") return { text: remoteControlMessage(name, error), cast: false };
 	return seeking ? { text: airplaySeekMessage(error), cast: false } : null;
 };
 
