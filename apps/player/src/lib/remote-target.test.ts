@@ -295,6 +295,36 @@ describe("applyRemoteCommand", () => {
 		await expect(applyRemoteCommand({ action: "stop" }, closed)).resolves.toBe("failed");
 	});
 
+	it("acts on mpv playing on with no player open", async () => {
+		const playingOn = fakePlayer();
+		const t = { ...target(null), playingOn: playingOn as unknown as PlaybackDestination };
+		expect(await applyRemoteCommand({ action: "pause", itemId: channel.id }, t)).toBe("ok");
+		expect(await applyRemoteCommand({ action: "stop" }, t)).toBe("ok");
+		expect(playingOn.pause).toHaveBeenCalledTimes(1);
+		expect(playingOn.stop).toHaveBeenCalledTimes(1);
+		expect(t.stopWithoutPlayer).not.toHaveBeenCalled();
+	});
+
+	it("acts on the open player before mpv playing on", async () => {
+		const player = fakePlayer();
+		const playingOn = fakePlayer();
+		const t = { ...target(player), playingOn: playingOn as unknown as PlaybackDestination };
+		expect(await applyRemoteCommand({ action: "play", itemId: channel.id }, t)).toBe("ok");
+		expect(player.play).toHaveBeenCalledTimes(1);
+		expect(playingOn.play).not.toHaveBeenCalled();
+	});
+
+	it("opens the player for a load while mpv plays on", async () => {
+		const opened = fakePlayer();
+		const playingOn = fakePlayer();
+		const t = { ...target(null), playingOn: playingOn as unknown as PlaybackDestination };
+		t.waitForPlayer.mockResolvedValue(opened as unknown as PlaybackDestination);
+		expect(await applyRemoteCommand({ action: "load", itemId: channel.id }, t)).toBe("ok");
+		expect(t.openPlayer).toHaveBeenCalledTimes(1);
+		expect(opened.load).toHaveBeenCalledTimes(1);
+		expect(playingOn.load).not.toHaveBeenCalled();
+	});
+
 	it("fails other commands when no player is open", async () => {
 		for (const command of [
 			{ action: "play", itemId: channel.id },

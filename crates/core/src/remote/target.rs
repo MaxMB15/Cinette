@@ -240,6 +240,22 @@ fn has_not_asked(c: &Conn) -> bool {
     matches!(c.stage, Stage::Handshake(_) | Stage::Ready(_))
 }
 
+/// Took too long over the handshake, or went quiet for [`IDLE_TIMEOUT`].
+fn is_stale(c: &Conn, now: Instant) -> bool {
+    match c.stage {
+        Stage::Handshake(_) | Stage::Ready(_) => now.duration_since(c.opened) >= HANDSHAKE_TIMEOUT,
+        Stage::Waiting(..) => false,
+        _ => now.duration_since(c.last_heard) >= IDLE_TIMEOUT,
+    }
+}
+
+/// When the connection dropped: `now`, or when it went quiet for
+/// [`IDLE_TIMEOUT`] if that came first. A suspended app only finds out once
+/// it runs again, and the controller has been reconnecting since then.
+fn dropped_at(c: &Conn, now: Instant) -> Instant {
+    now.min(c.last_heard + IDLE_TIMEOUT)
+}
+
 pub struct Target {
     key: DeviceKey,
     device_type: DeviceType,
@@ -440,7 +456,8 @@ impl Target {
                     if self.consent.withdraw(conn).is_some() {
                         self.sync_prompt(&mut actions);
                     }
-                    self.sessions.detach(conn, now);
+                    self.sessions.detach(conn, dropped_at(&c, now));
+                    self.sessions.expire(now);
                     actions.push(self.sessions_changed());
                 }
                 _ => {}
@@ -456,6 +473,11 @@ impl Target {
         let Some(c) = self.conns.get_mut(&conn) else {
             return actions;
         };
+        // A suspended app reads what came while it was away only once it runs
+        // again. The tick that was due first closes a connection gone quiet.
+        if is_stale(c, now) {
+            return self.tick(now);
+        }
         c.last_heard = now;
         match std::mem::replace(&mut c.stage, Stage::Closed) {
             Stage::Handshake(handshake) => {
@@ -1138,21 +1160,15 @@ impl Target {
         for (conn, _) in std::mem::take(&mut self.evicted) {
             actions.push(Action::Close { conn });
         }
-        let stale: Vec<ConnId> = self
+        let stale: Vec<(ConnId, Instant)> = self
             .conns
             .iter()
-            .filter(|(_, c)| match c.stage {
-                Stage::Handshake(_) | Stage::Ready(_) => {
-                    now.duration_since(c.opened) >= HANDSHAKE_TIMEOUT
-                }
-                Stage::Waiting(..) => false,
-                _ => now.duration_since(c.last_heard) >= IDLE_TIMEOUT,
-            })
-            .map(|(&conn, _)| conn)
+            .filter(|(_, c)| is_stale(c, now))
+            .map(|(&conn, c)| (conn, dropped_at(c, now)))
             .collect();
         let mut sessions_changed = false;
-        for conn in stale {
-            if self.sessions.detach(conn, now).is_some() {
+        for (conn, at) in stale {
+            if self.sessions.detach(conn, at).is_some() {
                 sessions_changed = true;
             }
             self.close(conn, Some(CloseReason::Timeout), &mut actions);

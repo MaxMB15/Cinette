@@ -153,6 +153,9 @@ const hostsOf = (urls: string[]): string[] =>
 export interface CommandTarget {
 	/** The mounted player's destination, or null when no player is open. */
 	player: PlaybackDestination | null;
+	/** With no player open, mpv as it plays on, where a controller follows
+	 *  it. Every command but a load acts on it then. */
+	playingOn?: PlaybackDestination | null;
 	/** This device's channel with this id, if it has one. */
 	findChannel: (id: string) => Channel | undefined;
 	/** Opens the player page when none is open. */
@@ -179,13 +182,14 @@ export const applyRemoteCommand = async (
 	command: RemoteCommand,
 	target: CommandTarget
 ): Promise<CommandOutcome> => {
-	const { player } = target;
+	// With no player open, mpv may still play what the last one had.
+	const player = target.player ?? target.playingOn;
 	if (command.action === "load") {
 		const channel = target.findChannel(command.itemId);
 		if (!channel) return "notFound";
 		// The open page plays it, so it goes in this device's history and
 		// starts where the controller asked.
-		let destination: Pick<PlaybackDestination, "load"> | null = player;
+		let destination: Pick<PlaybackDestination, "load"> | null = target.player;
 		if (!destination) {
 			target.openPlayer();
 			destination = await target.waitForPlayer();

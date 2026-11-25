@@ -6,7 +6,9 @@ import { useNavigate } from "react-router";
 import { listen } from "@tauri-apps/api/event";
 import { useChannels } from "@/hooks/useChannels";
 import { useLatestRef } from "@/hooks/useLatestRef";
-import type { PlaybackDestination } from "@/lib/destination";
+import { useLocalPlayback } from "@/hooks/useLocalPlayback";
+import { useMpv } from "@/hooks/useMpv";
+import { UnsupportedError, type PlaybackDestination } from "@/lib/destination";
 import {
 	applyRemoteCommand,
 	getMountedPlayer,
@@ -32,6 +34,12 @@ import {
 } from "@/lib/tauri";
 import type { Channel } from "@/lib/types";
 import { saveProgressNow } from "@/lib/player-progress";
+
+/** The channel the player page has open, or had when it closed. */
+let pageChannel: Channel | null = null;
+/** mpv while it plays on with the player page closed and a controller
+ *  follows it. */
+let playingOn: PlaybackDestination | null = null;
 
 /**
  * Listens to a Tauri event for as long as the component is mounted. The
@@ -75,6 +83,7 @@ export const useRemoteTarget = (): void => {
 		({ token, command, channel }) => {
 			void applyRemoteCommand(command, {
 				player: getMountedPlayer(),
+				playingOn,
 				// An episode comes with the command, since the channel list has none.
 				findChannel: (id) =>
 					channel?.id === id ? channel : channelsRef.current.find((c) => c.id === id),
@@ -127,31 +136,10 @@ export const useRemoteSessions = (): RemoteSession[] =>
 export const useRemoteBlocked = (): BlockedDevice[] =>
 	useBackendList("remote://blocked", remoteBlocked);
 
-/**
- * Makes the player's destination the one remote commands act on, and while
- * a controller is connected, sends it every state the player reports.
- */
-export const usePublishRemoteState = (
-	player: PlaybackDestination,
-	channel: Channel | null
-): void => {
+/** While a controller is connected, sends it every state `player` reports. */
+const useSendRemoteState = (player: PlaybackDestination, channel: Channel | null): void => {
 	const connected = useRemoteSessions().some((s) => s.connected);
 	const channelRef = useLatestRef(channel);
-
-	useEffect(() => {
-		setMountedPlayer(player);
-		return () => {
-			if (getMountedPlayer() !== player) return;
-			setMountedPlayer(null);
-			// The page closed before it could report the player idle, so
-			// controllers would keep showing what played. A new destination
-			// for the same page takes over in the same commit, and says more.
-			queueMicrotask(() => {
-				if (getMountedPlayer() === null) remoteSetState(IDLE_REMOTE_STATE).catch(() => {});
-			});
-		};
-	}, [player]);
-
 	useEffect(() => {
 		if (!connected) return;
 		const send = (state: ReturnType<PlaybackDestination["getState"]>) => {
@@ -167,6 +155,59 @@ export const usePublishRemoteState = (
 		const unsubscribe = player.subscribe(send);
 		return unsubscribe;
 	}, [connected, player, channelRef]);
+};
+
+/**
+ * Makes the player's destination the one remote commands act on, and while
+ * a controller is connected, sends it every state the player reports.
+ */
+export const usePublishRemoteState = (
+	player: PlaybackDestination,
+	channel: Channel | null
+): void => {
+	useEffect(() => {
+		pageChannel = channel;
+	}, [channel]);
+
+	useEffect(() => {
+		setMountedPlayer(player);
+		return () => {
+			if (getMountedPlayer() !== player) return;
+			setMountedPlayer(null);
+			// The page closed before it could report the player idle, so
+			// controllers would keep showing what played. A new destination
+			// for the same page takes over in the same commit, and says more.
+			queueMicrotask(() => {
+				if (getMountedPlayer() === null) remoteSetState(IDLE_REMOTE_STATE).catch(() => {});
+			});
+		};
+	}, [player]);
+
+	useSendRemoteState(player, channel);
+};
+
+/** Only the player page starts an item, so a load opens it. */
+const startsOnPage = () =>
+	Promise.reject(new UnsupportedError("Starting an item with the player closed"));
+
+/**
+ * mpv as it plays on after the player page closed, as it does on a locked
+ * iPhone. Controllers see what plays, and every command but a load acts on
+ * it. Mounted while a controller is connected and no player page is open.
+ */
+export const usePlayingOnTarget = (): void => {
+	const mpv = useMpv();
+	// The page started what mpv still plays, so it's the page's last channel.
+	const [channel] = useState(() => pageChannel);
+	const playing = mpv.state.currentUrl ? channel : null;
+	const player = useLocalPlayback(mpv, playing, startsOnPage);
+	useEffect(() => {
+		playingOn = player;
+		return () => {
+			playingOn = null;
+		};
+	}, [player]);
+	useSendRemoteState(player, playing);
 };
 
 /** A device asking to control this one, as `remote://consent` brings it. */
