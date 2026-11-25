@@ -2852,6 +2852,7 @@ dependencies = [
  "blake2",
  "chrono",
  "curve25519-dalek",
+ "futures-util",
  "getrandom 0.3.4",
  "memmap2",
  "percent-encoding",

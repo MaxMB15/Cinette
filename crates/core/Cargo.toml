@@ -37,6 +37,9 @@ getrandom = "0.3"
 # Clears the logins of providers sent to another device from memory once
 # they're saved. Already in the build through the Noise crates.
 zeroize = "1"
+# Asks for a panel's categories a few at a time. Already in the build through
+# reqwest.
+futures-util = "0.3"
 
 # reqwest 0.13 switched its default TLS to rustls with aws-lc. Desktop and iOS
 # keep 0.12's default, the system's TLS: Security.framework on Apple platforms

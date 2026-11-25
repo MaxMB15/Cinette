@@ -6,6 +6,7 @@
 
 use crate::json::number_or_string;
 use crate::models::channel::Channel;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -184,6 +185,10 @@ struct XtreamEpisode {
     container_extension: Option<String>,
 }
 
+/// How many category lists to ask for at once, for a panel that only lists
+/// one category at a time.
+const CATEGORY_REQUESTS: usize = 4;
+
 /// A client for one Xtream panel's player API.
 pub struct XtreamClient {
     credentials: XtreamCredentials,
@@ -250,8 +255,12 @@ impl XtreamClient {
     /// even when its body parses, since a panel can send an empty list with
     /// an error, and the refresh would then drop every saved channel of that
     /// list.
-    async fn get_list<T: DeserializeOwned>(&self, action: &str) -> Result<Vec<T>, XtreamError> {
-        let url = self.credentials.api_url(action, &[]);
+    async fn get_list<T: DeserializeOwned>(
+        &self,
+        action: &str,
+        extra: &[(&str, &str)],
+    ) -> Result<Vec<T>, XtreamError> {
+        let url = self.credentials.api_url(action, extra);
         Ok(self
             .client
             .get(&url)
@@ -262,12 +271,42 @@ impl XtreamClient {
             .await?)
     }
 
-    async fn get_categories(&self, action: &str) -> Result<HashMap<String, String>, XtreamError> {
-        let cats: Vec<XtreamCategory> = self.get_list(action).await?;
-        Ok(cats
-            .into_iter()
-            .map(|c| (c.category_id, c.category_name))
-            .collect())
+    /// `list`, unless the panel sent it empty and has `categories`. Some
+    /// panels send nothing when asked for a whole list, but answer for each
+    /// category, so this then asks for every category's list, a few at a
+    /// time, and puts them together. An entry in more than one category stays
+    /// only in the first of them the panel lists, which is where such a
+    /// panel's whole list puts it. One that fails fails the whole list, so a
+    /// refresh keeps what it saved before.
+    async fn or_by_category<T: DeserializeOwned + Listing + Send>(
+        &self,
+        list: Result<Vec<T>, XtreamError>,
+        action: &str,
+        categories: &[XtreamCategory],
+    ) -> Result<Vec<T>, XtreamError> {
+        match list {
+            Ok(items) if items.is_empty() && !categories.is_empty() => {
+                tracing::info!(
+                    "[Xtream] {action} sent nothing, so asking each of its {} categories",
+                    categories.len()
+                );
+                let requests = categories.iter().map(|category| async move {
+                    let by_category = [("category_id", category.category_id.as_str())];
+                    self.get_list::<T>(action, &by_category).await
+                });
+                // Boxed, since the compiler can't otherwise show that the
+                // stream is Send for every lifetime (rust-lang/rust#102211).
+                let mut items: Vec<T> = stream::iter(requests)
+                    .buffered(CATEGORY_REQUESTS)
+                    .boxed()
+                    .try_concat()
+                    .await?;
+                let mut listed = HashSet::new();
+                items.retain(|item| item.id().is_none_or(|id| listed.insert(id)));
+                Ok(items)
+            }
+            list => list,
+        }
     }
 
     /// Fetch all episodes for a specific series from the Xtream `get_series_info` endpoint.
@@ -370,7 +409,8 @@ impl XtreamChannels {
 /// Authenticate then fetch all 6 Xtream endpoints simultaneously (3 stream lists + 3 category
 /// lists). Each fetch is independent. A failed one is logged and skipped, so a server that
 /// supports only some endpoints still returns what it can, and a failed stream list is named
-/// in `failed_content_types`.
+/// in `failed_content_types`. A stream list that comes back empty is asked for again one
+/// category at a time, since some panels only list it that way.
 ///
 /// Channel ids come from the panel's own stream and series ids, so favorites,
 /// history and downloads stay with the same channel when the panel reorders
@@ -390,24 +430,35 @@ async fn fetch_all_channels(client: &XtreamClient) -> Result<XtreamChannels, Xtr
     client.authenticate().await?;
 
     let (live_streams_r, live_cats_r, vod_streams_r, vod_cats_r, series_r, series_cats_r) = tokio::join!(
-        client.get_list::<XtreamStream>("get_live_streams"),
-        client.get_categories("get_live_categories"),
-        client.get_list::<XtreamStream>("get_vod_streams"),
-        client.get_categories("get_vod_categories"),
-        client.get_list::<XtreamSeries>("get_series"),
-        client.get_categories("get_series_categories"),
+        client.get_list::<XtreamStream>("get_live_streams", &[]),
+        client.get_list::<XtreamCategory>("get_live_categories", &[]),
+        client.get_list::<XtreamStream>("get_vod_streams", &[]),
+        client.get_list::<XtreamCategory>("get_vod_categories", &[]),
+        client.get_list::<XtreamSeries>("get_series", &[]),
+        client.get_list::<XtreamCategory>("get_series_categories", &[]),
     );
 
-    warn_if_failed("get_live_streams", &live_streams_r);
     warn_if_failed("get_live_categories", &live_cats_r);
-    warn_if_failed("get_vod_streams", &vod_streams_r);
     warn_if_failed("get_vod_categories", &vod_cats_r);
-    warn_if_failed("get_series", &series_r);
     warn_if_failed("get_series_categories", &series_cats_r);
 
     let live_cats = live_cats_r.unwrap_or_default();
     let vod_cats = vod_cats_r.unwrap_or_default();
     let series_cats = series_cats_r.unwrap_or_default();
+
+    let (live_streams_r, vod_streams_r, series_r) = tokio::join!(
+        client.or_by_category(live_streams_r, "get_live_streams", &live_cats),
+        client.or_by_category(vod_streams_r, "get_vod_streams", &vod_cats),
+        client.or_by_category(series_r, "get_series", &series_cats),
+    );
+
+    warn_if_failed("get_live_streams", &live_streams_r);
+    warn_if_failed("get_vod_streams", &vod_streams_r);
+    warn_if_failed("get_series", &series_r);
+
+    let live_cats = category_names(live_cats);
+    let vod_cats = category_names(vod_cats);
+    let series_cats = category_names(series_cats);
 
     let creds = &client.credentials;
     let mut fetched = XtreamChannels::default();
@@ -428,17 +479,27 @@ async fn fetch_all_channels(client: &XtreamClient) -> Result<XtreamChannels, Xtr
 
 /// An entry in one of the panel's lists.
 trait Listing {
+    /// The panel's id for the entry.
+    fn id(&self) -> Option<u64>;
     /// The category the entry is listed in.
     fn category_id(&self) -> Option<&str>;
 }
 
 impl Listing for XtreamStream {
+    fn id(&self) -> Option<u64> {
+        self.stream_id
+    }
+
     fn category_id(&self) -> Option<&str> {
         self.category_id.as_deref()
     }
 }
 
 impl Listing for XtreamSeries {
+    fn id(&self) -> Option<u64> {
+        self.series_id
+    }
+
     fn category_id(&self) -> Option<&str> {
         self.category_id.as_deref()
     }
@@ -609,6 +670,14 @@ fn series_channel(categories: &HashMap<String, String>, series: XtreamSeries) ->
         content_type: "series".to_string(),
         ..Default::default()
     })
+}
+
+/// The categories' names by category id.
+fn category_names(categories: Vec<XtreamCategory>) -> HashMap<String, String> {
+    categories
+        .into_iter()
+        .map(|c| (c.category_id, c.category_name))
+        .collect()
 }
 
 fn category_name(categories: &HashMap<String, String>, category_id: Option<&str>) -> String {
@@ -1440,6 +1509,116 @@ mod tests {
         assert!(fetched.failed_content_types.is_empty());
     }
 
+    /// A panel that sends every list empty and lists each category on its
+    /// own. Both live categories hold CNN, and both series categories hold
+    /// Fargo. Routes in `overrides` win.
+    fn serve_panel_by_category(overrides: Vec<Route>) -> String {
+        let routes = vec![
+            route(
+                "action=get_live_streams&category_id=3 ",
+                "200 OK",
+                r#"[{"stream_id":7,"name":"CNN","category_id":"3"}]"#,
+            ),
+            route(
+                "action=get_live_streams&category_id=4 ",
+                "200 OK",
+                r#"[{"stream_id":8,"name":"ESPN","category_id":"4"},{"stream_id":7,"name":"CNN","category_id":"4"}]"#,
+            ),
+            route(
+                "action=get_live_categories ",
+                "200 OK",
+                r#"[{"category_id":"3","category_name":"News"},{"category_id":"4","category_name":"Sports"}]"#,
+            ),
+            route(
+                "action=get_vod_streams&category_id=5 ",
+                "200 OK",
+                r#"[{"stream_id":9,"name":"Heat","category_id":"5","container_extension":"mkv"}]"#,
+            ),
+            route(
+                "action=get_series&category_id=8 ",
+                "200 OK",
+                r#"[{"series_id":4,"name":"The Wire","category_id":"8"},{"series_id":5,"name":"Fargo","category_id":"8"}]"#,
+            ),
+            route(
+                "action=get_series&category_id=9 ",
+                "200 OK",
+                r#"[{"series_id":5,"name":"Fargo","category_id":"9"},{"series_id":6,"name":"Atlanta","category_id":"9"}]"#,
+            ),
+            route("action=get_live_streams ", "200 OK", "[]"),
+            route("action=get_vod_streams ", "200 OK", "[]"),
+            route("action=get_series ", "200 OK", "[]"),
+            route(
+                "action=get_series_categories ",
+                "200 OK",
+                r#"[{"category_id":"9","category_name":"Comedy"},{"category_id":"8","category_name":"Drama"}]"#,
+            ),
+        ];
+        serve_panel(overrides.into_iter().chain(routes).collect())
+    }
+
+    #[tokio::test]
+    async fn a_list_sent_empty_is_asked_for_one_category_at_a_time() {
+        let server = serve_panel_by_category(vec![]);
+        let password = test_server::password();
+        let logged = Logged::default();
+        let fetched = {
+            let _guard = logged.start();
+            fetch_all_channels(&panel(&server)).await.unwrap()
+        };
+        assert_eq!(
+            id_group_url(&fetched.channels),
+            [
+                // CNN only in News, which the panel lists first.
+                (
+                    "live-7",
+                    "News",
+                    format!("{server}/live/u/{password}/7.ts").as_str()
+                ),
+                (
+                    "live-8",
+                    "Sports",
+                    format!("{server}/live/u/{password}/8.ts").as_str()
+                ),
+                (
+                    "movie-9",
+                    "Movies",
+                    format!("{server}/movie/u/{password}/9.mkv").as_str()
+                ),
+                // In the panel's order, with Fargo only in Comedy, which the
+                // panel lists first.
+                ("series-5", "Comedy", "xtream://series/5"),
+                ("series-6", "Comedy", "xtream://series/6"),
+                ("series-4", "Drama", "xtream://series/4"),
+            ]
+        );
+        assert!(fetched.failed_content_types.is_empty());
+        let log = logged.text();
+        assert!(
+            log.contains("[Xtream] get_series sent nothing, so asking each of its 2 categories"),
+            "{log}"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_category_that_fails_fails_its_whole_list() {
+        let server = serve_panel_by_category(vec![route(
+            "action=get_series&category_id=9 ",
+            "500 Internal Server Error",
+            "[]",
+        )]);
+        let logged = Logged::default();
+        let fetched = {
+            let _guard = logged.start();
+            fetch_all_channels(&panel(&server)).await.unwrap()
+        };
+        // Drama loaded, but the saved series stay, since Comedy didn't.
+        assert_eq!(ids(&fetched.channels), ["live-7", "live-8", "movie-9"]);
+        assert_eq!(fetched.failed_content_types, ["series"]);
+        let log = logged.text();
+        assert!(log.contains("[Xtream] get_series failed: "), "{log}");
+        assert!(!log.contains(&test_server::password()), "{log}");
+    }
+
     #[tokio::test]
     async fn a_failed_endpoint_leaves_out_only_what_it_would_have_listed() {
         let server = serve_panel(vec![
@@ -1528,7 +1707,7 @@ mod tests {
     async fn an_error_status_does_not_show_the_login() {
         let server = serve_once("500 Internal Server Error", "[]");
         let err = panel(&server)
-            .get_list::<XtreamStream>("get_vod_streams")
+            .get_list::<XtreamStream>("get_vod_streams", &[])
             .await
             .unwrap_err();
         assert!(matches!(err, XtreamError::Network(_)), "{err:?}");
@@ -1538,6 +1717,8 @@ mod tests {
     #[tokio::test]
     async fn a_panel_with_nothing_to_list_is_an_invalid_response() {
         let server = serve_panel(vec![
+            // Each category is empty too.
+            route("&category_id=", "200 OK", "[]"),
             route("action=get_live_streams ", "200 OK", "[]"),
             route("action=get_vod_streams ", "200 OK", "[]"),
             route("action=get_series ", "404 Not Found", ""),
