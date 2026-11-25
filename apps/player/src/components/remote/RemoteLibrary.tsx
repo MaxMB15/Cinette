@@ -54,6 +54,7 @@ export const RemoteLibrary = ({ link, onLeave }: { link: Link; onLeave: () => vo
 	const earlier = lastLinks.get(link.deviceId);
 	/** What the earlier link to this device loaded for `query`, if anything. */
 	const earlierData = <T,>(query: (source: Source) => { queryKey: readonly unknown[] }) =>
+		// Stryker disable next-line ConditionalExpression: remoteSource(undefined) is "remote:undefined", which names no list, so getQueryData gives undefined either way.
 		earlier === undefined
 			? undefined
 			: queryClient.getQueryData<T>(query(remoteSource(earlier)).queryKey);

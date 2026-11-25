@@ -275,7 +275,8 @@ describe("RemoteLibrary", () => {
 			.fn<() => Promise<Channel[]>>()
 			.mockReturnValueOnce(stale.promise)
 			.mockResolvedValue([{ ...news, isFavorite: true }, sport]);
-		answer({ channels, providers: async () => [], toggleFavorite: async () => true }, [10]);
+		const providers = vi.fn(async () => []);
+		answer({ channels, providers, toggleFavorite: async () => true }, [10]);
 		show(client, linkTo(10));
 		fireEvent.click(screen.getByRole("button", { name: "Star News" }));
 		expect(await screen.findByRole("button", { name: "Unstar News" })).toBeInTheDocument();
@@ -283,6 +284,8 @@ describe("RemoteLibrary", () => {
 		// The copy read before the star is dropped.
 		await act(async () => stale.resolve([news, sport]));
 		expect(screen.getByRole("button", { name: "Unstar News" })).toBeInTheDocument();
+		// Only the channels load again.
+		expect(providers).toHaveBeenCalledOnce();
 	});
 
 	it("says there are no channels when the other device has none", async () => {
@@ -340,7 +343,11 @@ describe("RemoteLibrary", () => {
 
 	it("stars a channel on the other device and shows it here", async () => {
 		const toggleFavorite = vi.fn(async () => true);
-		answer({ channels: async () => [news, sport], providers: async () => [], toggleFavorite });
+		answer({
+			channels: async () => [news, sport],
+			providers: () => new Promise(() => {}),
+			toggleFavorite,
+		});
 		show();
 		fireEvent.click(await screen.findByRole("button", { name: "Star News" }));
 		expect(await screen.findByRole("button", { name: "Unstar News" })).toBeInTheDocument();
@@ -350,7 +357,7 @@ describe("RemoteLibrary", () => {
 			id: "live-1",
 		});
 		expect(own.toggleFavorite).not.toHaveBeenCalled();
-		// Nothing was loading, so nothing loads again.
+		// The providers are still loading, but the channels aren't, so they don't load again.
 		expect(channelCalls(9)).toBe(1);
 	});
 
