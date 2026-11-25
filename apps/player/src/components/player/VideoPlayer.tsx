@@ -687,8 +687,6 @@ export const PlayerView = () => {
 	useEffect(() => {
 		if (airplay.notPicked) void playHereAgain.current();
 	}, [airplay.notPicked, playHereAgain]);
-	// Other Cinette devices control this player and see what it plays.
-	usePublishRemoteState(playback, activeChannel);
 	// A history transfer saves where this player is before it reads the history.
 	useEffect(
 		() =>
@@ -1522,6 +1520,14 @@ export const PlayerView = () => {
 	useEffect(() => {
 		if (mpv.windowClosedId > 0) handleStopRef.current();
 	}, [mpv.windowClosedId, handleStopRef]);
+
+	// Other Cinette devices control this player and see what it plays. Their
+	// Stop is this page's, so the page closes as it does for a Stop here.
+	const remotePlayer = useMemo(
+		(): PlaybackDestination => ({ ...playback, stop: async () => handleStopRef.current() }),
+		[playback, handleStopRef]
+	);
+	usePublishRemoteState(remotePlayer, activeChannel);
 
 	// --- Info drawer episode source ---
 	const episodesForDrawer = sortedEpisodes.length > 0 ? sortedEpisodes : localSeriesEpisodes;

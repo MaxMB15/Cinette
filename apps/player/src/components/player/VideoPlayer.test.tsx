@@ -3725,6 +3725,27 @@ describe("remote control", () => {
 		view.unmount();
 		expect(getMountedPlayer()).toBeNull();
 	});
+
+	it("tells other devices it can seek once the length is known", async () => {
+		await openItem(lanternKeeper());
+		expect(getMountedPlayer()?.capabilities.seek).toBe(false);
+		await setMpv({ state: playing(MOVIE_URL, 700, 3600) });
+		expect(getMountedPlayer()?.capabilities.seek).toBe(true);
+	});
+
+	it("stops as the Stop button does when another device stops it", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 700, 3600), firstFrameReady: true });
+		expect(document.body.style.backgroundColor).toBe("transparent");
+		await act(() => getMountedPlayer()!.stop());
+		await flush();
+		expect(fakeMpv.actions.stop).toHaveBeenCalledTimes(1);
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+		// The page let go of the background, so it isn't left see-through.
+		expect(document.body.style.backgroundColor).toBe("");
+		expect(tauri.savePlaybackPosition.mock.calls).toEqual([[MOVIE_KEY, 700, 3600]]);
+		expect(tauri.recordPlayEnd).toHaveBeenCalledWith("mv1", expect.any(Number));
+	});
 });
 
 describe("AirPlay", () => {
