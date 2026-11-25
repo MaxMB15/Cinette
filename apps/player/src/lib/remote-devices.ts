@@ -27,13 +27,18 @@ export const discoveryLimit = (platform: Platform = getPlatform()): string | nul
 		? "Other devices can only find this one while you're using Cinette."
 		: null;
 
+/** Where macOS and iOS let Cinette onto the local network. The other
+ *  systems don't ask. */
+const LOCAL_NETWORK_SETTING: Partial<Record<Platform, string>> = {
+	macos: "under Local Network in System Settings, Privacy & Security",
+	ios: "in Settings, Privacy & Security, Local Network",
+};
+
 /** What shows while macOS keeps Cinette off the local network. */
-export const LOCAL_NETWORK_DENIED =
-	"Cinette can't look for other devices. Allow it under Local Network in System Settings, Privacy & Security.";
+export const LOCAL_NETWORK_DENIED = `Cinette can't look for other devices. Allow it ${LOCAL_NETWORK_SETTING.macos}.`;
 
 /** What shows while iOS keeps Cinette off the local network. */
-export const LOCAL_NETWORK_DENIED_IOS =
-	"Cinette can't look for other devices. Allow it in Settings, Privacy & Security, Local Network.";
+export const LOCAL_NETWORK_DENIED_IOS = `Cinette can't look for other devices. Allow it ${LOCAL_NETWORK_SETTING.ios}.`;
 
 /** Where to allow the local network on `platform`. */
 export const localNetworkDenied = (platform: Platform): string =>
@@ -60,13 +65,22 @@ export const formatCode = (code: string): string =>
 export type Ended = { target: string } | "unreachable" | "lost" | "left";
 
 /** A sentence for a link that ended, or null when this device left. */
-export const endedText = (name: string, reason: Ended): string | null => {
+export const endedText = (
+	name: string,
+	reason: Ended,
+	platform: Platform = getPlatform()
+): string | null => {
 	const code = typeof reason === "string" ? reason : reason.target;
 	switch (code) {
 		case "left":
 			return null;
-		case "unreachable":
-			return `Couldn't reach ${name}. A firewall on that device may be blocking Cinette.`;
+		case "unreachable": {
+			// macOS and iOS refuse it until the user lets Cinette on the local network.
+			const setting = LOCAL_NETWORK_SETTING[platform];
+			return setting
+				? `Couldn't reach ${name}. Check that Cinette is allowed ${setting}. A firewall on that device may also be blocking it.`
+				: `Couldn't reach ${name}. A firewall on that device may be blocking Cinette.`;
+		}
 		case "denied":
 			return `${name} didn't allow it.`;
 		case "expired":

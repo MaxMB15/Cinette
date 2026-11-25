@@ -23,7 +23,12 @@ describe("localNetworkDenied", () => {
 	it("names iOS's Settings on iOS and System Settings elsewhere", () => {
 		expect(localNetworkDenied("ios")).toBe(LOCAL_NETWORK_DENIED_IOS);
 		expect(localNetworkDenied("macos")).toBe(LOCAL_NETWORK_DENIED);
-		expect(LOCAL_NETWORK_DENIED_IOS).not.toBe(LOCAL_NETWORK_DENIED);
+		expect(LOCAL_NETWORK_DENIED).toBe(
+			"Cinette can't look for other devices. Allow it under Local Network in System Settings, Privacy & Security."
+		);
+		expect(LOCAL_NETWORK_DENIED_IOS).toBe(
+			"Cinette can't look for other devices. Allow it in Settings, Privacy & Security, Local Network."
+		);
 	});
 });
 
@@ -118,10 +123,6 @@ describe("endedText", () => {
 	it("explains every other ending", () => {
 		const cases: [Parameters<typeof endedText>[1], string][] = [
 			["lost", "Lost the connection to TV."],
-			[
-				"unreachable",
-				"Couldn't reach TV. A firewall on that device may be blocking Cinette.",
-			],
 			[{ target: "denied" }, "TV didn't allow it."],
 			[{ target: "expired" }, "TV didn't answer in time."],
 			[{ target: "not_allowed" }, "TV doesn't allow remote control."],
@@ -145,6 +146,26 @@ describe("endedText", () => {
 			[{ target: "protocol" }, "Lost the connection to TV."],
 		];
 		for (const [reason, text] of cases) expect(endedText("TV", reason)).toBe(text);
+	});
+
+	it("names the Local Network setting on systems that ask for it", () => {
+		expect(endedText("TV", "unreachable", "macos")).toBe(
+			"Couldn't reach TV. Check that Cinette is allowed under Local Network in System Settings, Privacy & Security. A firewall on that device may also be blocking it."
+		);
+		expect(endedText("TV", "unreachable", "ios")).toBe(
+			"Couldn't reach TV. Check that Cinette is allowed in Settings, Privacy & Security, Local Network. A firewall on that device may also be blocking it."
+		);
+	});
+
+	it("names only a firewall on systems that don't", () => {
+		const text = "Couldn't reach TV. A firewall on that device may be blocking Cinette.";
+		expect(endedText("TV", "unreachable", "linux")).toBe(text);
+		expect(endedText("TV", "unreachable", "android")).toBe(text);
+	});
+
+	it("asks the platform when given none", () => {
+		vi.mocked(osPlatform).mockReturnValue("ios");
+		expect(endedText("TV", "unreachable")).toBe(endedText("TV", "unreachable", "ios"));
 	});
 });
 

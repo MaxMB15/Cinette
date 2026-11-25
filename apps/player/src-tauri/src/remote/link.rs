@@ -31,8 +31,6 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 
-/// How long one connection attempt may take.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// The waits between reconnection attempts. The last one repeats.
 const BACKOFF: [Duration; 4] = [
     Duration::from_secs(1),
@@ -50,6 +48,12 @@ fn backoff(attempt: u32) -> Duration {
 /// How long a connection waits for things, and how much it takes on.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
+    /// How long one connection attempt may take.
+    pub connect: Duration,
+    /// How long the first connection keeps trying while every address
+    /// refuses it at once. macOS and iOS refuse it while they ask the user
+    /// about the local network, and take it once the user allows it.
+    pub first_try: Duration,
     /// How long the handshake may take once connected.
     pub handshake: Duration,
     /// How long the link stays quiet before it pings.
@@ -67,6 +71,8 @@ pub struct Limits {
 
 impl Limits {
     pub const STANDARD: Self = Self {
+        connect: Duration::from_secs(5),
+        first_try: Duration::from_secs(30),
         handshake: Duration::from_secs(10),
         ping: PING_INTERVAL,
         request: Duration::from_secs(15),
@@ -339,6 +345,9 @@ enum Outcome {
     NotThere(Ended),
     /// It dropped. The session, if there is one, may resume.
     Dropped,
+    /// Before there was a session, every address refused the connection at
+    /// once rather than taking it or running out of time.
+    Refused,
 }
 
 async fn run(
@@ -353,18 +362,16 @@ async fn run(
         shown: None,
         session: None,
     };
+    let started = (config.clock)();
     let mut dropped_at: Option<Instant> = None;
     let mut attempt: u32 = 0;
+    host.phase(link, &device, &Phase::Connecting);
     loop {
-        host.phase(
-            link,
-            &device,
-            &if attempt == 0 {
-                Phase::Connecting
-            } else {
-                Phase::Reconnecting { attempt }
-            },
-        );
+        // Only a resume counts its attempts. A refused first connection that
+        // is tried again still shows as connecting.
+        if attempt > 0 {
+            host.phase(link, &device, &Phase::Reconnecting { attempt });
+        }
         let addresses: Vec<SocketAddr> = (config.addresses)()
             .into_iter()
             .take(MAX_ADDRESSES)
@@ -374,7 +381,14 @@ async fn run(
         let mut from = 0;
         let mut why_not: Option<Ended> = None;
         let outcome = loop {
-            break match connect_any(&addresses[from..], &mut carried.hello, &mut inbox).await {
+            break match connect_any(
+                &addresses[from..],
+                config.limits.connect,
+                &mut carried.hello,
+                &mut inbox,
+            )
+            .await
+            {
                 Reached::Left => Outcome::Ended(Ended::Left),
                 Reached::Stream(stream, at) => {
                     let mut session_back = false;
@@ -400,28 +414,43 @@ async fn run(
                     result
                 }
                 // During a resume, discovery may find the right address yet.
-                Reached::Nowhere if carried.session.is_some() => Outcome::Dropped,
-                Reached::Nowhere => Outcome::Ended(why_not.unwrap_or(Ended::Unreachable)),
+                Reached::Nowhere { .. } if carried.session.is_some() => Outcome::Dropped,
+                Reached::Nowhere { timed_out: false } if why_not.is_none() => Outcome::Refused,
+                Reached::Nowhere { .. } => Outcome::Ended(why_not.unwrap_or(Ended::Unreachable)),
             };
         };
         let ended = match outcome {
             Outcome::Ended(ended) => Some(ended),
             Outcome::NotThere(_) => unreachable!("the loop above tries the next address"),
+            // The system may be asking the user about the local network, so
+            // it tries again soon, until the user had time to answer.
+            Outcome::Refused => {
+                let wait = (config.limits.backoff)(0);
+                let until = started + config.limits.first_try;
+                wait_to_retry(
+                    &config,
+                    wait,
+                    until,
+                    Ended::Unreachable,
+                    &mut carried.hello,
+                    &mut inbox,
+                )
+                .await
+            }
             Outcome::Dropped if carried.session.is_none() => Some(Ended::Lost),
             Outcome::Dropped => {
                 let since = *dropped_at.get_or_insert_with(|| (config.clock)());
-                let left = (since + config.grace).saturating_duration_since((config.clock)());
-                if left.is_zero() {
-                    Some(Ended::Lost)
-                } else {
-                    // The last try comes as the grace runs out.
-                    let wait = (config.limits.backoff)(attempt).min(left);
-                    attempt += 1;
-                    match wait_or_leave(wait, &mut carried.hello, &mut inbox).await {
-                        true => Some(Ended::Left),
-                        false => None,
-                    }
-                }
+                let wait = (config.limits.backoff)(attempt);
+                attempt += 1;
+                wait_to_retry(
+                    &config,
+                    wait,
+                    since + config.grace,
+                    Ended::Lost,
+                    &mut carried.hello,
+                    &mut inbox,
+                )
+                .await
             }
         };
         if let Some(reason) = ended {
@@ -443,6 +472,27 @@ fn more_telling(old: Option<Ended>, new: Ended) -> Ended {
         Some(old) if rank(&old) >= rank(&new) => old,
         _ => new,
     }
+}
+
+/// Waits `wait` before the next attempt, but no later than `until`, when the
+/// last attempt comes. None when it's time to try again. Otherwise how the
+/// link ends: `out` once `until` has passed, or [`Ended::Left`] when this
+/// device left meanwhile.
+async fn wait_to_retry(
+    config: &LinkConfig,
+    wait: Duration,
+    until: Instant,
+    out: Ended,
+    hello: &mut Hello,
+    inbox: &mut mpsc::UnboundedReceiver<Input>,
+) -> Option<Ended> {
+    let left = until.saturating_duration_since((config.clock)());
+    if left.is_zero() {
+        return Some(out);
+    }
+    wait_or_leave(wait.min(left), hello, inbox)
+        .await
+        .then_some(Ended::Left)
 }
 
 /// Waits before the next attempt, answering what comes in meanwhile. True
@@ -474,25 +524,32 @@ async fn wait_or_leave(
 enum Reached {
     /// Connected to the address at this index.
     Stream(TcpStream, usize),
-    Nowhere,
+    /// None took it. `timed_out` when at least one ran out of time rather
+    /// than refusing it.
+    Nowhere { timed_out: bool },
     /// This device left meanwhile.
     Left,
 }
 
-/// The first of `addrs` that takes a connection. Leaving stops it at once.
+/// The first of `addrs` that takes a connection within `limit`. Leaving
+/// stops it at once.
 async fn connect_any(
     addrs: &[SocketAddr],
+    limit: Duration,
     hello: &mut Hello,
     inbox: &mut mpsc::UnboundedReceiver<Input>,
 ) -> Reached {
+    let mut timed_out = false;
     for (at, addr) in addrs.iter().enumerate() {
-        let attempt = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr));
+        let attempt = tokio::time::timeout(limit, TcpStream::connect(addr));
         tokio::pin!(attempt);
         loop {
             tokio::select! {
                 result = &mut attempt => {
-                    if let Ok(Ok(stream)) = result {
-                        return Reached::Stream(stream, at);
+                    match result {
+                        Ok(Ok(stream)) => return Reached::Stream(stream, at),
+                        Ok(Err(_)) => {}
+                        Err(_) => timed_out = true,
                     }
                     break;
                 }
@@ -509,7 +566,7 @@ async fn connect_any(
             }
         }
     }
-    Reached::Nowhere
+    Reached::Nowhere { timed_out }
 }
 
 enum Waiting {
