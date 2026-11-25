@@ -232,7 +232,16 @@ fn channels_from_blocks<T: AsRef<str> + Sync>(blocks: &[(T, T)]) -> Vec<Channel>
 fn parse_extinf_block(index: usize, extinf: &str, url: &str) -> Option<Channel> {
     let after_extinf = extinf.strip_prefix("#EXTINF:")?;
 
-    let comma_pos = after_extinf.rfind(',')?;
+    // The title follows the first comma outside a quoted value. A value runs
+    // to the next quote, as in `extract_attr`, so commas in the title and in
+    // values like tvg-name="A, B" stay where they are.
+    let mut quoted = false;
+    let comma_pos = after_extinf.bytes().position(|b| {
+        if b == b'"' {
+            quoted = !quoted;
+        }
+        b == b',' && !quoted
+    })?;
     let attrs_part = &after_extinf[..comma_pos];
     let name = after_extinf[comma_pos + 1..].trim().to_string();
 
@@ -621,6 +630,41 @@ http://stream.example.com/ch2
         let content = "#EXTM3U\n#EXTINF:-1 group-title=\"News & Sports / 24h\",Channel\nhttp://url\n";
         let channels = parse_m3u(content).unwrap();
         assert_eq!(channels[0].group_title, "News & Sports / 24h");
+    }
+
+    #[test]
+    fn a_title_keeps_its_commas() {
+        // Cut at the last comma, both titles read "AC-3 5.1", and the second
+        // film became a source of the first.
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 group-title=\"Cinette test\",Test 3 · MKV, AC-3 5.1\n\
+            http://a.test/movie/test03.mkv\n\
+            #EXTINF:-1 group-title=\"Cinette test\",Test 4 · MP4, AC-3 5.1\n\
+            http://a.test/movie/test04.mp4\n\
+            #EXTINF:-1,Say \"Hi\", Bob\nhttp://a.test/live/1.ts\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(
+            names_and_links(&channels),
+            [
+                ("Test 3 · MKV, AC-3 5.1", "http://a.test/movie/test03.mkv"),
+                ("Test 4 · MP4, AC-3 5.1", "http://a.test/movie/test04.mp4"),
+                ("Say \"Hi\", Bob", "http://a.test/live/1.ts"),
+            ]
+        );
+        assert_eq!(channels[0].group_title, "Cinette test");
+        assert!(channels[0].sources.is_empty());
+    }
+
+    #[test]
+    fn a_comma_in_a_quoted_attribute_does_not_end_the_attributes() {
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 tvg-name=\"Movie, The\" group-title=\"Films, Classic\",Movie, The (1999)\n\
+            http://a.test/1.mkv\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels.len(), 1, "{channels:?}");
+        assert_eq!(channels[0].name, "Movie, The (1999)");
+        assert_eq!(channels[0].tvg_name.as_deref(), Some("Movie, The"));
+        assert_eq!(channels[0].group_title, "Films, Classic");
     }
 
     // --- classify_url / series classification ---
