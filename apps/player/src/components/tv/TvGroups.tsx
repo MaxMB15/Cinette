@@ -7,6 +7,7 @@ import { moveFocus } from "@/lib/tv-focus";
 import type { Channel } from "@/lib/types";
 import { TvList } from "./TvList";
 import { COLUMN_HEIGHT, TvTextRow } from "./ui";
+import { useRemembered } from "./tv-nav";
 
 // A channel with no group has the empty group title, so this can't be empty too.
 const ALL = "\0all";
@@ -40,6 +41,25 @@ export const useTvGroups = (items: readonly Channel[], allLabel: string) =>
 			group.id === ALL ? items : (byGroup.get(group.id) ?? []);
 		return { groups, itemsOf };
 	}, [items, allLabel]);
+
+/**
+ * Live channels by group, for a screen of groups beside their channels, and
+ * where its cursor is, kept under `key` while the player has the screen.
+ */
+export const useGroupedChannels = (key: string, live: readonly Channel[]) => {
+	const [place, setPlace] = useRemembered(key, { group: 0, channel: 0, inGroups: false });
+	const { groups, itemsOf } = useTvGroups(live, "All channels");
+	const group = groups[Math.min(place.group, groups.length - 1)];
+	return {
+		place,
+		groups,
+		group,
+		channels: itemsOf(group),
+		/** The cursor moves to a group, which opens at its first channel. */
+		toGroup: (index: number) => setPlace({ group: index, channel: 0, inGroups: true }),
+		toChannel: (index: number) => setPlace({ ...place, channel: index, inGroups: false }),
+	};
+};
 
 /** The column of groups. What's in the group shows as the cursor reaches it, and OK goes there. */
 export const TvGroupList = ({

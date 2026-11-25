@@ -12,6 +12,7 @@ import { setZapList } from "@/lib/tv-zap";
 import type { Channel, WatchHistoryEntry } from "@/lib/types";
 import { TvDetails } from "./TvDetails";
 import { TvFavorites } from "./TvFavorites";
+import { TvGuidePage } from "./TvGuide";
 import { TvHistory } from "./TvHistory";
 import { TvLive } from "./TvLive";
 import { TvPosters } from "./TvPosters";
@@ -119,6 +120,7 @@ export const TvBrowse = () => {
 		<>
 			{section === "search" && <TvSearch kinds={kinds} onOpen={(item) => open(item)} />}
 			{section === "live" && <TvLive live={byType.live} onPlay={playChannel} />}
+			{section === "guide" && <TvGuidePage live={byType.live} onPlay={playChannel} />}
 			{section === "movie" && (
 				<TvPosters
 					title="Movies"

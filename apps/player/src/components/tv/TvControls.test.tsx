@@ -46,7 +46,7 @@ const makeRow = (overrides: Partial<TvRowOptions> = {}): TvRowOptions => ({
 	onSkip: vi.fn(),
 	atLive: true,
 	onZap: vi.fn(),
-	onChannels: vi.fn(),
+	onGuide: vi.fn(),
 	onSubtitles: vi.fn(),
 	subtitlesOn: true,
 	onInfo: vi.fn(),

@@ -15,6 +15,7 @@ import { makeEpisode } from "@/test/detail-fixtures";
 import { TvBrowse } from "./TvBrowse";
 import { TvDetails } from "./TvDetails";
 import { TvFavorites } from "./TvFavorites";
+import { TvGuidePage } from "./TvGuide";
 import { TvHistory } from "./TvHistory";
 import { TvLive } from "./TvLive";
 import { TvPosters } from "./TvPosters";
@@ -36,6 +37,7 @@ vi.mock("@/hooks/useCatalog", async (importOriginal) => {
 });
 vi.mock("./TvSearch", () => ({ TvSearch: vi.fn(() => <p>Search screen</p>) }));
 vi.mock("./TvLive", () => ({ TvLive: vi.fn(() => <p>Live screen</p>) }));
+vi.mock("./TvGuide", () => ({ TvGuidePage: vi.fn(() => <p>Guide screen</p>) }));
 vi.mock("./TvPosters", () => ({
 	TvPosters: vi.fn(({ title }: { title: string }) => <p>{title} screen</p>),
 }));
@@ -170,6 +172,7 @@ describe("TvBrowse", () => {
 		it.each<[TvSection, string]>([
 			["search", "Search screen"],
 			["live", "Live screen"],
+			["guide", "Guide screen"],
 			["movie", "Movies screen"],
 			["series", "Series screen"],
 			["favorites", "Favorites screen"],
@@ -198,9 +201,11 @@ describe("TvBrowse", () => {
 			expect(propsOf(TvSearch).kinds.map((kind) => kind.items)).toEqual([[SPORT], [], []]);
 		});
 
-		it("gives Live TV the live channels", () => {
+		it("gives Live TV and the guide the live channels", () => {
 			show("live");
 			expect(propsOf(TvLive).live).toEqual([NEWS, SPORT]);
+			show("guide");
+			expect(propsOf(TvGuidePage).live).toEqual([NEWS, SPORT]);
 		});
 
 		it("gives Movies one of each title, remembered on its own", () => {
@@ -278,9 +283,12 @@ describe("TvBrowse", () => {
 			expect(lastPlayed().channel).toBe(SPORT);
 		});
 
-		it("plays a channel from Live TV with the list it came from", () => {
-			show("live");
-			act(() => propsOf(TvLive).onPlay(NEWS, [NEWS]));
+		it.each<[TvSection, () => (channel: Channel, list: readonly Channel[]) => void]>([
+			["live", () => propsOf(TvLive).onPlay],
+			["guide", () => propsOf(TvGuidePage).onPlay],
+		])("plays a channel from %s with the list it came from", (section, onPlay) => {
+			show(section);
+			act(() => onPlay()(NEWS, [NEWS]));
 			expect(getZapList()).toEqual([NEWS]);
 			expect(lastPlayed().channel).toBe(NEWS);
 		});

@@ -117,7 +117,9 @@ describe("TvLive", () => {
 
 		fireEvent.keyDown(active(channelList()), { key: "ArrowDown" });
 		expect(within(info).queryByText("Headlines")).not.toBeInTheDocument();
-		expect(within(info).getByText("No guide for this channel")).toBeInTheDocument();
+		expect(
+			within(info).getByText("No schedule information for this channel")
+		).toBeInTheDocument();
 	});
 
 	it("favorites the channel under the cursor", () => {
@@ -146,7 +148,9 @@ describe("TvLive", () => {
 		// Sport has as many channels as News, so it follows it.
 		expect(active(channelList("Sport"))).toHaveTextContent("Test Channel");
 		expect(
-			within(screen.getByRole("complementary")).getByText("No guide for this channel")
+			within(screen.getByRole("complementary")).getByText(
+				"No schedule information for this channel"
+			)
 		).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Add to favorites" })).toBeInTheDocument();
 	});
@@ -210,7 +214,7 @@ describe("ChannelInfo", () => {
 
 	it("says there's no guide without any programs", () => {
 		info([]);
-		expect(screen.getByText("No guide for this channel")).toBeInTheDocument();
+		expect(screen.getByText("No schedule information for this channel")).toBeInTheDocument();
 		expect(screen.queryByRole("list")).not.toBeInTheDocument();
 	});
 

@@ -4,7 +4,7 @@
 /** What a key on the remote does on a TV while the focus is on the video. */
 export type TvPlayerAction =
 	| { type: "zap"; step: 1 | -1 }
-	| { type: "channels" }
+	| { type: "guide" }
 	| { type: "controls" }
 	| { type: "details" }
 	| { type: "seek"; step: 1 | -1 }
@@ -14,7 +14,7 @@ export type TvPlayerAction =
 
 const ZAP_UP: TvPlayerAction = { type: "zap", step: -1 };
 const ZAP_DOWN: TvPlayerAction = { type: "zap", step: 1 };
-const CHANNELS: TvPlayerAction = { type: "channels" };
+const GUIDE: TvPlayerAction = { type: "guide" };
 const INFO: TvPlayerAction = { type: "info" };
 
 const LIVE_KEYS: Record<string, TvPlayerAction> = {
@@ -22,8 +22,8 @@ const LIVE_KEYS: Record<string, TvPlayerAction> = {
 	PageUp: ZAP_UP,
 	ChannelDown: ZAP_DOWN,
 	PageDown: ZAP_DOWN,
-	Guide: CHANNELS,
-	ContextMenu: CHANNELS,
+	Guide: GUIDE,
+	ContextMenu: GUIDE,
 	ArrowLeft: { type: "seek", step: -1 },
 	ArrowRight: { type: "seek", step: 1 },
 };
@@ -46,7 +46,7 @@ const SHARED_KEYS: Record<string, TvPlayerAction> = {
 /**
  * The D-pad's Down shows the player's buttons, and Up shows them under the
  * details of what's playing. On live TV, Left and Right move through what the
- * player has buffered, and the Menu key shows the channels. On a movie or
+ * player has buffered, and the Menu key shows the guide. On a movie or
  * episode, the Menu key shows the details and episodes. Only a remote's own
  * channel keys change the channel, so nobody leaves a channel by brushing an
  * arrow. OK plays and pauses, and a movie or episode keeps Left and Right for

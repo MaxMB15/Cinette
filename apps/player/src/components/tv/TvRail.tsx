@@ -3,6 +3,7 @@
 
 import { useState, type ElementType, type KeyboardEvent, type Ref } from "react";
 import {
+	CalendarClock,
 	Clapperboard,
 	Heart,
 	MonitorPlay,
@@ -23,6 +24,7 @@ export type TvRailItem = TvSection | "settings";
 const ITEMS: readonly { id: TvRailItem; label: string; icon: ElementType }[] = [
 	{ id: "search", label: "Search", icon: Search },
 	{ id: "live", label: "Live TV", icon: TvMinimal },
+	{ id: "guide", label: "Guide", icon: CalendarClock },
 	{ id: "movie", label: "Movies", icon: Clapperboard },
 	{ id: "series", label: "Series", icon: MonitorPlay },
 	{ id: "favorites", label: "Favorites", icon: Heart },

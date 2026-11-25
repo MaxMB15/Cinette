@@ -6,7 +6,7 @@ import { resolveTvPlayerKey, type TvPlayerAction } from "./tv-player-keys";
 
 const ZAP_BACK: TvPlayerAction = { type: "zap", step: -1 };
 const ZAP_ON: TvPlayerAction = { type: "zap", step: 1 };
-const CHANNELS: TvPlayerAction = { type: "channels" };
+const GUIDE: TvPlayerAction = { type: "guide" };
 const CONTROLS: TvPlayerAction = { type: "controls" };
 const DETAILS: TvPlayerAction = { type: "details" };
 const INFO: TvPlayerAction = { type: "info" };
@@ -21,8 +21,8 @@ describe("resolveTvPlayerKey on live TV", () => {
 		["PageUp", ZAP_BACK],
 		["ChannelDown", ZAP_ON],
 		["PageDown", ZAP_ON],
-		["Guide", CHANNELS],
-		["ContextMenu", CHANNELS],
+		["Guide", GUIDE],
+		["ContextMenu", GUIDE],
 		["ArrowLeft", { type: "seek", step: -1 }],
 		["ArrowRight", { type: "seek", step: 1 }],
 	])("gives %s its action", (key, action) => {

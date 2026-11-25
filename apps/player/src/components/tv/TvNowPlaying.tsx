@@ -5,6 +5,7 @@ import { RatingsRow } from "@/components/ui/ratings-row";
 import { useNowNext } from "@/hooks/useNowNext";
 import { formatHHMM, getGridMarks, toPct } from "@/lib/epg-window";
 import { mediaFacts } from "@/lib/media-facts";
+import { blockStyle } from "@/lib/tv-guide";
 import type { Channel, EpgProgram, OmdbData, WhatsonData } from "@/lib/types";
 import { Facts, Poster } from "./TvDetails";
 import { timeSpan } from "./TvLive";
@@ -127,7 +128,7 @@ export const TvLiveDetails = ({ channel }: { channel: Channel }) => {
 				</div>
 			) : (
 				<p className="mt-[1rem] text-[0.9rem] leading-[1.2rem] opacity-75">
-					No guide for this channel
+					No schedule information for this channel
 				</p>
 			)}
 			<GuideStrip programs={programsOf(channel)} now={now} />
@@ -157,7 +158,6 @@ const GuideStrip = ({ programs, now }: { programs: readonly EpgProgram[]; now: n
 			</div>
 			<div className="relative mt-[0.3rem] h-[2.7rem]">
 				{shown.map((p) => {
-					const left = at(p.startTime);
 					const past = p.endTime <= now;
 					const current = !past && p.startTime <= now;
 					return (
@@ -170,10 +170,7 @@ const GuideStrip = ({ programs, now }: { programs: readonly EpgProgram[]; now: n
 										? "bg-[hsl(214_72%_46%)]"
 										: "border border-white/16 bg-white/4 text-white/85"
 							}`}
-							style={{
-								left: `calc(${left}% + 0.1rem)`,
-								width: `calc(${at(p.endTime) - left}% - 0.2rem)`,
-							}}
+							style={blockStyle(p.startTime, p.endTime, start, STRIP_SPAN)}
 						>
 							<span className="truncate text-[0.85rem] leading-[1.1rem] font-semibold">
 								{p.title}

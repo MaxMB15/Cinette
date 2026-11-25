@@ -138,7 +138,7 @@ import {
 } from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
 import { zapListFor } from "@/lib/tv-zap";
-import { TvChannelPanel } from "@/components/tv/TvChannelPanel";
+import { TvGuidePanel } from "@/components/tv/TvGuide";
 import { TvControls, tvSubtitleTop, type TvBar } from "@/components/tv/TvControls";
 import { TvLiveDetails, TvVideoDetails } from "@/components/tv/TvNowPlaying";
 import { TvPlayerInfo } from "@/components/tv/TvPlayerInfo";
@@ -1406,7 +1406,7 @@ export const PlayerView = () => {
 		channels,
 		// Stryker disable next-line StringLiteral: Only "nav" is ever checked, so any other origin means the same.
 		play: (ch) => void startPlayback(ch, "player"),
-		onChannels: () => setTvPanel("channels"),
+		onGuide: () => setTvPanel("guide"),
 		onEpisode: (step) => (step === -1 ? episodes.onPrevEpisode : episodes.onNextEpisode)?.(),
 		onInfo: () => {
 			if (hasInfo) setShowInfoDrawer(true);
@@ -1976,7 +1976,7 @@ export const PlayerView = () => {
 	};
 	const tvPaused = mpv.state.isPaused || !mpv.state.isPlaying;
 	const tvHint = streamFailed
-		? `OK tries again.${activeIsLive ? " Menu shows the channels." : ""}`
+		? `OK tries again.${activeIsLive ? " Menu shows the guide." : ""}`
 		: `${canSkip ? "Left and Right skip. " : ""}Up or Down shows the controls. OK ${
 				tvPaused ? "plays" : liveBehind ? "goes live" : "pauses"
 			}.`;
@@ -2231,7 +2231,7 @@ export const PlayerView = () => {
 								: skipBy(step === 1 ? skip.forward : -skip.back),
 						atLive: !liveBehind,
 						onZap: tvPlayer.zap,
-						onChannels: () => setTvPanel("channels"),
+						onGuide: () => setTvPanel("guide"),
 						...episodes,
 						onSubtitles: canShowSubtitles
 							? () => setShowSubtitlePicker(true)
@@ -2262,8 +2262,8 @@ export const PlayerView = () => {
 					}}
 				/>
 			)}
-			{tvPanel === "channels" && activeChannel && (
-				<TvChannelPanel
+			{tvPanel === "guide" && activeChannel && (
+				<TvGuidePanel
 					channels={zapListFor(activeChannel.id, channels)}
 					currentId={(tvPlayer.zapTarget ?? activeChannel).id}
 					onPlay={(ch) => {

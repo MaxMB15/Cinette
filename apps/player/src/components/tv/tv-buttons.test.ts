@@ -14,7 +14,7 @@ const rowOptions = (overrides: Partial<TvRowOptions> = {}): TvRowOptions => ({
 	onSkip: vi.fn(),
 	atLive: false,
 	onZap: vi.fn(),
-	onChannels: vi.fn(),
+	onGuide: vi.fn(),
 	subtitlesOn: false,
 	...overrides,
 });
@@ -56,11 +56,11 @@ describe("tvRow", () => {
 		]);
 	});
 
-	it("steps between channels and has the channel list on live TV", () => {
+	it("steps between channels and has the guide on live TV", () => {
 		expect(labels({ live: true, onInfo: vi.fn(), skip: SKIP, onSubtitles: vi.fn() })).toEqual([
 			["Channel info"],
 			["Previous channel", "Back 10 s", "Pause", "Forward 30 s", "Next channel"],
-			["Subtitles", "Channels"],
+			["Subtitles", "Guide"],
 		]);
 	});
 
@@ -83,7 +83,7 @@ describe("tvRow", () => {
 			"forward",
 			"next",
 			"subtitles",
-			"channels",
+			"guide",
 		]);
 	});
 
@@ -117,7 +117,7 @@ describe("tvRow", () => {
 		expect(o.onSkip).toHaveBeenNthCalledWith(2, 1);
 		expect(o.onTogglePlay).toHaveBeenCalledOnce();
 		expect(o.onSubtitles).toHaveBeenCalledOnce();
-		expect(o.onChannels).toHaveBeenCalledOnce();
+		expect(o.onGuide).toHaveBeenCalledOnce();
 		expect(o.onRetry).not.toHaveBeenCalled();
 	});
 
