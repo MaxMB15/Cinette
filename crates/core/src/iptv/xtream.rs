@@ -1510,14 +1510,24 @@ mod tests {
     }
 
     /// A panel that sends every list empty and lists each category on its
-    /// own, with two series categories that both hold Fargo. Routes in
-    /// `overrides` win.
+    /// own. Both live categories hold CNN, and both series categories hold
+    /// Fargo. Routes in `overrides` win.
     fn serve_panel_by_category(overrides: Vec<Route>) -> String {
         let routes = vec![
             route(
                 "action=get_live_streams&category_id=3 ",
                 "200 OK",
                 r#"[{"stream_id":7,"name":"CNN","category_id":"3"}]"#,
+            ),
+            route(
+                "action=get_live_streams&category_id=4 ",
+                "200 OK",
+                r#"[{"stream_id":8,"name":"ESPN","category_id":"4"},{"stream_id":7,"name":"CNN","category_id":"4"}]"#,
+            ),
+            route(
+                "action=get_live_categories ",
+                "200 OK",
+                r#"[{"category_id":"3","category_name":"News"},{"category_id":"4","category_name":"Sports"}]"#,
             ),
             route(
                 "action=get_vod_streams&category_id=5 ",
@@ -1558,10 +1568,16 @@ mod tests {
         assert_eq!(
             id_group_url(&fetched.channels),
             [
+                // CNN only in News, which the panel lists first.
                 (
                     "live-7",
                     "News",
                     format!("{server}/live/u/{password}/7.ts").as_str()
+                ),
+                (
+                    "live-8",
+                    "Sports",
+                    format!("{server}/live/u/{password}/8.ts").as_str()
                 ),
                 (
                     "movie-9",
@@ -1596,7 +1612,7 @@ mod tests {
             fetch_all_channels(&panel(&server)).await.unwrap()
         };
         // Drama loaded, but the saved series stay, since Comedy didn't.
-        assert_eq!(ids(&fetched.channels), ["live-7", "movie-9"]);
+        assert_eq!(ids(&fetched.channels), ["live-7", "live-8", "movie-9"]);
         assert_eq!(fetched.failed_content_types, ["series"]);
         let log = logged.text();
         assert!(log.contains("[Xtream] get_series failed: "), "{log}");
