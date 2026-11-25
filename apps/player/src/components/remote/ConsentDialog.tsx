@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Dialog } from "@/components/ui/dialog";
 import { useConsentRequest, type ConsentRequest } from "@/hooks/useRemoteTarget";
+import { getPlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { deviceTypeName, formatCode, secondsLeft } from "@/lib/remote-devices";
 import { consentBody, consentTitle } from "@/lib/remote-transfer";
@@ -76,6 +77,20 @@ const ConsentPrompt = ({
 	// A pointer press that began before this prompt was on screen was
 	// meant for what was there before.
 	const pressedHere = useRef(false);
+	const allowButton = useRef<HTMLButtonElement>(null);
+	// On a TV the remote moves only between Deny and Allow, and starts on
+	// Allow. A center press on the title did nothing and showed no cursor,
+	// so the remote seemed unable to allow. Allow still waits ARM_MS, so a
+	// press meant for the screen behind can't answer. This runs after the
+	// dialog focused its first button.
+	const tv = getPlatform() === "tv";
+	useEffect(
+		() => {
+			if (tv) allowButton.current!.focus();
+		},
+		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
+		[tv]
+	);
 	const allow = (fromPointer: boolean) => {
 		// Past its time, the button is disabled.
 		if (performance.now() < armedAt) return;
@@ -93,11 +108,12 @@ const ConsentPrompt = ({
 			className="bg-card border border-border rounded-lg p-5 w-[340px] max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-xl tv:w-[34rem] tv:rounded-[0.75rem] tv:border-0 tv:p-[2rem] tv:shadow-none"
 		>
 			{/* Focus starts here rather than on Deny, so a key pressed for the
-			    player behind, like Space, doesn't answer the request. */}
+			    player behind, like Space, doesn't answer the request. On a TV
+			    it starts on Allow, which waits a moment before it works. */}
 			<h2
 				id={titleId}
-				tabIndex={0}
-				className="text-base font-semibold mb-1 break-words focus-visible:outline-hidden tv:text-[1.5rem] tv:leading-[2rem] tv:focus-visible:outline-none!"
+				tabIndex={tv ? undefined : 0}
+				className="text-base font-semibold mb-1 break-words focus-visible:outline-hidden tv:text-[1.5rem] tv:leading-[2rem]"
 			>
 				{before}
 				<bdi className="font-bold">{request.name}</bdi>
@@ -126,6 +142,7 @@ const ConsentPrompt = ({
 					Deny
 				</button>
 				<button
+					ref={allowButton}
 					type="button"
 					disabled={left === 0}
 					aria-disabled={armed ? undefined : "true"}
