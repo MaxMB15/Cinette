@@ -13,6 +13,8 @@ permissions = [
     "allow-mpv-get-media-info",
     "allow-mpv-sub-add",
     "allow-mpv-sub-remove",
+    "allow-mpv-select-subtitle",
+    "allow-mpv-select-audio",
     "allow-mpv-set-sub-delay",
     "allow-mpv-set-media-info",
     "allow-mpv-set-skip-intervals",

@@ -12,6 +12,8 @@ import {
 	mpvSeek,
 	mpvSetVolume,
 	mpvGetState,
+	mpvSelectSubtitle,
+	mpvSelectAudio,
 } from "@/lib/tauri";
 import { readHwdecEnabled, readVolumePreference, writeVolumePreference } from "@/lib/player-prefs";
 import { isOpeningStream } from "@/lib/stream-opening";
@@ -30,6 +32,7 @@ const DEFAULT_STATE: PolledMpvState = {
 	reachedEnd: false,
 	waiting: false,
 	fallbackActive: false,
+	tracks: [],
 	positionAt: 0,
 };
 
@@ -141,6 +144,7 @@ export const useMpv = () => {
 						fallbackActive: loads.isStale(loadMark)
 							? prev.fallbackActive
 							: s.fallbackActive,
+						tracks: s.tracks,
 					};
 				});
 			})
@@ -378,6 +382,7 @@ export const useMpv = () => {
 				reachedEnd: false,
 				waiting: false,
 				fallbackActive: false,
+				tracks: [],
 			}));
 			try {
 				await mpvLoad(url, startPos, readHwdecEnabled(), keepSubtitles);
@@ -533,6 +538,26 @@ export const useMpv = () => {
 		[volumeChanges]
 	);
 
+	// A track pick names the stream that plays, so one meant for a stream that
+	// has since ended fails. The state shows the pick at once.
+	const selectSubtitle = useCallback(
+		async (id: number | null) => {
+			await mpvSelectSubtitle(id, currentUrlRef.current ?? "");
+			await refresh();
+		},
+		// Stryker disable next-line ArrayDeclaration: The ref and refresh never change, so it's the same function with any deps.
+		[currentUrlRef, refresh]
+	);
+
+	const selectAudio = useCallback(
+		async (id: number) => {
+			await mpvSelectAudio(id, currentUrlRef.current ?? "");
+			await refresh();
+		},
+		// Stryker disable next-line ArrayDeclaration: The ref and refresh never change, so it's the same function with any deps.
+		[currentUrlRef, refresh]
+	);
+
 	// Mute is volume 0; unmuting restores the volume from before the mute.
 	const toggleMute = useCallback(async () => {
 		const current = volumeRef.current;
@@ -607,6 +632,8 @@ export const useMpv = () => {
 		seek,
 		setVolume,
 		toggleMute,
+		selectSubtitle,
+		selectAudio,
 		refresh,
 	};
 };

@@ -14,6 +14,8 @@ const COMMANDS: &[&str] = &[
     "mpv_get_media_info",
     "mpv_sub_add",
     "mpv_sub_remove",
+    "mpv_select_subtitle",
+    "mpv_select_audio",
     "mpv_set_sub_delay",
     "mpv_set_media_info",
     "mpv_set_skip_intervals",

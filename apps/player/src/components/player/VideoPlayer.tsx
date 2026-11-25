@@ -329,6 +329,31 @@ export const PlayerView = () => {
 	// Remembers which language + rank-within-language the user last picked so the
 	// same subtitle can be auto-selected when navigating to the next episode.
 	const [subtitlePreference, setSubtitlePreference] = useState<SubtitlePreference | null>(null);
+	/** Shows the subtitles picked in the subtitle picker, or none. */
+	const showSubtitle = useCallback(
+		(
+			id: number | null,
+			cues?: SubtitleCue[],
+			entry?: SubtitleEntry | null,
+			rankInLanguage?: number
+		) => {
+			setSelectedSubtitleId(id);
+			setSubtitleCues(cues ?? []);
+			setSelectedSubtitleEntry(entry ?? null);
+			// Stryker disable next-line LogicalOperator, ConditionalExpression: The picker gives a rank with every file it picks and none with None, so the rank check never decides.
+			if (entry && rankInLanguage !== undefined) {
+				setSubtitlePreference({
+					languageCode: entry.languageCode,
+					rankInLanguage,
+				});
+			} else {
+				// User clicked None — clear preference so next episode gets no subtitle.
+				setSubtitlePreference(null);
+			}
+		},
+		// Stryker disable next-line ArrayDeclaration: It only uses state setters, so it's the same function with any deps.
+		[]
+	);
 	// Refs used by the auto-load effect to avoid stale closures.
 	const subtitlePreferenceRef = useLatestRef(subtitlePreference);
 	// Incremented each time an episode navigation should trigger subtitle auto-load.
@@ -687,8 +712,6 @@ export const PlayerView = () => {
 	useEffect(() => {
 		if (airplay.notPicked) void playHereAgain.current();
 	}, [airplay.notPicked, playHereAgain]);
-	// Other Cinette devices control this player and see what it plays.
-	usePublishRemoteState(playback, activeChannel);
 	// A history transfer saves where this player is before it reads the history.
 	useEffect(
 		() =>
@@ -1523,6 +1546,24 @@ export const PlayerView = () => {
 		if (mpv.windowClosedId > 0) handleStopRef.current();
 	}, [mpv.windowClosedId, handleStopRef]);
 
+	// Other Cinette devices control this player and see what it plays. Their
+	// Stop is this page's, so the page closes as it does for a Stop here. mpv
+	// draws the subtitle track they pick, which replaces any subtitles picked
+	// here, as None in the subtitle picker does.
+	const remotePlayer = useMemo(
+		(): PlaybackDestination => ({
+			...playback,
+			stop: async () => handleStopRef.current(),
+			selectSubtitle: async (trackId) => {
+				followSubtitlePick(true);
+				await playback.selectSubtitle(trackId);
+				showSubtitle(null);
+			},
+		}),
+		[playback, handleStopRef, followSubtitlePick, showSubtitle]
+	);
+	usePublishRemoteState(remotePlayer, activeChannel);
+
 	// --- Info drawer episode source ---
 	const episodesForDrawer = sortedEpisodes.length > 0 ? sortedEpisodes : localSeriesEpisodes;
 	const showTitleForDrawer = activeChannel ? seriesTitleOf(activeChannel) : "";
@@ -1925,20 +1966,7 @@ export const PlayerView = () => {
 						setSubtitleEditMode(false);
 					}}
 					startPick={() => followSubtitlePick(true)}
-					onSubtitleSelected={(id, cues, entry, rankInLanguage) => {
-						setSelectedSubtitleId(id);
-						setSubtitleCues(cues ?? []);
-						setSelectedSubtitleEntry(entry ?? null);
-						if (entry && rankInLanguage !== undefined) {
-							setSubtitlePreference({
-								languageCode: entry.languageCode,
-								rankInLanguage,
-							});
-						} else {
-							// User clicked None — clear preference so next episode gets no subtitle.
-							setSubtitlePreference(null);
-						}
-					}}
+					onSubtitleSelected={showSubtitle}
 					currentSelectedId={selectedSubtitleId}
 					currentSelectedEntry={selectedSubtitleEntry}
 					subtitleFontSize={subtitleFontSize}

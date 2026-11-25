@@ -49,6 +49,14 @@ fn playback_commands_fail_with_nothing_loaded() {
         not_playing
     );
     assert_eq!(block_on(mpv_sub_remove(h(), s(), -1, None)), failed);
+    assert_eq!(
+        block_on(mpv_select_subtitle(h(), s(), None, url())),
+        not_playing
+    );
+    assert_eq!(
+        block_on(mpv_select_audio(h(), s(), 1, url())),
+        not_playing
+    );
     assert_eq!(block_on(mpv_set_sub_delay(0.5, s())), failed);
     // Stopping nothing is fine, so the frontend can always call it.
     assert_eq!(block_on(mpv_stop(h(), s())), Ok(()));
@@ -112,6 +120,11 @@ mod with_a_stream {
         block_on(mpv_sub_add(h(), s(), subtitles, true, path.clone())).unwrap();
         block_on(mpv_set_sub_delay(-0.5, s())).unwrap();
         block_on(mpv_sub_remove(h(), s(), -1, Some(path.clone()))).unwrap();
+        block_on(mpv_select_audio(h(), s(), 1, path.clone())).unwrap();
+        block_on(mpv_select_subtitle(h(), s(), None, path.clone())).unwrap();
+        let tracks = get_state(&app).tracks;
+        assert_eq!(tracks.len(), 1);
+        assert!(tracks[0].selected);
 
         block_on(mpv_set_visible(h(), s(), false)).unwrap();
         block_on(mpv_set_bounds(h(), s(), 8.0, 8.0, 320.0, 180.0)).unwrap();

@@ -3,6 +3,7 @@
 
 import { vi } from "vitest";
 import type { PlaybackCapabilities, PlaybackDestination, PlaybackState } from "@/lib/destination";
+import type { MpvTrack } from "@/lib/types";
 
 /** A movie playing 10 minutes in, as a destination reports it. */
 export const playbackState = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
@@ -18,6 +19,19 @@ export const playbackState = (patch: Partial<PlaybackState> = {}): PlaybackState
 	audioId: null,
 	connection: "connected",
 	error: null,
+	...patch,
+});
+
+/** Subtitle track 1 of an item, as mpv lists it. */
+export const mpvTrack = (patch: Partial<MpvTrack> = {}): MpvTrack => ({
+	id: 1,
+	type: "sub",
+	title: null,
+	lang: null,
+	codec: null,
+	default: false,
+	selected: false,
+	external: false,
 	...patch,
 });
 

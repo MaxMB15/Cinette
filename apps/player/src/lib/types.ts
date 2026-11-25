@@ -74,6 +74,22 @@ export interface MpvPlayerState extends PlayerState {
 	/** mpv plays in a window of its own, because the app couldn't draw the
 	 *  video in its own window. Nothing the app draws shows over it. */
 	fallbackActive: boolean;
+	/** The item's tracks of every kind. Empty until mpv has opened it. */
+	tracks: MpvTrack[];
+}
+
+/** One of the item's tracks, as mpv lists it. */
+export interface MpvTrack {
+	/** The id `mpvSelectSubtitle` and `mpvSelectAudio` take. Each type counts from 1. */
+	id: number;
+	type: "video" | "audio" | "sub";
+	title: string | null;
+	lang: string | null;
+	codec: string | null;
+	default: boolean;
+	selected: boolean;
+	/** The track came from a file of its own, as a subtitle file does. */
+	external: boolean;
 }
 
 /** What useMpv keeps of mpv's state, which adds when the position was read. */

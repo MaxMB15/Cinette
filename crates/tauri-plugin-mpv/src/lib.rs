@@ -74,6 +74,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::mpv_get_media_info,
             commands::mpv_sub_add,
             commands::mpv_sub_remove,
+            commands::mpv_select_subtitle,
+            commands::mpv_select_audio,
             commands::mpv_set_sub_delay,
             commands::mpv_set_media_info,
             commands::mpv_set_skip_intervals,

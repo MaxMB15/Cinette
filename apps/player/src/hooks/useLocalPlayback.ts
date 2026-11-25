@@ -28,6 +28,8 @@ export type LocalPlayer = Pick<
 	| "seek"
 	| "setVolume"
 	| "stop"
+	| "selectSubtitle"
+	| "selectAudio"
 >;
 
 /**
@@ -39,7 +41,8 @@ export type LocalPlayer = Pick<
  * state's item.
  *
  * The destination stays the same object until what it can do changes, as
- * `seek` does once a stream's length is known. Its state comes from React,
+ * `seek` does once a stream's length is known, and the track picks do once
+ * mpv has opened the item. Its state comes from React,
  * so `getState` gives the state as of the last commit. The player's own
  * components read `useMpv`'s state, which is current while they render.
  */
@@ -82,15 +85,17 @@ export const useLocalPlayback = (
 		for (const listener of listeners) listener(state);
 	}, [state, listeners]);
 
-	const { play, pause, seek, setVolume, stop } = player;
+	const { play, pause, seek, setVolume, stop, selectSubtitle, selectAudio } = player;
 	const seekable = mpvState.duration > 0;
+	const subtitleTracks = state.subtitles.length;
+	const audioTracks = state.audio.length;
 	return useMemo<PlaybackDestination>(
 		() => ({
 			id: "local",
 			kind: "local",
 			name: "This device",
 			catalog: { kind: "local" },
-			capabilities: localCapabilities(seekable),
+			capabilities: localCapabilities(seekable, subtitleTracks, audioTracks),
 			// mpv plays everything this device's catalog holds.
 			route: async (item) =>
 				item.kind === "local"
@@ -106,8 +111,9 @@ export const useLocalPlayback = (
 			seek,
 			setVolume,
 			stop,
-			selectSubtitle: () => Promise.reject(new UnsupportedError("Choosing a subtitle track")),
-			selectAudio: () => Promise.reject(new UnsupportedError("Choosing an audio track")),
+			// The ids are mpv's, which the state lists.
+			selectSubtitle: (trackId) => selectSubtitle(trackId === null ? null : Number(trackId)),
+			selectAudio: (trackId) => selectAudio(Number(trackId)),
 			getState: () => stateRef.current,
 			subscribe: (listener) => {
 				listeners.add(listener);
@@ -116,6 +122,20 @@ export const useLocalPlayback = (
 				};
 			},
 		}),
-		[seekable, loadRef, play, pause, seek, setVolume, stop, stateRef, listeners]
+		[
+			seekable,
+			subtitleTracks,
+			audioTracks,
+			loadRef,
+			play,
+			pause,
+			seek,
+			setVolume,
+			stop,
+			selectSubtitle,
+			selectAudio,
+			stateRef,
+			listeners,
+		]
 	);
 };

@@ -215,6 +215,18 @@ describe("backend commands", () => {
 			{ id: 3, url: "http://example.com/movie.mkv" },
 		],
 		[
+			"mpvSelectSubtitle",
+			() => tauri.mpvSelectSubtitle(null, "http://example.com/movie.mkv"),
+			"plugin:mpv|mpv_select_subtitle",
+			{ id: null, url: "http://example.com/movie.mkv" },
+		],
+		[
+			"mpvSelectAudio",
+			() => tauri.mpvSelectAudio(2, "http://example.com/movie.mkv"),
+			"plugin:mpv|mpv_select_audio",
+			{ id: 2, url: "http://example.com/movie.mkv" },
+		],
+		[
 			"mpvSetSubDelay",
 			() => tauri.mpvSetSubDelay(-0.5),
 			"plugin:mpv|mpv_set_sub_delay",

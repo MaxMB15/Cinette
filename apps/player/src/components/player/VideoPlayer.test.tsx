@@ -59,6 +59,7 @@ import { fakeDestination, playbackCapabilities, playbackState } from "@/test/des
 import { getMountedPlayer } from "@/lib/remote-target";
 import { nowPlaying } from "@/lib/now-playing";
 import { saveProgressNow } from "@/lib/player-progress";
+import { readSubtitleSession } from "@/lib/subtitle-session";
 import { PlayerView } from "./VideoPlayer";
 
 type Mpv = ReturnType<typeof useMpv>;
@@ -76,6 +77,7 @@ const idleState = vi.hoisted(() => (): PolledMpvState => ({
 	reachedEnd: false,
 	waiting: false,
 	fallbackActive: false,
+	tracks: [],
 	positionAt: 0,
 }));
 
@@ -151,6 +153,8 @@ const fakeMpv = vi.hoisted(() => {
 		seek: vi.fn<Mpv["seek"]>(async () => {}),
 		setVolume: vi.fn<Mpv["setVolume"]>(async () => {}),
 		toggleMute: vi.fn<Mpv["toggleMute"]>(async () => {}),
+		selectSubtitle: vi.fn<Mpv["selectSubtitle"]>(async () => {}),
+		selectAudio: vi.fn<Mpv["selectAudio"]>(async () => {}),
 		refresh: vi.fn<Mpv["refresh"]>(async () => {}),
 	};
 	const { getLastKnownPosition, ...asyncActions } = actions;
@@ -3724,6 +3728,52 @@ describe("remote control", () => {
 		expect(getMountedPlayer()?.getState().item?.ref).toBe("ch1");
 		view.unmount();
 		expect(getMountedPlayer()).toBeNull();
+	});
+
+	it("tells other devices it can seek once the length is known", async () => {
+		await openItem(lanternKeeper());
+		expect(getMountedPlayer()?.capabilities.seek).toBe(false);
+		await setMpv({ state: playing(MOVIE_URL, 700, 3600) });
+		expect(getMountedPlayer()?.capabilities.seek).toBe(true);
+	});
+
+	it("stops as the Stop button does when another device stops it", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 700, 3600), firstFrameReady: true });
+		expect(document.body.style.backgroundColor).toBe("transparent");
+		await act(() => getMountedPlayer()!.stop());
+		await flush();
+		expect(fakeMpv.actions.stop).toHaveBeenCalledTimes(1);
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+		// The page let go of the background, so it isn't left see-through.
+		expect(document.body.style.backgroundColor).toBe("");
+		expect(tauri.savePlaybackPosition.mock.calls).toEqual([[MOVIE_KEY, 700, 3600]]);
+		expect(tauri.recordPlayEnd).toHaveBeenCalledWith("mv1", expect.any(Number));
+	});
+
+	it("shows the subtitle track another device picks instead of the ones picked here", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+
+		await act(() => getMountedPlayer()!.selectSubtitle("2"));
+		expect(fakeMpv.actions.selectSubtitle).toHaveBeenCalledExactlyOnceWith(2);
+		// mpv draws the track, and a subtitle still downloading gives way.
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
+		expect(picker.pick?.latest()).toBe(false);
+		// The page keeps none of them, and picks none for the next episode.
+		await goToPage("/");
+		expect(readSubtitleSession()).toMatchObject({
+			fileId: null,
+			entry: null,
+			cues: [],
+			preference: null,
+		});
 	});
 });
 

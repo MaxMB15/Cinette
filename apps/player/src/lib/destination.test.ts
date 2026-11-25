@@ -15,7 +15,11 @@ import {
 	type PlaybackState,
 } from "./destination";
 import type { Channel, PolledMpvState } from "./types";
-import { playbackCapabilities, playbackState } from "@/test/destination-fixtures";
+import {
+	mpvTrack as track,
+	playbackCapabilities,
+	playbackState,
+} from "@/test/destination-fixtures";
 
 const mpvState = (over: Partial<PolledMpvState> = {}): PolledMpvState => ({
 	isPlaying: false,
@@ -29,6 +33,7 @@ const mpvState = (over: Partial<PolledMpvState> = {}): PolledMpvState => ({
 	reachedEnd: false,
 	waiting: false,
 	fallbackActive: false,
+	tracks: [],
 	positionAt: 0,
 	...over,
 });
@@ -125,16 +130,42 @@ describe("localPlaybackState", () => {
 		expect(s.status).toBe("error");
 		expect(s.error).toEqual({ code: "failed", message: "" });
 	});
+
+	it("lists mpv's subtitle and audio tracks and the ones it plays", () => {
+		const tracks = [
+			track({ type: "video", selected: true }),
+			track({ type: "audio", title: "Main", lang: "en" }),
+			track({ type: "audio", id: 2, lang: "fr", selected: true }),
+			track({ id: 1, title: "English SDH", lang: "en" }),
+			track({ id: 2 }),
+			track({ id: 3, title: "1234.srt", external: true, selected: true }),
+		];
+		const s = localPlaybackState(report({}, { tracks }), channel);
+		expect(s.subtitles).toEqual([
+			{ id: "1", label: "English SDH", language: "en" },
+			{ id: "2", label: "Track 2", language: undefined },
+			{ id: "3", label: "Downloaded subtitles", language: undefined },
+		]);
+		expect(s.subtitleId).toBe("3");
+		expect(s.audio).toEqual([
+			{ id: "1", label: "Main", language: "en" },
+			{ id: "2", label: "fr", language: "fr" },
+		]);
+		expect(s.audioId).toBe("2");
+
+		const none = localPlaybackState(report({}, { tracks: tracks.slice(0, 2) }), channel);
+		expect([none.subtitleId, none.audioId]).toEqual([null, null]);
+	});
 });
 
 describe("localCapabilities", () => {
 	it("seeks only when it's told it can", () => {
-		expect(localCapabilities(false).seek).toBe(false);
-		expect(localCapabilities(true).seek).toBe(true);
+		expect(localCapabilities(false, 0, 1).seek).toBe(false);
+		expect(localCapabilities(true, 0, 1).seek).toBe(true);
 	});
 
-	it("describes today's player", () => {
-		expect(localCapabilities(true)).toEqual({
+	it("describes the player for an item with one audio track and no subtitles", () => {
+		expect(localCapabilities(true, 0, 1)).toEqual({
 			seek: true,
 			pause: true,
 			volume: "absolute",
@@ -143,6 +174,13 @@ describe("localCapabilities", () => {
 			audioTracks: false,
 			resumeAt: true,
 			catalog: false,
+		});
+	});
+
+	it("picks a subtitle track when there is one, and an audio track out of two", () => {
+		expect(localCapabilities(false, 1, 2)).toMatchObject({
+			subtitles: "select",
+			audioTracks: true,
 		});
 	});
 });
