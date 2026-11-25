@@ -368,8 +368,9 @@ export const ControllersBar = () => {
  * independent playback. When a link ends by itself, it says why once.
  */
 export const RemoteBar = () => {
-	const { link, ended, leave } = useRemoteControl();
-	const [dismissed, setDismissed] = useState<typeof ended>(null);
+	// The store keeps a dismissed notice gone, though the bar isn't shown
+	// over a full screen player.
+	const { link, ended, leave, dismiss } = useRemoteControl();
 	const [leaveFailed, setLeaveFailed] = useState(false);
 	// The link each dialog was opened for, so neither comes back by itself
 	// on the next link.
@@ -433,17 +434,11 @@ export const RemoteBar = () => {
 			</DestinationBar>
 		);
 	}
-	const text = ended && ended !== dismissed ? endedText(ended.name, ended.reason) : null;
+	const text = ended ? endedText(ended.name, ended.reason) : null;
 	return (
 		<>
 			{failed}
-			{text && (
-				<EndedRow
-					icon={MonitorSmartphone}
-					text={text}
-					onDismiss={() => setDismissed(ended)}
-				/>
-			)}
+			{text && <EndedRow icon={MonitorSmartphone} text={text} onDismiss={dismiss} />}
 		</>
 	);
 };

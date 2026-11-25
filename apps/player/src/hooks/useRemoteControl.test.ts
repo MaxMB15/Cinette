@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 const bridge = vi.hoisted(() => ({
 	remoteDevices: vi.fn(() => Promise.resolve([])),
+	remoteSessions: vi.fn(() => Promise.resolve([])),
 	remoteConnect: vi.fn(() => Promise.resolve()),
 	remoteLink: vi.fn(() => Promise.resolve(null)),
 	remoteLeave: vi.fn(() => Promise.resolve()),
@@ -54,7 +55,9 @@ describe("useRemoteControl", () => {
 		const a = renderHook(() => useRemoteControl());
 		const b = renderHook(() => useRemoteControl());
 		await waitFor(() => expect(handlers.has("remote://devices")).toBe(true));
-		expect(vi.mocked(listen)).toHaveBeenCalledTimes(4);
+		expect(vi.mocked(listen)).toHaveBeenCalledTimes(5);
+		expect(handlers.has("remote://sessions")).toBe(true);
+		expect(bridge.remoteSessions).toHaveBeenCalledTimes(1);
 		act(() => handlers.get("remote://devices")!({ event: "", id: 0, payload: [tv] }));
 		expect(a.result.current.devices).toStrictEqual([tv]);
 		expect(b.result.current.devices).toStrictEqual([tv]);
@@ -117,6 +120,24 @@ describe("useRemoteControl", () => {
 		unmount();
 	});
 
+	it("dismisses why a link ended", async () => {
+		const { result, unmount } = renderHook(() => useRemoteControl());
+		await waitFor(() => expect(handlers.has("remote://controller")).toBe(true));
+		await act(() => result.current.connect(tv));
+		const id = result.current.link!.id;
+		act(() =>
+			handlers.get("remote://controller")!({
+				event: "",
+				id: 0,
+				payload: { deviceId: "tv1", link: id, phase: "closed", reason: "lost" },
+			})
+		);
+		expect(result.current.ended).toStrictEqual({ name: "Living Room", reason: "lost" });
+		act(() => result.current.dismiss());
+		expect(result.current.ended).toBeNull();
+		unmount();
+	});
+
 	it("keeps working when listening fails", async () => {
 		vi.mocked(listen).mockRejectedValueOnce(new Error("no Tauri"));
 		const { unmount } = renderHook(() => useRemoteControl());
@@ -155,7 +176,7 @@ describe("useRemoteControl", () => {
 		first.unmount();
 		const again = renderHook(() => useRemoteControl());
 		await act(async () => {});
-		expect(vi.mocked(listen), "the same listeners go on").toHaveBeenCalledTimes(4);
+		expect(vi.mocked(listen), "the same listeners go on").toHaveBeenCalledTimes(5);
 		await act(() => again.result.current.leave());
 		await act(async () => {});
 		expect(
