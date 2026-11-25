@@ -27,6 +27,7 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 ### Fixed
 
+- Some Xtream providers send no series, movies or channels when asked for all of them, but do for each category. Cinette now asks for each category then, so their series show, and a refresh no longer removes the series it saved before. A series in more than one category shows once, in the first one the provider lists.
 - A subtitle file you picked while a stream was still opening, or while it reconnected, could fail to show, even though the player kept it as picked. The player now adds it as soon as the stream has opened (#340).
 
 ## [0.8.0] - 2026-10-17
