@@ -176,6 +176,8 @@ pub enum ErrorCode {
     NotFound,
     /// The command was about an item that is no longer playing.
     StaleItem,
+    /// Too many messages came at once, or a transfer was asked for during
+    /// the pause after a denial.
     RateLimited,
     /// The target couldn't carry it out, for example because its player failed.
     Failed,

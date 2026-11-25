@@ -2196,7 +2196,7 @@ async fn a_denied_history_transfer_writes_nothing() {
     // never started one.
     assert_eq!(*lock(&mac.kept), [true, false]);
     assert!(lock(&tv.kept).is_empty());
-    // The denial's cooldown may turn the next one away on the TV, but this
+    // The pause after the denial may turn the next one away on the TV, but this
     // device no longer thinks one is waiting.
     assert_ne!(
         ask_all(&mac, "send").await,
@@ -2360,7 +2360,7 @@ async fn after_a_denial_the_same_providers_can_be_sent_again() {
     )
     .unwrap();
     transfer_step(&mut mac, "refused").await;
-    // The denial's cooldown turns the next one away on the TV, but this
+    // The pause after the denial turns the next one away on the TV, but this
     // device no longer thinks one is waiting.
     let again = invoke_async(&mac, "remote_send_providers", args()).await;
     assert_ne!(

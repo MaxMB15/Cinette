@@ -108,25 +108,21 @@ fn a_full_queue_refuses_but_takes_a_repeat_from_a_device_in_it() {
 }
 
 #[test]
-fn a_denied_device_waits_out_the_cooldown_but_a_dismissed_one_doesnt() {
+fn a_denied_device_may_ask_again_once_the_pause_ends() {
     let now = Instant::now();
     let mut queue = ConsentQueue::new();
     let denied = peer("D");
-    let dismissed = peer("X");
-    let first = submit(&mut queue, now, 1, &denied).unwrap();
-    let second = submit(&mut queue, now, 2, &dismissed).unwrap();
-    queue.answer(first, Answer::Deny, now);
-    queue.answer(second, Answer::Dismiss, now);
-    let after_backoff = now + DENIAL_BACKOFF;
+    let id = submit(&mut queue, now, 1, &denied).unwrap();
+    queue.answer(id, Answer::Deny, now);
+    let end = now + DENIAL_BACKOFF;
+    let just_before = end - Duration::from_millis(1);
+    assert!(queue.pausing(just_before));
     assert_eq!(
-        submit(&mut queue, after_backoff, 3, &denied),
-        Err(CloseReason::Denied)
+        submit(&mut queue, just_before, 2, &denied),
+        Err(CloseReason::Busy)
     );
-    assert!(submit(&mut queue, after_backoff, 4, &dismissed).is_ok());
-    queue.withdraw(ConnId(4)).unwrap();
-    let later = now + DENIAL_COOLDOWN;
-    queue.expire(later);
-    assert!(submit(&mut queue, later, 5, &denied).is_ok());
+    assert!(!queue.pausing(end));
+    assert!(submit(&mut queue, end, 3, &denied).is_ok());
 }
 
 #[test]
@@ -143,36 +139,6 @@ fn withdraw_and_refuse_all_grant_nothing() {
     assert_eq!(all[0].outcome, Outcome::Refused(CloseReason::NotAllowed));
     assert!(queue.is_empty());
     assert_eq!(queue.next_deadline(), None);
-}
-
-#[test]
-fn tidying_up_during_the_cooldown_keeps_the_denial() {
-    let now = Instant::now();
-    let mut queue = ConsentQueue::new();
-    let denied = peer("D");
-    let id = submit(&mut queue, now, 1, &denied).unwrap();
-    queue.answer(id, Answer::Deny, now);
-    queue.expire(now);
-    queue.expire(now + DENIAL_COOLDOWN / 2);
-    assert_eq!(
-        submit(&mut queue, now + DENIAL_COOLDOWN / 2, 2, &denied),
-        Err(CloseReason::Denied)
-    );
-}
-
-#[test]
-fn a_denied_device_may_ask_again_the_moment_the_cooldown_ends() {
-    let now = Instant::now();
-    let mut queue = ConsentQueue::new();
-    let denied = peer("D");
-    let id = submit(&mut queue, now, 1, &denied).unwrap();
-    queue.answer(id, Answer::Deny, now);
-    let end = now + DENIAL_COOLDOWN;
-    assert_eq!(
-        submit(&mut queue, end - Duration::from_millis(1), 2, &denied),
-        Err(CloseReason::Denied)
-    );
-    assert!(submit(&mut queue, end, 3, &denied).is_ok());
 }
 
 fn secs(n: u64) -> Duration {
