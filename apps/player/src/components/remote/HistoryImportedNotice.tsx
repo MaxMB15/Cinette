@@ -7,13 +7,14 @@ import { useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useTauriEvent } from "@/hooks/useRemoteTarget";
-import { useTvNoticeFocus } from "@/hooks/useTvNoticeFocus";
+import { TV_NOTICE, TV_NOTICE_BUTTON, useTvNoticeFocus } from "@/hooks/useTvNoticeFocus";
 import { formatTime } from "@/lib/format";
 import { playbackKey } from "@/lib/playback";
 import { channelsQuery, historyKey } from "@/lib/queries";
 import { applyRemoteCommand, getMountedPlayer, waitForMountedPlayer } from "@/lib/remote-target";
 import { getPlaybackPosition, mpvStop, type RemoteHistoryImported } from "@/lib/tauri";
 import type { Channel } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 /** Where `channel` would continue here: the place saved for it now, or
  *  undefined to start from the beginning. */
@@ -73,7 +74,10 @@ export const HistoryImportedNotice = () => {
 		<div
 			role="status"
 			{...tv}
-			className="fixed left-1/2 -translate-x-1/2 bottom-4 z-10000 flex flex-wrap items-center gap-3 rounded-md border border-border bg-card px-4 py-2 text-sm shadow-xl max-w-[calc(100vw-2rem)] break-words"
+			className={cn(
+				"fixed left-1/2 -translate-x-1/2 bottom-4 z-10000 flex flex-wrap items-center gap-3 rounded-md border border-border bg-card px-4 py-2 text-sm shadow-xl max-w-[calc(100vw-2rem)] break-words",
+				TV_NOTICE
+			)}
 		>
 			<span>
 				Added history from <bdi>{imported.from || "another device"}</bdi>.
@@ -81,7 +85,11 @@ export const HistoryImportedNotice = () => {
 			{channel && (
 				<button
 					type="button"
-					className="px-3 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+					className={cn(
+						"px-3 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90",
+						TV_NOTICE_BUTTON,
+						"tv:bg-white/10 tv:px-[1rem]"
+					)}
 					onClick={() => void resume(channel)}
 				>
 					Continue watching <bdi>{channel.name}</bdi>
@@ -91,7 +99,11 @@ export const HistoryImportedNotice = () => {
 			<button
 				type="button"
 				aria-label="Dismiss"
-				className="text-muted-foreground hover:text-foreground"
+				className={cn(
+					"text-muted-foreground hover:text-foreground",
+					TV_NOTICE_BUTTON,
+					"tv:inline-flex tv:items-center tv:justify-center"
+				)}
 				onClick={() => setShown(null)}
 			>
 				<X className="h-4 w-4" aria-hidden />

@@ -186,6 +186,33 @@ export const readSkipSegmentModes: () => SkipSegmentModes = skipSegmentModes.rea
 export const writeSkipSegmentMode: (group: keyof SkipSegmentModes, mode: SkipSegmentMode) => void =
 	skipSegmentModes.write;
 
+/** How many minutes of a live channel the player keeps to go back in. */
+export const LIVE_REWIND_OPTIONS: readonly number[] = [1, 2, 5, 10];
+
+/** Window event fired after the live rewind length changes. */
+export const LIVE_REWIND_EVENT = "mvp-live-rewind";
+
+const liveRewind = choiceGroup<"minutes", number>(
+	{ minutes: "mvp_live_rewind" },
+	LIVE_REWIND_OPTIONS,
+	5,
+	LIVE_REWIND_EVENT,
+	Number
+);
+
+/** How far back a live channel can go. 5 minutes unless changed in Settings. */
+export const readLiveRewind: () => { minutes: number } = liveRewind.read;
+
+/** Save the live rewind length. Values that aren't in LIVE_REWIND_OPTIONS are ignored. */
+export const writeLiveRewind = (minutes: number): void => liveRewind.write("minutes", minutes);
+
+/**
+ * The memory mpv keeps behind the position for the live rewind length, in
+ * MiB. A minute is 40 MiB, which holds a stream of about 5 Mbit/s, the most
+ * HD channels use. A stream with more bits per second goes back less far.
+ */
+export const readBackBufferMib = (): number => readLiveRewind().minutes * 40;
+
 const STREAM_THROUGH_KEY = "mvp_cast_stream_through";
 
 /** Window event fired after "Stream through this computer" changes. */

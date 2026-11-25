@@ -21,9 +21,10 @@ import {
 	removeDownloads,
 	cacheSeriesEpisodes,
 } from "@/lib/tauri";
+import { mediaFacts } from "@/lib/media-facts";
 import { RatingsRow } from "@/components/ui/ratings-row";
 import { channelSources, withSource, describeSource } from "@/lib/sources";
-import { dedupeEpisodes } from "@/lib/episodes";
+import { dedupeEpisodes, episodeTitle } from "@/lib/episodes";
 import { formatCount } from "@/lib/format";
 import { aggregateIconState, downloadIconState, isActiveDownload } from "@/lib/download-status";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
@@ -67,11 +68,6 @@ const episodeGroupDownloads = (eps: Channel[], downloads: Map<string, DownloadRe
 		activeIds: records.filter(isActiveDownload).map((r) => r.id),
 		completedIds: records.filter((r) => r.status === "completed").map((r) => r.id),
 	};
-};
-
-const episodeTitle = (name: string): string => {
-	const stripped = name.replace(/^.*?\bS\d{1,3}E\d{1,3}\s*/i, "").trim();
-	return stripped || name;
 };
 
 type Step = "seasons" | "episodes" | "sources";
@@ -214,24 +210,16 @@ export const SeriesDetailModal = ({
 				: "";
 
 	// Derived display values
-	const posterSrc =
-		whatsonData?.image ??
-		(omdbData?.posterUrl && omdbData.posterUrl !== "N/A"
-			? omdbData.posterUrl
-			: (showLogoUrl ?? null));
-
-	const year = omdbData?.year && omdbData.year !== "N/A" ? omdbData.year : null;
-	const rated =
-		whatsonData?.certification ??
-		(omdbData?.rated && omdbData.rated !== "N/A" ? omdbData.rated : null);
-	const genre = omdbData?.genre && omdbData.genre !== "N/A" ? omdbData.genre : null;
-	const runtime = omdbData?.runtime && omdbData.runtime !== "N/A" ? omdbData.runtime : null;
-	const director = omdbData?.director && omdbData.director !== "N/A" ? omdbData.director : null;
-	const actors = omdbData?.actors && omdbData.actors !== "N/A" ? omdbData.actors : null;
-	const plot =
-		(omdbData?.plot && omdbData.plot !== "N/A" ? omdbData.plot : null) ??
-		whatsonData?.tagline ??
-		null;
+	const {
+		poster: posterSrc,
+		year,
+		rated,
+		genre,
+		runtime,
+		director,
+		actors,
+		plot,
+	} = mediaFacts(omdbData, whatsonData, showLogoUrl);
 
 	const truncatedActors = actors && actors.length > 60 ? actors.slice(0, 57) + "..." : actors;
 	const genreRuntime = [genre, runtime ? `${runtime}/ep` : null].filter(Boolean).join(" · ");

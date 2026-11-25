@@ -8,8 +8,12 @@ import { COUNTDOWN_MS } from "@/lib/skip-segments";
 import { cn } from "@/lib/utils";
 
 /** The look of the prompt's buttons, which sit over the video. */
-const BUTTON =
-	"pointer-events-auto inline-flex min-h-11 items-center gap-2 rounded-md bg-black/70 px-4 text-sm font-medium text-white shadow-lg ring-1 ring-inset ring-white/25 backdrop-blur-xs transition-colors hover:bg-black/85 active:bg-black/85 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-white/70";
+const BUTTON = cn(
+	"tv-cursor pointer-events-auto inline-flex min-h-11 items-center gap-2 rounded-md bg-black/70 px-4 text-sm font-medium text-white shadow-lg ring-1 ring-inset ring-white/25 backdrop-blur-xs transition-colors hover:bg-black/85 active:bg-black/85 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-white/70 tv:rounded-[0.5rem] tv:bg-black/80 tv:px-[1.25rem] tv:text-base tv:shadow-none tv:ring-0 tv:transition-none tv:focus-visible:ring-0 tv:[&_svg]:size-[1.25rem]"
+);
+
+/** On a TV, OK presses this button while the focus is on the video, so it looks focused then. */
+const OK_PRESSES = cn("tv-press");
 
 /** Why times made for a video of another length may be off. */
 const MISMATCH_HINT = "This video's length doesn't match the one these times were made for.";
@@ -35,13 +39,17 @@ interface SkipSegmentPromptProps {
 	 * player takes focus back for its keyboard shortcuts.
 	 */
 	onFocusLost?: () => void;
+	/** Back on one of the buttons, on a TV. The video takes the focus again. */
+	onBack?: () => void;
 }
 
 /**
  * The Skip button, the countdown to the next episode and the "Skipped intro"
  * notice, in the bottom right corner of the player. `useSegmentSkipping`
  * decides which one shows. Enter does the same as the Skip button, through
- * the player's shortcuts.
+ * the player's shortcuts. On a TV the video keeps the focus while the prompt
+ * shows, so OK skips and Left or Right still seek. Up from the player's buttons
+ * reaches the prompt, for the buttons OK doesn't press.
  */
 export const SkipSegmentPrompt = ({
 	skipping,
@@ -49,6 +57,7 @@ export const SkipSegmentPrompt = ({
 	playing,
 	held = false,
 	onFocusLost,
+	onBack,
 }: SkipSegmentPromptProps) => {
 	const hintId = useId();
 	const { offer, notice, countdown } = skipping;
@@ -90,7 +99,7 @@ export const SkipSegmentPrompt = ({
 				<button
 					type="button"
 					onClick={press(skipping.skip)}
-					className={cn(BUTTON, "relative overflow-hidden")}
+					className={cn(BUTTON, OK_PRESSES, "relative overflow-hidden")}
 				>
 					<span
 						aria-hidden
@@ -109,12 +118,14 @@ export const SkipSegmentPrompt = ({
 		);
 	} else if (notice) {
 		content = (
-			<div className="pointer-events-auto flex items-stretch overflow-hidden rounded-md bg-black/70 text-sm text-white shadow-lg ring-1 ring-inset ring-white/25 backdrop-blur-xs">
-				<span className="flex items-center pl-4 pr-3">{notice.label}</span>
+			<div className="pointer-events-auto flex items-stretch overflow-hidden rounded-md bg-black/70 text-sm text-white shadow-lg ring-1 ring-inset ring-white/25 backdrop-blur-xs tv:rounded-[0.5rem] tv:bg-black/80 tv:text-base tv:shadow-none tv:ring-0">
+				<span className="flex items-center pl-4 pr-3 tv:pl-[1.25rem] tv:pr-[1rem]">
+					{notice.label}
+				</span>
 				<button
 					type="button"
 					onClick={press(skipping.undo)}
-					className="inline-flex min-h-11 items-center gap-1.5 border-l border-white/20 px-3 font-medium hover:bg-white/15 active:bg-white/15 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/70"
+					className="tv-cursor inline-flex min-h-11 items-center gap-1.5 border-l border-white/20 px-3 font-medium hover:bg-white/15 active:bg-white/15 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/70 tv:border-l-0 tv:px-[1rem] tv:focus-visible:ring-0 tv:[&_svg]:size-[1.25rem]"
 				>
 					<Undo2 className="h-4 w-4" aria-hidden />
 					Undo
@@ -129,7 +140,7 @@ export const SkipSegmentPrompt = ({
 					type="button"
 					onClick={press(skipping.skip)}
 					aria-describedby={offer.unsure ? hintId : undefined}
-					className={BUTTON}
+					className={cn(BUTTON, OK_PRESSES)}
 				>
 					{offer.label}
 					<Icon className="h-4 w-4" aria-hidden />
@@ -139,7 +150,7 @@ export const SkipSegmentPrompt = ({
 						<p
 							aria-hidden
 							title={MISMATCH_HINT}
-							className="pointer-events-auto rounded bg-black/60 px-2 py-0.5 text-[11px] text-white/80"
+							className="pointer-events-auto rounded bg-black/60 px-2 py-0.5 text-[11px] text-white/80 tv:rounded-[0.25rem] tv:text-[0.8rem] tv:leading-[1.1rem]"
 						>
 							Times may be off
 						</p>
@@ -166,9 +177,14 @@ export const SkipSegmentPrompt = ({
 				focusedRef.current = true;
 			}}
 			onBlur={handleBlur}
+			onKeyDown={(e) => {
+				if (e.key !== "Escape" || !onBack) return;
+				e.preventDefault();
+				onBack();
+			}}
 			className={cn(
-				"pointer-events-none absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-[calc(1rem+env(safe-area-inset-right))] z-10 flex flex-col items-end transition-transform duration-300 ease-out motion-reduce:transition-none",
-				controlsVisible && "-translate-y-26",
+				"pointer-events-none absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-[calc(1rem+env(safe-area-inset-right))] z-10 flex flex-col items-end transition-transform duration-300 ease-out motion-reduce:transition-none tv:right-[2rem] tv:bottom-[2rem] tv:z-40 tv:transition-none",
+				controlsVisible && "-translate-y-26 tv:-translate-y-[9rem]",
 				held && "invisible"
 			)}
 		>

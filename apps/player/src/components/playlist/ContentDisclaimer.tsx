@@ -6,13 +6,14 @@ import { openUrl } from "@/lib/openUrl";
 
 export const DISCLAIMER_URL = "https://github.com/MaxMB15/Cinette#disclaimer";
 
+export const DISCLAIMER_TEXT =
+	"Cinette doesn't include any channels or content. Only add playlists and accounts you have the legal right to use. You're responsible for what you watch with it, and it comes as is, without warranty.";
+
 export const ContentDisclaimer = () => (
 	<div className="flex gap-2 text-xs text-muted-foreground">
 		<Info className="h-3.5 w-3.5 shrink-0 mt-0.5" aria-hidden="true" />
 		<p>
-			Cinette doesn't include any channels or content. Only add playlists and accounts you
-			have the legal right to use. You're responsible for what you watch with it, and it comes
-			as is, without warranty.{" "}
+			{DISCLAIMER_TEXT}{" "}
 			<button
 				type="button"
 				onClick={() => openUrl(DISCLAIMER_URL)}

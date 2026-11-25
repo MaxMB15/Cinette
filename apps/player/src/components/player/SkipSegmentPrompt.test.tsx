@@ -22,6 +22,7 @@ interface PromptProps {
 	controlsVisible?: boolean;
 	playing?: boolean;
 	held?: boolean;
+	onBack?: () => void;
 }
 
 const renderPrompt = (skipping: SegmentSkipping, props: PromptProps = {}) => {
@@ -35,6 +36,7 @@ const renderPrompt = (skipping: SegmentSkipping, props: PromptProps = {}) => {
 				playing={props.playing ?? true}
 				held={props.held}
 				onFocusLost={onFocusLost}
+				onBack={props.onBack}
 			/>
 			<button type="button">Elsewhere</button>
 		</div>
@@ -129,6 +131,45 @@ describe("SkipSegmentPrompt", () => {
 			const { update, onFocusLost } = renderPrompt(makeSkipping({ offer: OFFER }));
 			update(makeSkipping());
 			expect(onFocusLost).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("Back on the buttons, on a TV", () => {
+		it("goes back and claims the press", () => {
+			const onBack = vi.fn();
+			renderPrompt(makeSkipping({ offer: OFFER }), { onBack });
+			const unclaimed = fireEvent.keyDown(
+				screen.getByRole("button", { name: "Skip intro" }),
+				{
+					key: "Escape",
+				}
+			);
+			expect(onBack).toHaveBeenCalledTimes(1);
+			expect(unclaimed).toBe(false);
+		});
+
+		it("leaves other keys alone", () => {
+			const onBack = vi.fn();
+			renderPrompt(makeSkipping({ offer: OFFER }), { onBack });
+			const unclaimed = fireEvent.keyDown(
+				screen.getByRole("button", { name: "Skip intro" }),
+				{
+					key: "Enter",
+				}
+			);
+			expect(onBack).not.toHaveBeenCalled();
+			expect(unclaimed).toBe(true);
+		});
+
+		it("leaves Back for the player where the prompt has nothing to do with it", () => {
+			renderPrompt(makeSkipping({ offer: OFFER }));
+			const unclaimed = fireEvent.keyDown(
+				screen.getByRole("button", { name: "Skip intro" }),
+				{
+					key: "Escape",
+				}
+			);
+			expect(unclaimed).toBe(true);
 		});
 	});
 

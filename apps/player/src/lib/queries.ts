@@ -8,7 +8,10 @@
 
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import {
+	clearAllCaches,
+	clearWatchHistory,
 	getAllChannels,
+	getContentCounts,
 	getEpgForLiveChannels,
 	getEpgProgrammes,
 	getWatchHistory,
@@ -35,6 +38,20 @@ export const providersQuery = (source: Source = LOCAL) =>
 	queryOptions({
 		queryKey: [source, "providers"] as const,
 		queryFn: () => getProviders(),
+	});
+
+/**
+ * How many live channels, movies and shows a provider has. `version` is when
+ * it last refreshed, if it has, so a refresh counts again.
+ */
+export const contentCountsQuery = (
+	providerId: string,
+	version: string | undefined,
+	source: Source = LOCAL
+) =>
+	queryOptions({
+		queryKey: [source, "contentCounts", providerId, version] as const,
+		queryFn: () => getContentCounts(providerId),
 	});
 
 /** Every channel, movie and series of every provider. */
@@ -199,6 +216,18 @@ export const reloadClearedCaches = (client: QueryClient, source: Source = LOCAL)
 
 /** The start of every watch history query's key, to mark them all stale at once. */
 export const historyKey = (source: Source = LOCAL) => [source, "history"] as const;
+
+/** Clears the watch history. The lists start over, rather than show the cleared entries until they load again. */
+export const clearHistoryData = async (client: QueryClient): Promise<void> => {
+	await clearWatchHistory();
+	client.removeQueries({ queryKey: historyKey() });
+};
+
+/** Clears the backend's caches and loads again what's on screen. */
+export const clearCacheData = async (client: QueryClient): Promise<void> => {
+	await clearAllCaches();
+	reloadClearedCaches(client).catch(() => {});
+};
 
 /** The newest watch history entries, of one content type or of all. */
 export const watchHistoryQuery = (limit: number, contentType?: string, source: Source = LOCAL) =>

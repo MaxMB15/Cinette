@@ -38,9 +38,9 @@ export const OpeningIndicator = ({ onRetry }: OpeningIndicatorProps) => {
 		<div className="pointer-events-none flex flex-col items-center gap-3 p-6 text-center">
 			<div role="status" aria-live="polite" className="flex flex-col items-center gap-3">
 				<LoaderCircle className="h-10 w-10 animate-spin text-white/80" aria-hidden />
-				<p className="text-sm font-medium text-white/90">Opening stream</p>
+				<p className="text-sm font-medium text-white/90 tv:text-base">Opening stream</p>
 				{slow && (
-					<p className="max-w-xs text-xs text-white/60">
+					<p className="max-w-xs text-xs text-white/60 tv:max-w-[24rem] tv:text-[0.8rem] tv:leading-[1.1rem]">
 						Some servers take a while to respond.
 					</p>
 				)}

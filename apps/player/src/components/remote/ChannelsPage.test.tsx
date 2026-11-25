@@ -10,6 +10,7 @@ vi.mock("@/hooks/useRemoteControl", () => ({ useRemoteControl: () => control }))
 vi.mock("@/components/channels/ChannelList", () => ({
 	ChannelList: () => <p>This device's channels</p>,
 }));
+vi.mock("@/components/tv/TvBrowse", () => ({ TvBrowse: () => <p>The TV's screens</p> }));
 const platform = vi.hoisted(() => ({ controller: true }));
 vi.mock("@/lib/platform", () => ({ controlsOthers: () => platform.controller }));
 const navigate = vi.hoisted(() => vi.fn());
@@ -46,11 +47,11 @@ describe("ChannelsPage", () => {
 		}
 	});
 
-	it("shows this device's channels where it can't control others", () => {
+	it("shows a TV's own screens, since a TV can't control others", () => {
 		platform.controller = false;
 		control.link = link({ phase: "connected" });
 		render(<ChannelsPage />);
-		expect(screen.getByText("This device's channels")).toBeInTheDocument();
+		expect(screen.getByText("The TV's screens")).toBeInTheDocument();
 		platform.controller = true;
 	});
 

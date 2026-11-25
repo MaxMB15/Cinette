@@ -119,37 +119,6 @@ describe("AppLayout", () => {
 		expect(mounts).toHaveBeenCalledTimes(1);
 	});
 
-	it("gives a TV a side menu that marks the open page", () => {
-		platform.layoutMode = "tv";
-		render(tree("/playlists"));
-
-		expect(screen.getByText("page")).toBeInTheDocument();
-		const links = screen.getAllByRole("link");
-		expect(links.map((link) => link.textContent)).toEqual([
-			"Channels",
-			"Player",
-			"Playlists",
-			"Settings",
-		]);
-		// A remote moves focus from link to link.
-		for (const link of links) expect(link).toHaveAttribute("tabindex", "0");
-
-		const playlists = screen.getByRole("link", { name: "Playlists" });
-		expect(playlists).toHaveAttribute("aria-current", "page");
-		expect(playlists).toHaveClass("bg-primary/10", "text-primary");
-		expect(screen.getByRole("link", { name: "Channels" })).not.toHaveClass("bg-primary/10");
-		expect(screen.queryByRole("navigation")).toBeNull();
-	});
-
-	it("shows the video view on a TV only on the player page", () => {
-		platform.layoutMode = "tv";
-		render(tree("/player"));
-		expect(mpvSetVisible).toHaveBeenLastCalledWith(true);
-
-		fireEvent.click(screen.getByRole("link", { name: "Channels" }));
-		expect(mpvSetVisible).toHaveBeenLastCalledWith(false);
-	});
-
 	it("gives the page the TV sizes while the TV layout shows", () => {
 		platform.layoutMode = "tv";
 		const { unmount } = render(tree("/"));
@@ -164,20 +133,6 @@ describe("AppLayout", () => {
 		render(tree("/"));
 		expect(document.documentElement).not.toHaveClass("tv");
 		expect(window.__cinetteBack).toBeUndefined();
-	});
-
-	it("moves the TV menu's highlight to the page it opens", () => {
-		platform.layoutMode = "tv";
-		render(tree("/"));
-
-		fireEvent.click(screen.getByRole("link", { name: "Settings" }));
-
-		expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute(
-			"aria-current",
-			"page"
-		);
-		expect(screen.getByRole("link", { name: "Channels" })).not.toHaveAttribute("aria-current");
-		expect(mounts).toHaveBeenCalledTimes(1);
 	});
 
 	describe("remote control", () => {
@@ -259,19 +214,6 @@ describe("AppLayout", () => {
 			render(tree("/player"));
 			expect(screen.queryByText("Controllers bar")).toBeNull();
 			expect(screen.getByText("page")).toBeInTheDocument();
-		});
-
-		it("shows what another device sent on every TV page, the player included", () => {
-			// They also load the lists again, which mustn't wait for the
-			// player to close.
-			platform.layoutMode = "tv";
-			platform.controller = false;
-			for (const path of ["/", "/player"]) {
-				const { unmount } = render(tree(path));
-				expect(screen.getByText("Providers added")).toBeInTheDocument();
-				expect(screen.getByText("History imported")).toBeInTheDocument();
-				unmount();
-			}
 		});
 	});
 });

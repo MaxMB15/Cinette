@@ -9,6 +9,8 @@
 
 /* index.html sets class="dark" on <html>, so dark: always applies. */
 @custom-variant dark (&:is(.dark *));
+/* A TV is 64 by 36 rem, and its cursor is the white row. */
+@custom-variant tv (html.tv &);
 
 @theme {
 	/* The system font, as in Tailwind 3. Tailwind 4.3 lists named fonts first,
@@ -150,14 +152,62 @@
 }
 
 /* A TV is read from across the room and driven with a D-pad. TvLayout puts
-   the class on the root element, so every rem size grows by an eighth, and
-   whatever has focus gets a ring thick enough to find at a glance. */
+   the class on the root element, and whatever has focus gets a ring thick
+   enough to find at a glance. */
 html.tv {
-	font-size: 112.5%;
+	/* The screen is always 64 by 36 rem, whatever the TV's resolution and
+	   density, so a design in rem looks the same on all of them. The width sets
+	   the size because the system's keyboard can take away height, and everything
+	   would shrink while it's open. */
+	font-size: calc(100vw / 64);
+	--tv-cursor: hsl(210 20% 96%);
+	--tv-ink: hsl(220 14% 7%);
 }
+/* Outside any layer, so a Tailwind class can only override it with `!`. */
 html.tv :focus-visible {
-	outline: 3px solid var(--color-ring);
-	outline-offset: 2px;
+	outline: 0.2rem solid var(--tv-cursor);
+	outline-offset: 0.1rem;
+}
+/* A list's place while the focus is in another list. */
+html.tv .tv-cursor[data-active] {
+	background: hsl(0 0% 100% / 0.1);
+}
+/* What has the focus turns solid white, which reads from across a room and
+   costs a cheap TV nothing to draw. */
+html.tv .tv-cursor:focus {
+	outline: none;
+	background: var(--tv-cursor);
+	color: var(--tv-ink);
+}
+/* The rail's blue for the open section is hard to read on the white. */
+html.tv .tv-cursor:focus .text-primary {
+	color: inherit;
+}
+/* The row with the focus shows a long name on two lines. The end of a channel's
+   name is often all that tells it from the next one, such as "[Backup 3]". Two
+   lines and a row's line under them just fit the 3.4rem of a channel row. */
+html.tv .tv-name {
+	line-height: 1.15rem;
+}
+html.tv .tv-cursor:focus .tv-name {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow-wrap: anywhere;
+	white-space: normal;
+}
+/* A button OK presses while the focus stays on the video behind it. */
+html.tv .player-container:focus .tv-press {
+	background: var(--tv-cursor);
+	color: var(--tv-ink);
+}
+html.tv .player-container:focus .tv-press .countdown-fill,
+html.tv .tv-press:focus .countdown-fill {
+	background: hsl(0 0% 0% / 0.2);
+}
+/* Blurring what's behind a panel is slow on a TV and leaves its text harder to read. */
+html.tv [class*="backdrop-blur"] {
+	backdrop-filter: none;
 }
 
 /* Transparent video area for MPV rendering beneath */

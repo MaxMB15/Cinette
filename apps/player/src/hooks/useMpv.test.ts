@@ -35,6 +35,7 @@ vi.mock("@/lib/tauri", () => ({
 		reachedEnd: false,
 		waiting: false,
 		fallbackActive: false,
+		buffered: null,
 	})),
 }));
 
@@ -89,6 +90,7 @@ describe("useMpv", () => {
 			reachedEnd: false,
 			waiting: false,
 			fallbackActive: false,
+			buffered: null,
 			positionAt: expect.any(Number),
 		});
 		expect(result.current.error).toBeNull();
@@ -120,7 +122,7 @@ describe("useMpv", () => {
 			await result.current.load("http://stream.url");
 		});
 
-		expect(mockMpvLoad).toHaveBeenCalledWith("http://stream.url", undefined, true, false);
+		expect(mockMpvLoad).toHaveBeenCalledWith("http://stream.url", undefined, true, false, 200);
 		expect(result.current.state.currentUrl).toBe("http://stream.url");
 	});
 
@@ -149,7 +151,7 @@ describe("useMpv", () => {
 
 		// Only one call should have been made
 		expect(mockMpvLoad).toHaveBeenCalledTimes(1);
-		expect(mockMpvLoad).toHaveBeenCalledWith("http://first.url", undefined, true, false);
+		expect(mockMpvLoad).toHaveBeenCalledWith("http://first.url", undefined, true, false, 200);
 
 		// Resolve first load
 		await act(async () => {
@@ -267,6 +269,7 @@ describe("useMpv", () => {
 			reachedEnd: false,
 			waiting: false,
 			fallbackActive: false,
+			buffered: null,
 			positionAt: expect.any(Number),
 		});
 	});
@@ -338,6 +341,26 @@ describe("useMpv", () => {
 				await result.current.refresh();
 			});
 			expect(result.current.state.waiting).toBe(true);
+		});
+
+		it("says how much of the stream mpv holds", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			mockMpvGetState.mockResolvedValueOnce({
+				...(playingAt(120) as object),
+				buffered: [60, 130],
+			} as never);
+			await act(async () => {
+				await result.current.refresh();
+			});
+			expect(result.current.state.buffered).toEqual([60, 130]);
+
+			mockMpvGetState.mockResolvedValueOnce(playingAt(121));
+			await act(async () => {
+				await result.current.refresh();
+			});
+			expect(result.current.state.buffered).toBeNull();
 		});
 
 		it("shows the seek position before mpv confirms it", async () => {
@@ -607,7 +630,24 @@ describe("useMpv", () => {
 		await act(async () => {
 			await result.current.load("http://test/next.m3u8");
 		});
-		expect(mockMpvLoad).toHaveBeenCalledWith("http://test/next.m3u8", undefined, false, false);
+		expect(mockMpvLoad).toHaveBeenCalledWith(
+			"http://test/next.m3u8",
+			undefined,
+			false,
+			false,
+			200
+		);
+	});
+
+	it("asks mpv to keep as much of a live stream as the rewind setting covers", async () => {
+		localStorage.setItem("mvp_live_rewind", "10");
+		const { result } = renderHook(() => useMpv());
+		await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+		await act(async () => {
+			await result.current.load("http://live.url");
+		});
+		expect(mockMpvLoad).toHaveBeenCalledWith("http://live.url", undefined, true, false, 400);
 	});
 
 	it("keeps the volume and mute state when the player is reopened", async () => {
@@ -1082,7 +1122,7 @@ describe("useMpv", () => {
 			await act(async () => {
 				window.dispatchEvent(new Event("online"));
 			});
-			expect(mockMpvLoad).toHaveBeenCalledWith("http://live.url", undefined, true, true);
+			expect(mockMpvLoad).toHaveBeenCalledWith("http://live.url", undefined, true, true, 200);
 			// It never played, so "playing again" would be wrong. The spinner
 			// shows instead.
 			expect(result.current.recentlyRecovered).toBe(false);
@@ -1119,7 +1159,7 @@ describe("useMpv", () => {
 			await act(async () => {
 				expect(await result.current.reload()).toBe(true);
 			});
-			expect(mockMpvLoad).toHaveBeenCalledWith("http://next.url", undefined, true, true);
+			expect(mockMpvLoad).toHaveBeenCalledWith("http://next.url", undefined, true, true, 200);
 		});
 
 		it("reloads from the last known position", async () => {
@@ -1135,7 +1175,7 @@ describe("useMpv", () => {
 			await act(async () => {
 				await result.current.reload();
 			});
-			expect(mockMpvLoad).toHaveBeenCalledWith("http://live.url", 75, true, true);
+			expect(mockMpvLoad).toHaveBeenCalledWith("http://live.url", 75, true, true, 200);
 		});
 
 		it("doesn't reload while a load is in flight or after a stop", async () => {
@@ -1395,7 +1435,7 @@ describe("useMpv", () => {
 			});
 
 			expect(mockMpvLoad).toHaveBeenCalledTimes(1);
-			expect(mockMpvLoad).toHaveBeenCalledWith("http://s", 42, true, true);
+			expect(mockMpvLoad).toHaveBeenCalledWith("http://s", 42, true, true, 200);
 			expect(result.current.recentlyRecovered).toBe(true);
 		});
 

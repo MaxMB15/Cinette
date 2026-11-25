@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Dialog } from "@/components/ui/dialog";
 import { useConsentRequest, type ConsentRequest } from "@/hooks/useRemoteTarget";
+import { getPlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { deviceTypeName, formatCode, secondsLeft } from "@/lib/remote-devices";
 import { consentBody, consentTitle } from "@/lib/remote-transfer";
@@ -16,7 +17,8 @@ import type { ConsentAnswer } from "@/lib/tauri";
 export const ARM_MS = 1000;
 
 const BUTTON = cn(
-	"px-4 py-2 text-sm rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+	"px-4 py-2 text-sm rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+	"tv-cursor tv:h-[2.75rem] tv:rounded-[0.5rem] tv:px-[1.25rem] tv:py-0 tv:text-base tv:font-medium tv:focus-visible:ring-0"
 );
 
 /**
@@ -75,6 +77,20 @@ const ConsentPrompt = ({
 	// A pointer press that began before this prompt was on screen was
 	// meant for what was there before.
 	const pressedHere = useRef(false);
+	const allowButton = useRef<HTMLButtonElement>(null);
+	// On a TV the remote moves only between Deny and Allow, and starts on
+	// Allow. A center press on the title did nothing and showed no cursor,
+	// so the remote seemed unable to allow. Allow still waits ARM_MS, so a
+	// press meant for the screen behind can't answer. This runs after the
+	// dialog focused its first button.
+	const tv = getPlatform() === "tv";
+	useEffect(
+		() => {
+			if (tv) allowButton.current!.focus();
+		},
+		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
+		[tv]
+	);
 	const allow = (fromPointer: boolean) => {
 		// Past its time, the button is disabled.
 		if (performance.now() < armedAt) return;
@@ -89,42 +105,44 @@ const ConsentPrompt = ({
 			overlayClassName="z-10000"
 			// A long list of providers scrolls inside it, so Deny and Allow stay
 			// on screen, and a TV remote's focus scrolls them into view.
-			className="bg-card border border-border rounded-lg p-5 w-[340px] max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-xl"
+			className="bg-card border border-border rounded-lg p-5 w-[340px] max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-xl tv:w-[34rem] tv:rounded-[0.75rem] tv:border-0 tv:p-[2rem] tv:shadow-none"
 		>
 			{/* Focus starts here rather than on Deny, so a key pressed for the
-			    player behind, like Space, doesn't answer the request. */}
+			    player behind, like Space, doesn't answer the request. On a TV
+			    it starts on Allow, which waits a moment before it works. */}
 			<h2
 				id={titleId}
-				tabIndex={0}
-				className="text-base font-semibold mb-1 break-words focus-visible:outline-hidden"
+				tabIndex={tv ? undefined : 0}
+				className="text-base font-semibold mb-1 break-words focus-visible:outline-hidden tv:text-[1.5rem] tv:leading-[2rem]"
 			>
 				{before}
 				<bdi className="font-bold">{request.name}</bdi>
 				{after}
 			</h2>
-			<p className="text-xs text-muted-foreground mb-4 break-words">
+			<p className="text-xs text-muted-foreground mb-4 break-words tv:text-base">
 				{consentBody(deviceTypeName(request.deviceType), request.asked)}
 			</p>
-			<p className="text-3xl font-mono font-semibold tracking-widest text-center mb-1">
+			<p className="text-3xl font-mono font-semibold tracking-widest text-center mb-1 tv:text-[3rem] tv:leading-[3.5rem]">
 				<span aria-hidden>{formatCode(request.code)}</span>
 				<span className="sr-only">Code {request.code.split("").join(" ")}</span>
 			</p>
-			<p className="text-xs text-muted-foreground text-center mb-5">
+			<p className="text-xs text-muted-foreground text-center mb-5 tv:text-[0.875rem]">
 				{left > 0 ? `Expires in ${left} s` : "Expired"}
 			</p>
 			{/* Only the end is read out, not every second of the count. */}
 			<p className="sr-only" aria-live="polite">
 				{left > 0 ? "" : "The request expired."}
 			</p>
-			<div className="flex justify-end gap-2">
+			<div className="flex justify-end gap-2 tv:justify-start tv:gap-[0.75rem]">
 				<button
 					type="button"
-					className={`${BUTTON} hover:bg-accent`}
+					className={`${BUTTON} hover:bg-accent tv:bg-white/10`}
 					onClick={() => answer("deny")}
 				>
 					Deny
 				</button>
 				<button
+					ref={allowButton}
 					type="button"
 					disabled={left === 0}
 					aria-disabled={armed ? undefined : "true"}

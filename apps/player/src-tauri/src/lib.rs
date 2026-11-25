@@ -187,6 +187,7 @@ register_commands![
     commands::load_m3u_file,
     commands::load_xtream_provider,
     commands::get_providers,
+    commands::get_content_counts,
     commands::remove_provider,
     commands::get_all_channels,
     commands::toggle_favorite,

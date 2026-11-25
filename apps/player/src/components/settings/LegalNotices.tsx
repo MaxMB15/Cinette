@@ -17,27 +17,30 @@ interface LegalNoticesProps {
 	version?: string;
 }
 
+export const legalLinks = (version?: string) => [
+	{ label: "License", url: fileUrl("LICENSE", version) },
+	{ label: "Additional terms", url: fileUrl("NOTICE", version) },
+	{ label: "Source code", url: sourceUrl(version) },
+	{ label: "Third-party notices", url: fileUrl("THIRD_PARTY_NOTICES.md", version) },
+	// The policy can change after a release, so this always opens the current one.
+	{ label: "Privacy policy", url: fileUrl("docs/privacy.md") },
+];
+
 // The Appropriate Legal Notices that GPLv3 asks interactive programs to show.
 // The "Created by" line is the attribution that NOTICE term 1 protects.
+export const LEGAL_CREDIT = "Created by Max Boksem";
+export const LEGAL_COPYRIGHT = "Copyright © 2026 Max Boksem";
+export const LEGAL_LICENSE =
+	"Cinette, formerly Max Video Player, is free software. You can share and change it under the GNU General Public License version 3, with additional terms. It comes with no warranty.";
+
 export const LegalNotices = ({ version }: LegalNoticesProps) => {
-	const links = [
-		{ label: "License", url: fileUrl("LICENSE", version) },
-		{ label: "Additional terms", url: fileUrl("NOTICE", version) },
-		{ label: "Source code", url: sourceUrl(version) },
-		{ label: "Third-party notices", url: fileUrl("THIRD_PARTY_NOTICES.md", version) },
-		// The policy can change after a release, so this always opens the current one.
-		{ label: "Privacy policy", url: fileUrl("docs/privacy.md") },
-	];
+	const links = legalLinks(version);
 
 	return (
 		<div className="space-y-2 text-xs text-muted-foreground">
-			<p className="text-sm text-foreground">Created by Max Boksem</p>
-			<p>Copyright © 2026 Max Boksem</p>
-			<p>
-				Cinette, formerly Max Video Player, is free software. You can share and change it
-				under the GNU General Public License version 3, with additional terms. It comes with
-				no warranty.
-			</p>
+			<p className="text-sm text-foreground">{LEGAL_CREDIT}</p>
+			<p>{LEGAL_COPYRIGHT}</p>
+			<p>{LEGAL_LICENSE}</p>
 			<div className="flex flex-wrap gap-x-3 gap-y-1">
 				{links.map(({ label, url }) => (
 					<button

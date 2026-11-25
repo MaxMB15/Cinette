@@ -129,12 +129,13 @@ export const useRemoteBlocked = (): BlockedDevice[] =>
 
 /**
  * Makes the player's destination the one remote commands act on, and while
- * a controller is connected, sends it every state the player reports.
+ * a controller is connected, sends it every state the player reports. Says
+ * whether one is.
  */
 export const usePublishRemoteState = (
 	player: PlaybackDestination,
 	channel: Channel | null
-): void => {
+): boolean => {
 	const connected = useRemoteSessions().some((s) => s.connected);
 	const channelRef = useLatestRef(channel);
 
@@ -167,6 +168,8 @@ export const usePublishRemoteState = (
 		const unsubscribe = player.subscribe(send);
 		return unsubscribe;
 	}, [connected, player, channelRef]);
+
+	return connected;
 };
 
 /** A device asking to control this one, as `remote://consent` brings it. */

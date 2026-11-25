@@ -4,13 +4,13 @@
 //! Thread-safe MPV plugin state.
 //! Owns MpvEngine + the platform renderer, coordinates load/fallback.
 
-pub use crate::engine::{MediaInfo, PlayerState};
+pub use crate::engine::{ListedTrack, MediaInfo, PlayerState};
 use crate::engine::MpvEngine;
 use crate::idle_inhibit::IdleInhibitor;
 use crate::lock::lock_or_recover;
 use crate::renderer::PlatformRenderer;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
     Arc, Mutex,
 };
 
@@ -75,6 +75,10 @@ pub struct MpvState {
     /// Settings toggle on every `load()`; mpv is recreated per load, so a
     /// change applies to the next stream.
     hwdec_enabled: AtomicBool,
+    /// How many MiB of the stream behind the position the next mpv instance
+    /// keeps, so a live stream can go back, or 0 for the platform's own.
+    /// Only Android reads it. Set on every `load()`.
+    back_buffer_mib: AtomicU32,
     idle_inhibitor: IdleInhibitor,
     /// Kill flag for the in-flight reconnect monitor thread, if any.
     ///
@@ -115,6 +119,7 @@ impl MpvState {
             bounds: Mutex::new(None),
             fallback_active: AtomicBool::new(false),
             hwdec_enabled: AtomicBool::new(true),
+            back_buffer_mib: AtomicU32::new(0),
             idle_inhibitor: IdleInhibitor::new(),
             reconnect_kill: Mutex::new(None),
             transition: Mutex::new(()),
@@ -138,16 +143,21 @@ impl MpvState {
 
     /// Plays `url` in a new mpv instance. `keep_subtitles` is true when it
     /// plays the same item as before, and the new instance then starts with
-    /// the subtitles the last one had.
+    /// the subtitles the last one had. `back_buffer_mib` is how much of the
+    /// stream behind the position it keeps, where the platform's own is
+    /// `None`.
     pub fn load<R: tauri::Runtime>(
         &self,
         url: &str,
         start_pos: Option<f64>,
         hwdec: bool,
         keep_subtitles: bool,
+        back_buffer_mib: Option<u32>,
         app: &tauri::AppHandle<R>,
     ) -> Result<(), String> {
-        self.load_with(hwdec, keep_subtitles, || self.load_impl(url, start_pos, app))
+        self.load_with(hwdec, keep_subtitles, back_buffer_mib, || {
+            self.load_impl(url, start_pos, app)
+        })
     }
 
     /// The body of `load()`, with the platform setup passed in as `start`.
@@ -157,6 +167,7 @@ impl MpvState {
         &self,
         hwdec: bool,
         keep_subtitles: bool,
+        back_buffer_mib: Option<u32>,
         start: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), String> {
         let _transition = lock_or_recover(&self.transition);
@@ -175,6 +186,8 @@ impl MpvState {
         self.idle_inhibitor.uninhibit();
         self.fallback_active.store(false, Ordering::Release);
         self.hwdec_enabled.store(hwdec, Ordering::Release);
+        self.back_buffer_mib
+            .store(back_buffer_mib.unwrap_or(0), Ordering::Release);
         if !keep_subtitles {
             *lock_or_recover(&self.subtitles) = KeptSubtitles::default();
         }
@@ -435,8 +448,13 @@ impl MpvState {
         }
 
         let wid = surface_renderer.wid();
+        let back_buffer = back_buffer_option(self.back_buffer_mib.load(Ordering::Acquire));
         let mut options = vec![("wid", wid.as_str())];
         options.extend(self.options(android_embedded_options()));
+        // After the platform's own, which it then takes the place of.
+        if let Some(back_buffer) = back_buffer.as_deref() {
+            options.push(("demuxer-max-back-bytes", back_buffer));
+        }
 
         let attach_result = {
             let mut engine = lock_or_recover(&self.inner);
@@ -707,6 +725,18 @@ impl MpvState {
         lock_or_recover(&self.inner).media_info()
     }
 
+    pub fn tracks(&self) -> Vec<ListedTrack> {
+        lock_or_recover(&self.inner).tracks()
+    }
+
+    pub fn set_audio(&self, id: i64) -> Result<(), String> {
+        lock_or_recover(&self.inner).set_audio(id)
+    }
+
+    pub fn set_speed(&self, speed: f64) -> Result<(), String> {
+        lock_or_recover(&self.inner).set_speed(speed)
+    }
+
     /// The URL loaded now and what mpv says about it, read together so they
     /// belong to the same item. `None` when nothing is loaded.
     pub fn playing(&self) -> Option<(String, MediaInfo)> {
@@ -742,12 +772,26 @@ fn with_hwdec(
     options
 }
 
+/// mpv's `demuxer-max-back-bytes` for `mib` MiB. `None` for 0, which keeps
+/// the platform's own.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn back_buffer_option(mib: u32) -> Option<String> {
+    (mib > 0).then(|| format!("{mib}MiB"))
+}
+
 #[cfg(test)]
 mod state_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::with_hwdec;
+    use super::{back_buffer_option, with_hwdec};
+
+    #[test]
+    fn a_back_buffer_is_in_mib_and_none_keeps_the_platforms() {
+        assert_eq!(back_buffer_option(150).as_deref(), Some("150MiB"));
+        assert_eq!(back_buffer_option(1).as_deref(), Some("1MiB"));
+        assert_eq!(back_buffer_option(0), None);
+    }
 
     const OPTIONS: [(&str, &str); 3] =
         [("vo", "libmpv"), ("hwdec", "videotoolbox"), ("cache", "yes")];

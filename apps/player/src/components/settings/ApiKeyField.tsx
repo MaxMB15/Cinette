@@ -42,7 +42,7 @@ const StatusLine = ({
 );
 
 /** The outcome of the last save or check, or nothing when there's none to show. */
-const KeyStatus = ({ field, validNote }: { field: ApiKeyState; validNote?: string }) => {
+export const KeyStatus = ({ field, validNote }: { field: ApiKeyState; validNote?: string }) => {
 	if (field.saveStatus === "error") {
 		return (
 			<StatusLine tone="error" icon={CircleX}>

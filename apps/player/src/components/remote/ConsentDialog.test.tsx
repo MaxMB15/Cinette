@@ -14,12 +14,19 @@ vi.mock("@tauri-apps/api/event", () => ({
 	}),
 }));
 
+const os = vi.hoisted(() => ({ platform: "macos" }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/platform")>()),
+	getPlatform: () => os.platform,
+}));
+
 vi.mock("@/lib/tauri", () => ({
 	remoteAnswerConsent: vi.fn(() => Promise.resolve()),
 	remotePendingConsent: vi.fn(() => Promise.resolve(null)),
 }));
 
 import { remoteAnswerConsent, remotePendingConsent } from "@/lib/tauri";
+import { FOCUSABLE } from "@/hooks/useFocusTrap";
 import { ARM_MS, ConsentDialog } from "./ConsentDialog";
 
 const ask = (request = 3, expiresInMs = 30_000, asked?: object) =>
@@ -71,6 +78,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.useRealTimers();
+	os.platform = "macos";
 });
 
 describe("ConsentDialog", () => {
@@ -96,6 +104,38 @@ describe("ConsentDialog", () => {
 			"aria-disabled",
 			"true"
 		);
+	});
+
+	it("answers nothing when a stray OK lands right as it opens", async () => {
+		await shown();
+		ask();
+
+		const focused = screen.getByRole("heading", { name: QUESTION });
+		expect(focused).toHaveFocus();
+		fireEvent.keyDown(focused, { key: "Enter" });
+		fireEvent.keyUp(focused, { key: "Enter" });
+		fireEvent.click(focused);
+
+		expect(remoteAnswerConsent).not.toHaveBeenCalled();
+		expect(screen.getByRole("heading", { name: QUESTION })).toBeInTheDocument();
+	});
+
+	it("starts on Allow on a TV, which a center press uses once it has waited", async () => {
+		os.platform = "tv";
+		await shownOnFakeTime();
+		ask(7);
+		const allow = screen.getByRole("button", { name: "Allow" });
+		expect(allow, "the remote's cursor is on a button it can press").toHaveFocus();
+		expect(
+			[...screen.getByRole("dialog").querySelectorAll(FOCUSABLE)],
+			"the remote moves only between the two answers"
+		).toEqual([screen.getByRole("button", { name: "Deny" }), allow]);
+		// A center press is a click with no pointer press and no click count.
+		fireEvent.click(allow);
+		expect(remoteAnswerConsent, "a stray OK right as it opens").not.toHaveBeenCalled();
+		armed();
+		fireEvent.click(allow);
+		expect(remoteAnswerConsent).toHaveBeenCalledWith(7, "allow");
 	});
 
 	it("asks about a transfer from a device in control, with the same code", async () => {

@@ -439,6 +439,18 @@
           "markdownDescription": "Denies the mpv_get_state command without any pre-configured scope."
         },
         {
+          "description": "Enables the mpv_get_tracks command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mpv-get-tracks",
+          "markdownDescription": "Enables the mpv_get_tracks command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mpv_get_tracks command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mpv-get-tracks",
+          "markdownDescription": "Denies the mpv_get_tracks command without any pre-configured scope."
+        },
+        {
           "description": "Enables the mpv_load command without any pre-configured scope.",
           "type": "string",
           "const": "allow-mpv-load",
@@ -487,6 +499,18 @@
           "markdownDescription": "Denies the mpv_seek command without any pre-configured scope."
         },
         {
+          "description": "Enables the mpv_set_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mpv-set-audio",
+          "markdownDescription": "Enables the mpv_set_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mpv_set_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mpv-set-audio",
+          "markdownDescription": "Denies the mpv_set_audio command without any pre-configured scope."
+        },
+        {
           "description": "Enables the mpv_set_bounds command without any pre-configured scope.",
           "type": "string",
           "const": "allow-mpv-set-bounds",
@@ -521,6 +545,18 @@
           "type": "string",
           "const": "deny-mpv-set-skip-intervals",
           "markdownDescription": "Denies the mpv_set_skip_intervals command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mpv_set_speed command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mpv-set-speed",
+          "markdownDescription": "Enables the mpv_set_speed command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mpv_set_speed command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mpv-set-speed",
+          "markdownDescription": "Denies the mpv_set_speed command without any pre-configured scope."
         },
         {
           "description": "Enables the mpv_set_sub_delay command without any pre-configured scope.",
@@ -595,10 +631,10 @@
           "markdownDescription": "Denies the mpv_sub_remove command without any pre-configured scope."
         },
         {
-          "description": "Allows all MPV player and AirPlay commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`\n- `allow-airplay-set-detection`\n- `allow-airplay-choose`\n- `allow-airplay-get-route`\n- `allow-airplay-play`\n- `allow-airplay-pause`\n- `allow-airplay-seek`\n- `allow-airplay-select-subtitle`\n- `allow-airplay-select-audio`\n- `allow-airplay-stop`\n- `allow-airplay-get-state`",
+          "description": "Allows all MPV player and AirPlay commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`\n- `allow-mpv-get-tracks`\n- `allow-mpv-set-audio`\n- `allow-mpv-set-speed`\n- `allow-airplay-set-detection`\n- `allow-airplay-choose`\n- `allow-airplay-get-route`\n- `allow-airplay-play`\n- `allow-airplay-pause`\n- `allow-airplay-seek`\n- `allow-airplay-select-subtitle`\n- `allow-airplay-select-audio`\n- `allow-airplay-stop`\n- `allow-airplay-get-state`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Allows all MPV player and AirPlay commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`\n- `allow-airplay-set-detection`\n- `allow-airplay-choose`\n- `allow-airplay-get-route`\n- `allow-airplay-play`\n- `allow-airplay-pause`\n- `allow-airplay-seek`\n- `allow-airplay-select-subtitle`\n- `allow-airplay-select-audio`\n- `allow-airplay-stop`\n- `allow-airplay-get-state`"
+          "markdownDescription": "Allows all MPV player and AirPlay commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`\n- `allow-mpv-get-tracks`\n- `allow-mpv-set-audio`\n- `allow-mpv-set-speed`\n- `allow-airplay-set-detection`\n- `allow-airplay-choose`\n- `allow-airplay-get-route`\n- `allow-airplay-play`\n- `allow-airplay-pause`\n- `allow-airplay-seek`\n- `allow-airplay-select-subtitle`\n- `allow-airplay-select-audio`\n- `allow-airplay-stop`\n- `allow-airplay-get-state`"
         }
       ]
     }

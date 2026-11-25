@@ -18,17 +18,31 @@ export interface SkipRun {
 	total: number;
 }
 
+/** How far a skip can go, in seconds of the stream's position. */
+export interface SkipBounds {
+	start: number;
+	end: number;
+}
+
+/**
+ * A movie or episode's bounds: from the start to a second before the end, or
+ * with no end when the duration is unknown.
+ */
+export const videoBounds = (duration: number): SkipBounds => ({
+	start: 0,
+	end: duration > 0 ? duration - 1 : Infinity,
+});
+
 /**
  * Works out where a skip lands. The position is only polled once a second and
  * lags behind a seek, so a skip soon after another one in the same direction
- * starts from where that one was going. A skip stops at the start, or a second
- * before the end when the duration is known, and the run's total counts only
- * the distance it really moved.
+ * starts from where that one was going. A skip stops at the bounds, and the
+ * run's total counts only the distance it really moved.
  */
 export const nextSkip = (
 	last: SkipRun | null,
 	position: number,
-	duration: number,
+	bounds: SkipBounds,
 	seconds: number,
 	now: number
 ): SkipRun => {
@@ -36,10 +50,12 @@ export const nextSkip = (
 	const run = last && now - last.at < SKIP_RUN_MS && last.direction === direction ? last : null;
 	const origin = run ? run.origin : position;
 	const from = run ? run.target : position;
-	const end = duration > 0 ? duration - 1 : Infinity;
-	// Clamping only ever shortens a skip. It never turns a forward skip from
-	// past the end into a step back.
+	// Clamping only ever shortens a skip. It never turns a skip from past
+	// the bounds into a step the other way.
 	const target =
-		seconds < 0 ? Math.max(0, from + seconds) : Math.max(from, Math.min(from + seconds, end));
+		// Stryker disable next-line EqualityOperator: a skip of 0 seconds stays where it is either way.
+		seconds < 0
+			? Math.min(from, Math.max(bounds.start, from + seconds))
+			: Math.max(from, Math.min(from + seconds, bounds.end));
 	return { direction, origin, target, at: now, total: Math.round(target - origin) };
 };

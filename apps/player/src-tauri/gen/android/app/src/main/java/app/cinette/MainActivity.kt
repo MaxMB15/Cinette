@@ -39,6 +39,10 @@ class MainActivity : TauriActivity() {
    * closes the app when there's none.
    */
   override fun onWebViewCreate(webView: WebView) {
+    // Android tints a focused view when the last input wasn't touch. On a TV
+    // that would lay a film over the page and the video under it, and the page
+    // draws its own focus.
+    webView.defaultFocusHighlightEnabled = false
     val callback = object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
         webView.evaluateJavascript("window.__cinetteBack ? window.__cinetteBack() : null") { answer ->

@@ -42,6 +42,14 @@ impl std::fmt::Debug for Provider {
     }
 }
 
+/// How many live channels, movies and shows a provider has.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ContentCounts {
+    pub live: usize,
+    pub movies: usize,
+    pub series: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderType {

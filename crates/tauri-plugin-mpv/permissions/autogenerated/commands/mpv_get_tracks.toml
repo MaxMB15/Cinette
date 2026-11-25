@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-mpv-get-tracks"
+description = "Enables the mpv_get_tracks command without any pre-configured scope."
+commands.allow = ["mpv_get_tracks"]
+
+[[permission]]
+identifier = "deny-mpv-get-tracks"
+description = "Denies the mpv_get_tracks command without any pre-configured scope."
+commands.deny = ["mpv_get_tracks"]

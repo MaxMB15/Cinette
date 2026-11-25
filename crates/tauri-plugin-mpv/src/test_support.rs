@@ -586,7 +586,7 @@ fn load_headless_as(
     renderer: Result<Box<dyn PlatformRenderer>, String>,
 ) -> Result<(), String> {
     let renderer = renderer.map(|r| (r, headless_options().to_vec()));
-    state.load_with(true, keep_subtitles, || {
+    state.load_with(true, keep_subtitles, None, || {
         state.load_embedded(url, start_pos, app, renderer, || {
             headless_options().to_vec()
         })

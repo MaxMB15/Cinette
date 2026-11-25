@@ -50,6 +50,9 @@ fn playback_commands_fail_with_nothing_loaded() {
     );
     assert_eq!(block_on(mpv_sub_remove(h(), s(), -1, None)), failed);
     assert_eq!(block_on(mpv_set_sub_delay(0.5, s())), failed);
+    assert_eq!(block_on(mpv_set_audio(s(), 1)), failed);
+    assert_eq!(block_on(mpv_set_speed(s(), 1.5)), failed);
+    assert_eq!(block_on(mpv_get_tracks(s())), Ok(vec![]));
     // Stopping nothing is fine, so the frontend can always call it.
     assert_eq!(block_on(mpv_stop(h(), s())), Ok(()));
 }
@@ -108,6 +111,11 @@ mod with_a_stream {
         assert_eq!(get_state(&app).volume, 30.0);
         block_on(mpv_play(h(), s())).unwrap();
         assert!(get_state(&app).is_playing);
+        let tracks = block_on(mpv_get_tracks(s())).unwrap();
+        assert_eq!(tracks.len(), 1);
+        assert!(tracks[0].selected && tracks[0].kind == "audio");
+        block_on(mpv_set_audio(s(), tracks[0].id)).unwrap();
+        block_on(mpv_set_speed(s(), 2.0)).unwrap();
 
         block_on(mpv_sub_add(h(), s(), subtitles, true, path.clone())).unwrap();
         block_on(mpv_set_sub_delay(-0.5, s())).unwrap();

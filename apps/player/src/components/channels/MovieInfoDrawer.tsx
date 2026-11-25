@@ -8,6 +8,7 @@ import type { Channel, OmdbData, WhatsonData } from "@/lib/types";
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { downloadIconState } from "@/lib/download-status";
+import { mediaFacts } from "@/lib/media-facts";
 import { RatingsRow } from "@/components/ui/ratings-row";
 import { useDownloads } from "@/hooks/useDownloads";
 import { useSheetDetails } from "@/hooks/useMediaDetails";
@@ -78,24 +79,16 @@ export const MovieInfoDrawer = ({
 	};
 
 	// Derived display values
-	const posterSrc =
-		whatsonData?.image ??
-		(omdbData?.posterUrl && omdbData.posterUrl !== "N/A"
-			? omdbData.posterUrl
-			: (movie.logoUrl ?? null));
-
-	const year = omdbData?.year && omdbData.year !== "N/A" ? omdbData.year : null;
-	const rated =
-		whatsonData?.certification ??
-		(omdbData?.rated && omdbData.rated !== "N/A" ? omdbData.rated : null);
-	const genre = omdbData?.genre && omdbData.genre !== "N/A" ? omdbData.genre : null;
-	const runtime = omdbData?.runtime && omdbData.runtime !== "N/A" ? omdbData.runtime : null;
-	const director = omdbData?.director && omdbData.director !== "N/A" ? omdbData.director : null;
-	const actors = omdbData?.actors && omdbData.actors !== "N/A" ? omdbData.actors : null;
-	const plot =
-		(omdbData?.plot && omdbData.plot !== "N/A" ? omdbData.plot : null) ??
-		whatsonData?.tagline ??
-		null;
+	const {
+		poster: posterSrc,
+		year,
+		rated,
+		genre,
+		runtime,
+		director,
+		actors,
+		plot,
+	} = mediaFacts(omdbData, whatsonData, movie.logoUrl);
 
 	const truncatedActors = actors && actors.length > 60 ? actors.slice(0, 57) + "..." : actors;
 

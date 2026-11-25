@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SubtitleOverlay } from "./SubtitleOverlay";
+import { installPointerEvent } from "@/test/pointer-event";
 import type { SubtitleCue } from "@/lib/types";
 
 const cues: SubtitleCue[] = [
@@ -29,6 +30,7 @@ const overlayOf = (text: string) =>
 	screen.getByText(text).closest("div")!.parentElement as HTMLElement;
 
 describe("SubtitleOverlay", () => {
+	installPointerEvent();
 	afterEach(cleanup);
 
 	it("shows nothing between cues", () => {
@@ -105,7 +107,7 @@ describe("SubtitleOverlay", () => {
 			/>
 		);
 		const text = screen.getByText("Where are you going?").closest("div") as HTMLElement;
-		expect(text.style.fontSize).toBe("24px");
+		expect(text.style.fontSize).toBe("1.5rem");
 		expect(text.style.fontFamily).toBe("Georgia, serif");
 		const box = overlayOf("Where are you going?");
 		expect(box.style.left).toBe("30%");
@@ -120,7 +122,19 @@ describe("SubtitleOverlay", () => {
 		expect(box.style.left).toBe("50%");
 		expect(box.style.top).toBe("88%");
 		const text = screen.getByText("Where are you going?").closest("div") as HTMLElement;
-		expect(text.style.fontSize).toBe("18px");
+		expect(text.style.fontSize).toBe("1.125rem");
+	});
+
+	it("keeps a line whole wherever it's placed, instead of wrapping at half the player", () => {
+		render(<SubtitleOverlay cues={cues} position={11} positionAt={0} />);
+		expect(overlayOf("Where are you going?").style.width).toBe("max-content");
+	});
+
+	it("pads the text in units that grow with the screen", () => {
+		render(<SubtitleOverlay cues={cues} position={11} positionAt={0} />);
+		expect(screen.getByText("Where are you going?").closest("div")!.style.padding).toBe(
+			"0.375rem 1rem"
+		);
 	});
 
 	it("shows a faded sample to position when no cue is on screen", () => {
@@ -143,12 +157,12 @@ describe("SubtitleOverlay", () => {
 		renderInPlayer({ cues, position: 11, positionAt: 0, editMode: true, onPositionChange });
 		const box = overlayOf("Where are you going?");
 
-		fireEvent.mouseDown(box, { clientX: 500, clientY: 400 });
-		fireEvent.mouseMove(document, { clientX: 600, clientY: 350 });
+		fireEvent.pointerDown(box, { clientX: 500, clientY: 400 });
+		fireEvent.pointerMove(document, { clientX: 600, clientY: 350 });
 		expect(onPositionChange).toHaveBeenLastCalledWith(60, 78);
 
-		fireEvent.mouseUp(document);
-		fireEvent.mouseMove(document, { clientX: 700, clientY: 300 });
+		fireEvent.pointerUp(document);
+		fireEvent.pointerMove(document, { clientX: 700, clientY: 300 });
 		expect(onPositionChange).toHaveBeenCalledTimes(1);
 	});
 
@@ -157,20 +171,69 @@ describe("SubtitleOverlay", () => {
 		renderInPlayer({ cues, position: 11, positionAt: 0, editMode: true, onPositionChange });
 		const box = overlayOf("Where are you going?");
 
-		fireEvent.mouseDown(box, { clientX: 500, clientY: 400 });
-		fireEvent.mouseMove(document, { clientX: 5000, clientY: 5000 });
+		fireEvent.pointerDown(box, { clientX: 500, clientY: 400 });
+		fireEvent.pointerMove(document, { clientX: 5000, clientY: 5000 });
 		expect(onPositionChange).toHaveBeenLastCalledWith(95, 97);
-		fireEvent.mouseMove(document, { clientX: -5000, clientY: -5000 });
+		fireEvent.pointerMove(document, { clientX: -5000, clientY: -5000 });
 		expect(onPositionChange).toHaveBeenLastCalledWith(5, 3);
-		fireEvent.mouseUp(document);
+		fireEvent.pointerUp(document);
 	});
 
 	it("can't be dragged outside positioning mode", () => {
 		const onPositionChange = vi.fn();
 		renderInPlayer({ cues, position: 11, positionAt: 0, onPositionChange });
-		fireEvent.mouseDown(overlayOf("Where are you going?"), { clientX: 500, clientY: 400 });
-		fireEvent.mouseMove(document, { clientX: 600, clientY: 350 });
-		fireEvent.mouseUp(document);
+		fireEvent.pointerDown(overlayOf("Where are you going?"), { clientX: 500, clientY: 400 });
+		fireEvent.pointerMove(document, { clientX: 600, clientY: 350 });
+		fireEvent.pointerUp(document);
 		expect(onPositionChange).not.toHaveBeenCalled();
+	});
+
+	it("follows a finger in positioning mode until the touch ends", () => {
+		const onPositionChange = vi.fn();
+		renderInPlayer({ cues, position: 11, positionAt: 0, editMode: true, onPositionChange });
+		const box = overlayOf("Where are you going?");
+		const touch = { pointerType: "touch" };
+
+		fireEvent.pointerDown(box, { ...touch, clientX: 500, clientY: 400 });
+		fireEvent.pointerMove(document, { ...touch, clientX: 400, clientY: 300 });
+		expect(onPositionChange).toHaveBeenLastCalledWith(40, 68);
+
+		fireEvent.pointerCancel(document, touch);
+		fireEvent.pointerMove(document, { ...touch, clientX: 700, clientY: 300 });
+		expect(onPositionChange).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the press to itself, so the picker doesn't take it for a click outside", () => {
+		renderInPlayer({
+			cues,
+			position: 11,
+			positionAt: 0,
+			editMode: true,
+			onPositionChange: vi.fn(),
+		});
+		const box = overlayOf("Where are you going?");
+		// fireEvent returns false when the event was cancelled, which stops
+		// the mousedown that would follow.
+		expect(fireEvent.pointerDown(box, { clientX: 500, clientY: 400 })).toBe(false);
+		expect(box.style.touchAction).toBe("none");
+		fireEvent.pointerUp(document);
+	});
+
+	it("stops listening once the drag ends", () => {
+		renderInPlayer({
+			cues,
+			position: 11,
+			positionAt: 0,
+			editMode: true,
+			onPositionChange: vi.fn(),
+		});
+		const added = vi.spyOn(document, "addEventListener");
+		const removed = vi.spyOn(document, "removeEventListener");
+		fireEvent.pointerDown(overlayOf("Where are you going?"), { clientX: 500, clientY: 400 });
+		fireEvent.pointerUp(document);
+		expect(added).toHaveBeenCalledTimes(3);
+		expect(removed.mock.calls).toEqual(added.mock.calls);
+		added.mockRestore();
+		removed.mockRestore();
 	});
 });

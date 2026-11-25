@@ -398,6 +398,17 @@ describe("usePublishRemoteState", () => {
 		expect(remoteSetState).not.toHaveBeenCalled();
 	});
 
+	it("says whether a controller is connected", async () => {
+		const { destination } = fakeDestination();
+		const view = renderHook(() => usePublishRemoteState(destination, channel));
+		expect(view.result.current).toBe(false);
+		await waitFor(() => expect(handlers.has("remote://sessions")).toBe(true));
+		emit("remote://sessions", [session(false)]);
+		expect(view.result.current).toBe(false);
+		emit("remote://sessions", [session(true)]);
+		expect(view.result.current).toBe(true);
+	});
+
 	it("sends the state at once and on every change while connected", async () => {
 		vi.spyOn(performance, "now").mockReturnValue(0);
 		const { destination, push, listeners } = fakeDestination();

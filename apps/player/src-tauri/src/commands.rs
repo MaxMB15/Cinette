@@ -19,7 +19,7 @@ use mvp_core::iptv::skip_segments::{
 use mvp_core::iptv::whatson::WhatsonData;
 use mvp_core::iptv::xtream::{fetch_xtream_channels, fetch_xtream_series_episodes, get_xtream_epg_url};
 use mvp_core::models::channel::Channel;
-use mvp_core::models::playlist::{Provider, ProviderType};
+use mvp_core::models::playlist::{ContentCounts, Provider, ProviderType};
 use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{command, AppHandle, Manager, Runtime, State};
@@ -213,6 +213,16 @@ pub async fn get_providers(state: State<'_, AppState>) -> Result<Vec<Provider>, 
     let providers = cache.get_providers().map_err(|e| e.to_string())?;
     tracing::debug!("[IPTV] get_providers -> {} providers", providers.len());
     Ok(providers)
+}
+
+/// How many live channels, movies and shows a provider has.
+#[command]
+pub async fn get_content_counts(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<ContentCounts, String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache.content_counts(&provider_id).map_err(|e| e.to_string())
 }
 
 #[command]

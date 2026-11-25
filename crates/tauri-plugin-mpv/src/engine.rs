@@ -34,12 +34,72 @@ pub struct MediaInfo {
 }
 
 /// One of the item's tracks, as mpv's `track-list` lists it.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ListedTrack {
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListedTrack {
+    /// The id `aid`, `sid` or `vid` takes. Each kind counts from 1.
+    pub id: i64,
     /// `video`, `audio` or `sub`.
     pub kind: String,
     pub codec: Option<String>,
     pub default: bool,
+    /// mpv plays this one.
+    pub selected: bool,
+    /// The language the file gives, such as `en` or `eng`.
+    pub language: Option<String>,
+    pub title: Option<String>,
+    /// How many audio channels, as the file gives them.
+    pub channels: Option<i64>,
+}
+
+/// A text property, or `None` when mpv has none or it's empty.
+fn text(mpv: &Mpv, name: &str) -> Option<String> {
+    mpv.get_property::<String>(name)
+        .ok()
+        .filter(|v| !v.is_empty())
+}
+
+/// The item's tracks, from mpv's `track-list`.
+fn listed_tracks(mpv: &Mpv) -> Vec<ListedTrack> {
+    let number = |name: &str| mpv.get_property::<i64>(name).ok();
+    let flag = |name: &str| mpv.get_property::<bool>(name).unwrap_or(false);
+    (0..number("track-list/count").unwrap_or(0))
+        .map(|i| {
+            let field = |name: &str| format!("track-list/{i}/{name}");
+            ListedTrack {
+                id: number(&field("id")).unwrap_or(0),
+                kind: text(mpv, &field("type")).unwrap_or_default(),
+                codec: text(mpv, &field("codec")),
+                default: flag(&field("default")),
+                selected: flag(&field("selected")),
+                language: text(mpv, &field("lang")),
+                title: text(mpv, &field("title")),
+                channels: number(&field("demux-channel-count")),
+            }
+        })
+        .collect()
+}
+
+/// The seekable stretch of mpv's `demuxer-cache-state` that holds `position`,
+/// as `[start, end]`. mpv gives the state as JSON, in the same seconds as
+/// `time-pos`.
+fn buffered_range(cache_state: &str, position: f64) -> Option<[f64; 2]> {
+    #[derive(Deserialize)]
+    struct Range {
+        start: f64,
+        end: f64,
+    }
+    #[derive(Deserialize)]
+    struct CacheState {
+        #[serde(rename = "seekable-ranges", default)]
+        seekable_ranges: Vec<Range>,
+    }
+    let state: CacheState = serde_json::from_str(cache_state).ok()?;
+    state
+        .seekable_ranges
+        .into_iter()
+        .find(|r| r.start <= position && position <= r.end)
+        .map(|r| [r.start, r.end])
 }
 
 /// The codec of the audio track a receiver plays from `tracks`: the one
@@ -88,6 +148,10 @@ pub struct PlayerState {
     /// mpv plays in a window of its own, which the frontend can't draw over.
     /// `MpvState` sets it, since the engine doesn't know which window it has.
     pub fallback_active: bool,
+    /// The stretch around `position` mpv holds and can seek in without asking
+    /// the server again, as `[start, end]` in seconds. A live stream can go
+    /// back this far. `None` while mpv holds none.
+    pub buffered: Option<[f64; 2]>,
 }
 
 /// Written out by hand so a logged state shows only the stream's origin,
@@ -109,6 +173,7 @@ impl fmt::Debug for PlayerState {
             .field("reached_end", &self.reached_end)
             .field("waiting", &self.waiting)
             .field("fallback_active", &self.fallback_active)
+            .field("buffered", &self.buffered)
             .finish()
     }
 }
@@ -552,34 +617,42 @@ impl MpvEngine {
             .map_err(|e| e.to_string())
     }
 
+    /// Plays audio track `id`, one of the ids `tracks` lists.
+    pub fn set_audio(&self, id: i64) -> Result<(), String> {
+        self.mpv
+            .as_ref()
+            .ok_or_else(|| "no mpv instance".to_string())?
+            .set_property("aid", id)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Plays `speed` times as fast. A new instance starts at normal speed.
+    pub fn set_speed(&self, speed: f64) -> Result<(), String> {
+        self.mpv
+            .as_ref()
+            .ok_or_else(|| "no mpv instance".to_string())?
+            .set_property("speed", speed)
+            .map_err(|e| e.to_string())
+    }
+
+    /// The current item's tracks. Empty with no item or no instance.
+    pub fn tracks(&self) -> Vec<ListedTrack> {
+        self.mpv.as_ref().map(listed_tracks).unwrap_or_default()
+    }
+
     /// What the current item holds. Empty with no item or no instance.
     pub fn media_info(&self) -> MediaInfo {
         let Some(ref mpv) = self.mpv else {
             return MediaInfo::default();
         };
-        let text = |k: &str| {
-            mpv.get_property::<String>(k)
-                .ok()
-                .filter(|v| !v.is_empty())
-        };
-        let count = mpv.get_property::<i64>("track-list/count").unwrap_or(0);
-        let tracks: Vec<ListedTrack> = (0..count)
-            .map(|i| ListedTrack {
-                kind: text(&format!("track-list/{i}/type")).unwrap_or_default(),
-                codec: text(&format!("track-list/{i}/codec")),
-                default: mpv
-                    .get_property::<bool>(&format!("track-list/{i}/default"))
-                    .unwrap_or(false),
-            })
-            .collect();
         MediaInfo {
-            file_format: text("file-format"),
-            video_codec: text("current-tracks/video/codec"),
-            audio_codec: receiver_audio(&tracks),
+            file_format: text(mpv, "file-format"),
+            video_codec: text(mpv, "current-tracks/video/codec"),
+            audio_codec: receiver_audio(&listed_tracks(mpv)),
             interlaced: mpv
                 .get_property::<bool>("video-frame-info/interlaced")
                 .unwrap_or(false),
-            hdr: text("video-params/gamma").is_some_and(|g| hdr_gamma(&g)),
+            hdr: text(mpv, "video-params/gamma").is_some_and(|g| hdr_gamma(&g)),
         }
     }
 
@@ -597,6 +670,8 @@ impl MpvEngine {
             state.is_playing = !state.is_paused && state.current_url.is_some();
             state.waiting =
                 state.is_playing && mpv.get_property::<bool>("core-idle").unwrap_or(false);
+            state.buffered = text(mpv, "demuxer-cache-state")
+                .and_then(|cache| buffered_range(&cache, state.position));
             if state.current_url.is_some() {
                 // Once playback has started the properties aren't read again.
                 let started = self.playback_started;
@@ -748,8 +823,8 @@ mod playback_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        can_skip, libmpv_in_maps, open_status, receiver_audio, subtitle_uri, ListedTrack,
-        PlayerState,
+        buffered_range, can_skip, libmpv_in_maps, open_status, receiver_audio, subtitle_uri,
+        ListedTrack, PlayerState,
     };
     use libmpv2::mpv_error;
 
@@ -764,11 +839,30 @@ mod tests {
         assert!(!logged.contains("USER") && !logged.contains("SECRET"), "{logged}");
     }
 
+    #[test]
+    fn the_buffered_range_is_the_one_that_holds_the_position() {
+        // Trimmed from what mpv gives for a live stream with a seek earlier on.
+        let cache = r#"{"cache-end":130.5,"eof":false,"seekable-ranges":[{"start":0,"end":5},{"start":10.5,"end":130.5}],"raw-input-rate":512000}"#;
+        assert_eq!(buffered_range(cache, 10.5), Some([10.5, 130.5]));
+        assert_eq!(buffered_range(cache, 130.5), Some([10.5, 130.5]));
+        assert_eq!(buffered_range(cache, 0.0), Some([0.0, 5.0]));
+        assert_eq!(buffered_range(cache, 7.0), None);
+        assert_eq!(buffered_range(cache, 131.0), None);
+    }
+
+    #[test]
+    fn no_buffered_range_without_seekable_ranges() {
+        assert_eq!(buffered_range(r#"{"cache-end":3,"eof":false}"#, 1.0), None);
+        assert_eq!(buffered_range(r#"{"seekable-ranges":[]}"#, 1.0), None);
+        assert_eq!(buffered_range("not json", 1.0), None);
+    }
+
     fn track(kind: &str, codec: &str, default: bool) -> ListedTrack {
         ListedTrack {
             kind: kind.into(),
             codec: Some(codec.into()),
             default,
+            ..ListedTrack::default()
         }
     }
 
@@ -791,8 +885,7 @@ mod tests {
         assert_eq!(receiver_audio(&[track("video", "h264", true)]), None);
         let unknown = ListedTrack {
             kind: "audio".into(),
-            codec: None,
-            default: false,
+            ..ListedTrack::default()
         };
         assert_eq!(
             receiver_audio(&[unknown, track("audio", "aac", false)]),

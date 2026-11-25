@@ -19,6 +19,7 @@ import { CategoryFilter } from "./CategoryFilter";
 import { ChannelCard, COMPACT_ROW_HEIGHT, ROW_CARD_LEFT_WIDTH } from "./ChannelCard";
 import { ChannelLogo } from "./ChannelLogo";
 import { useGroupHierarchy } from "@/hooks/useGroupHierarchy";
+import { useCatalog } from "@/hooks/useCatalog";
 import { useHistoryStaleOnLeave } from "@/hooks/useWatchHistory";
 import { RecentlyPlayedRow } from "./RecentlyPlayedRow";
 import { PinnedGroupsRow } from "./PinnedGroupsRow";
@@ -48,11 +49,11 @@ import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useNow } from "@/hooks/useNow";
 import { useGuidePrograms, type GuideChannels } from "@/hooks/useGuidePrograms";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { getXtreamSeriesEpisodes, getCachedSeriesEpisodes } from "@/lib/tauri";
+import { getCachedSeriesEpisodes } from "@/lib/tauri";
 import { guideSearchQuery } from "@/lib/queries";
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
-import { findEpisode, sortEpisodes } from "@/lib/episodes";
-import { categoriesByCount, channelCountFor, dedupeByTitle, seriesTitleOf } from "@/lib/channels";
+import { sortEpisodes } from "@/lib/episodes";
+import { categoriesByCount, channelCountFor, seriesTitleOf } from "@/lib/channels";
 import { recordingChannel } from "@/lib/recordings";
 import { formatCount } from "@/lib/format";
 import type {
@@ -64,9 +65,6 @@ import type {
 } from "@/lib/types";
 
 type Tab = "live" | "movie" | "series" | "favorites" | "downloads" | "history";
-
-/** Grouping key for series titles — tolerant of case and spacing differences. */
-const seriesKey = (title: string): string => title.trim().toLowerCase().replace(/\s+/g, " ");
 
 const ALL_TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
 	{ id: "live", label: "Live", icon: TvMinimal },
@@ -218,62 +216,7 @@ export const ChannelList = () => {
 		return () => clearTimeout(t);
 	}, [search]);
 
-	const byType = useMemo(() => {
-		const map: Record<"live" | "movie" | "series", Channel[]> = {
-			live: [],
-			movie: [],
-			series: [],
-		};
-		for (const ch of channels) {
-			const t = ch.contentType as "live" | "movie" | "series";
-			if (t in map) map[t].push(ch);
-			else map.live.push(ch);
-		}
-		return map;
-	}, [channels]);
-
-	const seriesShows = useMemo(() => {
-		const seen = new Map<string, Channel>();
-		for (const ch of byType.series) {
-			const title = seriesTitleOf(ch);
-			const key = seriesKey(title);
-			if (!seen.has(key)) seen.set(key, { ...ch, name: title, sources: [] });
-		}
-		return Array.from(seen.values());
-	}, [byType.series]);
-
-	// Xtream lists the same show as separate series entries (other categories,
-	// languages, servers). They're shown as one card, so keep every entry per
-	// title to load all their episodes — the duplicates become extra sources.
-	const xtreamSeriesByTitle = useMemo(() => {
-		const map = new Map<string, Channel[]>();
-		for (const ch of byType.series) {
-			if (!ch.url.startsWith("xtream://series/")) continue;
-			const key = seriesKey(seriesTitleOf(ch));
-			const list = map.get(key);
-			if (list) list.push(ch);
-			else map.set(key, [ch]);
-		}
-		return map;
-	}, [byType.series]);
-
-	/** Episodes of every Xtream series entry sharing this show's title. */
-	const fetchXtreamShowEpisodes = useCallback(
-		async (showName: string, container: Channel): Promise<Channel[]> => {
-			const containers = xtreamSeriesByTitle.get(seriesKey(showName)) ?? [container];
-			// The clicked entry first so its episodes stay the default source.
-			const ordered = [container, ...containers.filter((c) => c.id !== container.id)];
-			const results = await Promise.allSettled(
-				ordered.map((c) => getXtreamSeriesEpisodes(c.id))
-			);
-			const first = results[0];
-			if (first.status === "rejected") throw first.reason;
-			return results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
-		},
-		[xtreamSeriesByTitle]
-	);
-
-	const movieTitles = useMemo(() => dedupeByTitle(byType.movie), [byType.movie]);
+	const { byType, seriesShows, movieTitles, episodesOf, openHistoryEntry } = useCatalog(channels);
 
 	const activeChannels = useMemo(() => {
 		if (activeTab === "favorites") return channels.filter((ch) => ch.isFavorite);
@@ -404,16 +347,11 @@ export const ChannelList = () => {
 			const showName = seriesTitleOf(channel);
 			setSeriesLoading(true);
 			const open = async () => {
-				let eps: Channel[];
-				if (channel.url.startsWith("xtream://series/")) {
-					eps = await fetchXtreamShowEpisodes(showName, channel).catch((e) => {
-						if (!cacheFallback) throw e;
-						console.warn("[ChannelList] live episode fetch failed, using cache:", e);
-						return [];
-					});
-				} else {
-					eps = byType.series.filter((ep) => seriesTitleOf(ep) === showName);
-				}
+				let eps = await episodesOf(channel).catch((e) => {
+					if (!cacheFallback) throw e;
+					console.warn("[ChannelList] live episode fetch failed, using cache:", e);
+					return [];
+				});
 				if (cacheFallback && eps.length === 0) {
 					eps = await getCachedSeriesEpisodes(channel.id);
 				}
@@ -429,7 +367,7 @@ export const ChannelList = () => {
 				.catch((e) => console.error("[ChannelList] failed to load series episodes:", e))
 				.finally(() => setSeriesLoading(false));
 		},
-		[byType.series, fetchXtreamShowEpisodes]
+		[episodesOf]
 	);
 
 	// Shows open their episode list and movies with sources open their drawer.
@@ -470,60 +408,41 @@ export const ChannelList = () => {
 
 	const handleHistoryPlay = useCallback(
 		(entry: WatchHistoryEntry) => {
-			if (entry.contentType === "series") {
-				// The history names the show the same way the Recently Played row does.
-				const seriesName = entry.seriesTitle ?? seriesTitleOf({ name: entry.channelName });
-				// Find the series container to handle Xtream lazy-load
-				const seriesContainer = byType.series.find((s) => seriesTitleOf(s) === seriesName);
-				const seriesChannelId = seriesContainer?.id ?? entry.channelId;
-				// Play the watched episode directly; if it's no longer listed, fall
-				// back to the series picker.
-				const playOrPick = (eps: Channel[]) => {
-					const ep = findEpisode(eps, entry.channelId, entry.channelName);
-					if (ep) {
+			openHistoryEntry(entry, {
+				playEpisode: (ep, eps) =>
+					navigate("/player", {
+						state: {
+							url: ep.url,
+							channelName: ep.name,
+							channel: ep,
+							seriesEpisodes: sortEpisodes(eps),
+						},
+					}),
+				pickEpisode: (showTitle, episodes, seriesChannelId) =>
+					setSeriesModalData({ showTitle, episodes, seriesChannelId }),
+				showMovie: setSelectedMovie,
+				setLoading: setSeriesLoading,
+				onMissing: () => {},
+				playOther: (other) => {
+					if (other.contentType === "recording") {
+						// A recording plays from its file for as long as the app keeps it.
+						const rec = byChannel.get(other.channelId);
+						if (rec?.kind !== "recording" || rec.status !== "completed") return;
+						const ch = recordingChannel(rec);
 						navigate("/player", {
-							state: {
-								url: ep.url,
-								channelName: ep.name,
-								channel: ep,
-								seriesEpisodes: sortEpisodes(eps),
-							},
+							state: { url: ch.url, channelName: ch.name, channel: ch },
 						});
-					} else if (eps.length > 0) {
-						setSeriesModalData({
-							showTitle: seriesName,
-							episodes: eps,
-							seriesChannelId,
-						});
+						return;
 					}
-				};
-				if (seriesContainer && seriesContainer.url.startsWith("xtream://series/")) {
-					setSeriesLoading(true);
-					fetchXtreamShowEpisodes(seriesName, seriesContainer)
-						.then(playOrPick)
-						.catch((e) => console.error("[Xtream] failed to fetch series episodes:", e))
-						.finally(() => setSeriesLoading(false));
-				} else {
-					playOrPick(byType.series.filter((ep) => seriesTitleOf(ep) === seriesName));
-				}
-			} else if (entry.contentType === "movie") {
-				const movie = byType.movie.find((ch) => ch.name === entry.channelName);
-				if (movie) setSelectedMovie(movie);
-			} else if (entry.contentType === "recording") {
-				// A recording plays from its file for as long as the app keeps it.
-				const rec = byChannel.get(entry.channelId);
-				if (rec?.kind !== "recording" || rec.status !== "completed") return;
-				const ch = recordingChannel(rec);
-				navigate("/player", { state: { url: ch.url, channelName: ch.name, channel: ch } });
-			} else {
-				const ch = byType.live.find((c) => c.id === entry.channelId);
-				if (!ch) return;
-				navigate("/player", {
-					state: { url: ch.url, channelName: entry.channelName, channel: ch },
-				});
-			}
+					const ch = byType.live.find((c) => c.id === other.channelId);
+					if (!ch) return;
+					navigate("/player", {
+						state: { url: ch.url, channelName: other.channelName, channel: ch },
+					});
+				},
+			});
 		},
-		[byType, byChannel, navigate, fetchXtreamShowEpisodes]
+		[byType.live, byChannel, navigate, openHistoryEntry]
 	);
 
 	const favoritesByType = useMemo(() => {

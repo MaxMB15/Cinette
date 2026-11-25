@@ -35,6 +35,8 @@ vi.mock("./components/settings/Settings", () => ({
 	),
 }));
 
+vi.mock("./components/tv/TvSettings", () => ({ TvSettings: () => <p>TV settings page</p> }));
+
 // The connect dialog has its own tests. Here it only shows that it's mounted.
 vi.mock("./components/remote/RemoteControls", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./components/remote/RemoteControls")>()),
@@ -205,6 +207,21 @@ describe("App", () => {
 		expect(invoke).toHaveBeenCalledWith("plugin:mpv|mpv_set_visible", {
 			visible: path === "/player",
 		});
+	});
+
+	it.each([
+		["/playlists", "TV settings page"],
+		["/settings", "TV settings page"],
+	])("opens %s on a TV on the TV's own page", (path, page) => {
+		vi.mocked(osPlatform).mockReturnValue("android");
+		window.__CINETTE_TV__ = true;
+		sessionStorage.setItem("splash-shown", "true");
+		localStorage.setItem("donation-last-shown", String(Date.now()));
+		renderApp(path);
+
+		expect(screen.getByText(page)).toBeInTheDocument();
+		expect(screen.queryByText("Playlists page")).not.toBeInTheDocument();
+		expect(screen.queryByText(/^Settings page/)).not.toBeInTheDocument();
 	});
 
 	it("reloads playlists and channels after the start screen refreshed a playlist", async () => {

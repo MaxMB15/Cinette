@@ -42,6 +42,13 @@ export interface Provider {
 	epgUrl?: string;
 }
 
+/** How many live channels, movies and shows a provider has. */
+export interface ContentCounts {
+	live: number;
+	movies: number;
+	series: number;
+}
+
 export interface Playlist {
 	provider: Provider;
 	channels: Channel[];
@@ -74,6 +81,26 @@ export interface MpvPlayerState extends PlayerState {
 	/** mpv plays in a window of its own, because the app couldn't draw the
 	 *  video in its own window. Nothing the app draws shows over it. */
 	fallbackActive: boolean;
+	/** The stretch around `position` mpv holds and can seek in without asking
+	 *  the server again, as `[start, end]` in seconds. A live channel can go
+	 *  back this far. */
+	buffered: [number, number] | null;
+}
+
+/** One of the tracks of what mpv plays. */
+export interface MpvTrack {
+	/** The id mpv picks the track by. Each kind counts from 1. */
+	id: number;
+	kind: "video" | "audio" | "sub";
+	codec: string | null;
+	default: boolean;
+	/** mpv plays this one. */
+	selected: boolean;
+	/** The language the file gives, such as `en` or `eng`. */
+	language: string | null;
+	title: string | null;
+	/** How many audio channels. */
+	channels: number | null;
 }
 
 /** What useMpv keeps of mpv's state, which adds when the position was read. */
