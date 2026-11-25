@@ -28,6 +28,7 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 ### Fixed
 
 - A subtitle file you picked while a stream was still opening, or while it reconnected, could fail to show, even though the player kept it as picked. The player now adds it as soon as the stream has opened (#340).
+- A channel, movie or episode whose name in an M3U playlist had a comma, such as "Movie, The (1999)", showed only the part after the last comma. Two movies whose names ended the same way, like "MP4, HEVC" and "MKV, HEVC", also became one movie with two sources. Names now keep their commas.
 
 ## [0.8.0] - 2026-10-17
 
