@@ -291,7 +291,18 @@ fn a_full_piece_fits_a_frame() {
         last: true,
         data: BASE64.encode(vec![0xff; PIECE_BYTES]),
     };
-    assert!(message::encode(&piece).len() <= MAX_MESSAGE);
+    let len = message::encode(&piece).len();
+    assert!(len <= MAX_MESSAGE);
+    // It also fills most of the frame, so a big answer takes few round trips.
+    assert!(len > MAX_MESSAGE * 9 / 10, "{len} bytes");
+}
+
+#[test]
+fn a_big_library_unpacks() {
+    // Tens of thousands of channels come to megabytes of JSON.
+    let json = vec![b' '; 16 * 1024 * 1024];
+    let unpacked = unpack(&pack(&json), MAX_UNPACKED).map(|json| json.len());
+    assert_eq!(unpacked, Ok(json.len()));
 }
 
 #[test]
