@@ -13,6 +13,7 @@ import { UpdateBanner } from "./components/UpdateBanner";
 import { SplashScreen } from "./components/SplashScreen";
 import { DonationPopup } from "./components/DonationPopup";
 import { ConsentDialog } from "./components/remote/ConsentDialog";
+import { PlayingOnTarget } from "./components/remote/PlayingOnTarget";
 import { ConnectStatusDialog } from "./components/remote/RemoteControls";
 import { ChannelsContext, useChannels, useChannelsProvider } from "./hooks/useChannels";
 import { useUpdateChecker } from "./hooks/useUpdateChecker";
@@ -93,6 +94,7 @@ const AppRoutes = ({ updateState }: AppRoutesProps) => {
 
 			<UpdateBanner state={updateState} hidden={!splash.dismissed} />
 			<ConsentDialog />
+			<PlayingOnTarget />
 			{controlsOthers() && <ConnectStatusDialog />}
 			{donation.shouldShow && !updateState.update && (
 				<DonationPopup onDismiss={donation.dismiss} />

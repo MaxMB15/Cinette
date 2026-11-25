@@ -32,6 +32,13 @@ vi.mock("react-router", () => ({ useNavigate: () => navigate }));
 const channels = vi.hoisted(() => ({ list: [] as Channel[] }));
 vi.mock("@/hooks/useChannels", () => ({ useChannels: () => ({ channels: channels.list }) }));
 
+const mpv = vi.hoisted(() => ({ player: null as LocalPlayer | null }));
+vi.mock("@/hooks/useMpv", () => ({ useMpv: () => mpv.player }));
+vi.mock("@/hooks/useLocalPlayback", async (importOriginal) => {
+	const real = await importOriginal<typeof import("./useLocalPlayback")>();
+	return { ...real, useLocalPlayback: vi.fn(real.useLocalPlayback) };
+});
+
 import { listen } from "@tauri-apps/api/event";
 import {
 	mpvStop,
@@ -43,14 +50,16 @@ import {
 } from "@/lib/tauri";
 import { setProgressSaver } from "@/lib/player-progress";
 import {
+	usePlayingOnTarget,
 	usePublishRemoteState,
 	useRemoteBlocked,
 	useRemoteSessions,
 	useRemoteTarget,
 } from "./useRemoteTarget";
+import { useLocalPlayback, type LocalPlayer } from "./useLocalPlayback";
 import { getMountedPlayer, IDLE_REMOTE_STATE, setMountedPlayer } from "@/lib/remote-target";
 import { localCapabilities, type PlaybackDestination, type PlaybackState } from "@/lib/destination";
-import type { Channel } from "@/lib/types";
+import type { Channel, PolledMpvState } from "@/lib/types";
 
 const channel: Channel = {
 	id: "live-1",
@@ -427,5 +436,120 @@ describe("usePublishRemoteState", () => {
 		renderHook(() => usePublishRemoteState(destination, null));
 		await waitFor(() => expect(remoteSetState).toHaveBeenCalled());
 		expect(vi.mocked(remoteSetState).mock.calls[0][0].item).toBeNull();
+	});
+});
+
+/** mpv as `useMpv` reports it, playing `currentUrl`. */
+const mpvPlaying = (currentUrl: string | null): LocalPlayer => ({
+	state: {
+		isPlaying: true,
+		isPaused: false,
+		currentUrl,
+		volume: 60,
+		position: 12,
+		duration: 0,
+		playbackStarted: true,
+		openFailed: false,
+		reachedEnd: false,
+		waiting: false,
+		fallbackActive: false,
+		positionAt: 0,
+	} satisfies PolledMpvState,
+	error: null,
+	opening: false,
+	buffering: false,
+	reconnecting: false,
+	loadFailed: false,
+	openFailed: false,
+	play: vi.fn(async () => {}),
+	pause: vi.fn(async () => {}),
+	seek: vi.fn(async () => {}),
+	setVolume: vi.fn(async () => {}),
+	stop: vi.fn(async () => {}),
+});
+
+/** Opens the player page on `shown`, then closes it. */
+const pageClosesOn = (shown: Channel) => {
+	const { destination } = fakeDestination();
+	renderHook(() => usePublishRemoteState(destination, shown)).unmount();
+};
+
+describe("usePlayingOnTarget", () => {
+	it("tells controllers what mpv plays on after the page closes", async () => {
+		pageClosesOn(channel);
+		mpv.player = mpvPlaying("http://x.test/1.ts");
+		vi.mocked(remoteSessions).mockResolvedValueOnce([session(true)]);
+		renderHook(() => usePlayingOnTarget());
+		await waitFor(() =>
+			expect(remoteSetState).toHaveBeenCalledWith(
+				expect.objectContaining({
+					status: "playing",
+					item: expect.objectContaining({ id: "live-1" }),
+				})
+			)
+		);
+	});
+
+	it("shows the channel the page had last", async () => {
+		const { destination } = fakeDestination();
+		const other = { ...channel, id: "live-2", name: "Sport" };
+		const page = renderHook(({ shown }) => usePublishRemoteState(destination, shown), {
+			initialProps: { shown: channel },
+		});
+		page.rerender({ shown: other });
+		page.unmount();
+		mpv.player = mpvPlaying("http://x.test/2.ts");
+		vi.mocked(remoteSessions).mockResolvedValueOnce([session(true)]);
+		renderHook(() => usePlayingOnTarget());
+		await waitFor(() =>
+			expect(remoteSetState).toHaveBeenCalledWith(
+				expect.objectContaining({ item: expect.objectContaining({ id: "live-2" }) })
+			)
+		);
+	});
+
+	it("shows no item once mpv plays nothing", async () => {
+		pageClosesOn(channel);
+		mpv.player = mpvPlaying(null);
+		vi.mocked(remoteSessions).mockResolvedValueOnce([session(true)]);
+		renderHook(() => usePlayingOnTarget());
+		await waitFor(() => expect(remoteSetState).toHaveBeenCalled());
+		for (const [state] of vi.mocked(remoteSetState).mock.calls) expect(state.item).toBeNull();
+	});
+
+	it("takes commands while mounted, and leaves them to fail once it's gone", async () => {
+		pageClosesOn(channel);
+		const first = mpvPlaying("http://x.test/1.ts");
+		mpv.player = first;
+		renderHook(() => useRemoteTarget());
+		const playingOn = renderHook(() => usePlayingOnTarget());
+		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
+		emit("remote://command", { token: 11, command: { action: "pause", itemId: "live-1" } });
+		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(11, "ok"));
+		expect(first.pause).toHaveBeenCalledTimes(1);
+
+		// A new mpv function makes a new destination, which takes over.
+		const second = mpvPlaying("http://x.test/1.ts");
+		mpv.player = second;
+		playingOn.rerender();
+		emit("remote://command", { token: 12, command: { action: "play", itemId: "live-1" } });
+		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(12, "ok"));
+		expect(second.play).toHaveBeenCalledTimes(1);
+		expect(first.play).not.toHaveBeenCalled();
+
+		playingOn.unmount();
+		emit("remote://command", { token: 13, command: { action: "play", itemId: "live-1" } });
+		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(13, "failed"));
+		expect(second.play).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves starting an item to the player page", async () => {
+		mpv.player = mpvPlaying(null);
+		renderHook(() => usePlayingOnTarget());
+		const destination = vi.mocked(useLocalPlayback).mock.results[0]
+			.value as PlaybackDestination;
+		await expect(destination.load({ kind: "local", channel })).rejects.toThrow(
+			"Starting an item with the player closed isn't supported here"
+		);
 	});
 });
