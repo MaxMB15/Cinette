@@ -217,6 +217,7 @@ fn sample(argument: &str) -> Value {
         "direction" => json!("send"),
         "what" => json!({ "history": true }),
         "command" => json!({ "action": "stop" }),
+        "call" => json!({ "name": "channels" }),
         "catalogQuery" => json!({ "kind": "groups", "contentType": "live", "limit": 100 }),
         "settings" => json!({ "discoverable": true, "remoteControl": "ask", "deviceName": null }),
         "state" => json!({

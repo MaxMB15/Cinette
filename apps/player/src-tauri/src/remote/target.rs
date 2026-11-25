@@ -20,6 +20,7 @@ use crate::discovery::{Registration, Txt};
 use mvp_core::remote::catalog::{CatalogItem, CatalogQuery};
 use mvp_core::remote::consent::{Answer, RequestId};
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
+use mvp_core::remote::library::{self, LibraryCall};
 use mvp_core::remote::message::{Command, DeviceType, ErrorCode, PlaybackSnapshot, RequestKind};
 use mvp_core::remote::settings::RemoteSettings;
 use mvp_core::remote::target::{
@@ -83,6 +84,12 @@ pub trait TargetHost: Send + Sync + 'static {
     fn apply(&self, token: u64, command: &Command);
     /// Answer a catalog query. Runs on a blocking thread.
     fn catalog(&self, query: CatalogQuery) -> CatalogPage;
+    /// Answer a library call with the JSON this device's own screens get.
+    /// Runs on a blocking thread. A host without a library answers
+    /// `unsupported`.
+    fn library(&self, _call: LibraryCall) -> Result<Vec<u8>, ErrorCode> {
+        Err(ErrorCode::Unsupported)
+    }
     /// Advertise this, in place of anything advertised before, or stop.
     fn advertise(&self, registration: Option<Registration>);
     /// Save providers the device named `from` sent, as this device's own,
@@ -140,6 +147,7 @@ enum Input {
     State(Box<PlaybackSnapshot>),
     Finished(u64, Result<(), ErrorCode>),
     CatalogDone(Epoch, ConnId, u64, CatalogPage),
+    LibraryDone(Epoch, ConnId, u64, Result<Vec<u8>, ErrorCode>),
     ProvidersSaved(Epoch, ConnId, String, Vec<ProviderResult>),
     Exported(Epoch, ConnId, String, Box<Result<Export, ErrorCode>>),
     Imported(Epoch, ConnId, String, Box<Result<Report, ErrorCode>>),
@@ -571,6 +579,13 @@ impl Task {
                     Vec::new()
                 }
             }
+            Input::LibraryDone(epoch, conn, request, answer) => {
+                if epoch == self.epoch {
+                    self.target.finish_library(conn, request, answer)
+                } else {
+                    Vec::new()
+                }
+            }
             Input::ProvidersSaved(epoch, conn, grant, results) => {
                 if epoch == self.epoch {
                     self.target.providers_saved(conn, &grant, results)
@@ -711,6 +726,20 @@ impl Task {
                     tokio::task::spawn_blocking(move || {
                         let page = host.catalog(query);
                         let _ = inbox.send(Input::CatalogDone(epoch, conn, request, page));
+                    });
+                }
+                Action::Library {
+                    conn,
+                    request,
+                    call,
+                } => {
+                    // The core runs one call per connection at a time.
+                    let host = self.host.clone();
+                    let inbox = self.inbox.clone();
+                    let epoch = self.epoch;
+                    tokio::task::spawn_blocking(move || {
+                        let answer = host.library(call).map(|json| library::pack(&json));
+                        let _ = inbox.send(Input::LibraryDone(epoch, conn, request, answer));
                     });
                 }
                 Action::SaveProviders {

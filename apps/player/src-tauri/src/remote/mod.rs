@@ -35,6 +35,8 @@ pub mod identity;
 #[cfg(any(target_os = "ios", test))]
 mod keychain;
 #[cfg(remote)]
+pub mod library;
+#[cfg(remote)]
 mod local;
 pub mod logos;
 #[cfg(remote)]

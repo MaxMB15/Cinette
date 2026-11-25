@@ -177,6 +177,7 @@ register_commands![
     remote_commands::remote_leave,
     remote_commands::remote_command,
     remote_commands::remote_catalog,
+    remote_commands::remote_library,
     remote_commands::remote_send_providers,
     remote_commands::remote_cancel_transfer,
     remote_commands::remote_ask_history,

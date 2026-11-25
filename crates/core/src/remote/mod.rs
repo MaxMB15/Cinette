@@ -22,6 +22,7 @@ pub mod consent;
 pub mod controller;
 pub mod handshake;
 pub mod identity;
+pub mod library;
 mod limit;
 pub mod message;
 pub mod sessions;

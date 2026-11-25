@@ -34,6 +34,7 @@
 //!   so where the user picks it.
 
 use super::catalog::{CatalogItem, CatalogQuery};
+use super::library::{LibraryCall, TargetLibrary};
 use super::channel::Channel;
 use super::consent::{Answer, ConsentQueue, Outcome, RequestId, Resolved};
 use super::handshake::{Established, Next, Peer, TargetHandshake, VerificationCode};
@@ -109,6 +110,13 @@ pub enum Action {
         conn: ConnId,
         request: u64,
         query: CatalogQuery,
+    },
+    /// Answer a call on this device's library with packed JSON, then call
+    /// [`Target::finish_library`]. A connection has one running at a time.
+    Library {
+        conn: ConnId,
+        request: u64,
+        call: LibraryCall,
     },
     /// Advertise this record, replacing any earlier one, or stop advertising.
     Advertise(Option<DiscoveryRecord>),
@@ -226,6 +234,8 @@ struct Conn {
     /// The catalog requests waiting for an answer that are searches, whose
     /// pages have no cursor to go on from.
     searches: HashSet<u64>,
+    /// The library calls waiting or running, and the answers going out.
+    library: TargetLibrary,
     /// The transfer this controller asked for, while it's asked or running.
     flow: Option<TargetFlow>,
 }
@@ -331,10 +341,16 @@ impl Target {
     }
 
     /// Offers history transfers or receiving providers too, once the
-    /// platform layer carries out their actions. Control, the catalog and
-    /// renames are always offered. Connections from now on see the change.
+    /// platform layer carries out their actions. Control, the catalog, the
+    /// library and renames are always offered. Connections from now on see
+    /// the change.
     pub fn offer(&mut self, history: bool, providers: bool) {
-        self.features = vec![Feature::Control, Feature::Catalog, Feature::Rename];
+        self.features = vec![
+            Feature::Control,
+            Feature::Catalog,
+            Feature::Library,
+            Feature::Rename,
+        ];
         if history {
             self.features.push(Feature::History);
         }
@@ -419,6 +435,7 @@ impl Target {
                 last_heard: now,
                 messages: TokenBucket::new(RATE, RATE),
                 searches: HashSet::new(),
+                library: TargetLibrary::default(),
                 flow: None,
             },
         );
@@ -580,11 +597,14 @@ impl Target {
             }
             Stage::InSession(mut auth) => {
                 let opened = open(&mut auth, conn, frame, &mut actions);
-                // The running transfer's next step only goes as fast as the
-                // other side acknowledges, so it doesn't count. Anything
-                // else does, including steps of no transfer here.
+                // The running transfer's next step, and the acknowledgement
+                // of a library piece, only go as fast as this side sends, so
+                // they don't count. Anything else does, including steps of
+                // no transfer here.
                 let expected = match (&opened, self.conns.get(&conn)) {
-                    (Opened::Message(m), Some(c)) => c.flow.as_ref().is_some_and(|f| f.expects(m)),
+                    (Opened::Message(m), Some(c)) => {
+                        c.flow.as_ref().is_some_and(|f| f.expects(m)) || c.library.expects(m)
+                    }
                     _ => false,
                 };
                 let allowed = expected || self.conn_token(conn, now);
@@ -659,6 +679,35 @@ impl Target {
                                     query,
                                 })
                             }
+                        }
+                        self.set_stage(conn, Stage::InSession(auth));
+                    }
+                    Message::Library { id, call } => {
+                        let asked = match (allowed, call.is_valid(), self.conns.get_mut(&conn)) {
+                            (false, ..) => Err(ErrorCode::RateLimited),
+                            (true, false, _) => Err(ErrorCode::Invalid),
+                            (true, true, Some(c)) => c.library.ask(id, call),
+                            (true, true, None) => Ok(None),
+                        };
+                        match asked {
+                            Err(code) => error(&mut auth, conn, Some(id), code, &mut actions),
+                            Ok(Some((request, call))) => actions.push(Action::Library {
+                                conn,
+                                request,
+                                call,
+                            }),
+                            Ok(None) => {}
+                        }
+                        self.set_stage(conn, Stage::InSession(auth));
+                    }
+                    Message::LibraryAck { re, seq } => {
+                        let pieces = self
+                            .conns
+                            .get_mut(&conn)
+                            .and_then(|c| c.library.acked(re, seq))
+                            .unwrap_or_default();
+                        for piece in &pieces {
+                            send(&mut auth, conn, piece, &mut actions);
                         }
                         self.set_stage(conn, Stage::InSession(auth));
                     }
@@ -1117,6 +1166,36 @@ impl Target {
                 },
             };
             send(auth, conn, &reply, &mut actions);
+        }
+        actions
+    }
+
+    /// The answer to a library call, packed. It goes out in pieces as the
+    /// controller acknowledges them, and the connection's next call starts.
+    pub fn finish_library(
+        &mut self,
+        conn: ConnId,
+        request: u64,
+        result: Result<Vec<u8>, ErrorCode>,
+    ) -> Vec<Action> {
+        let mut actions = Vec::new();
+        if let Some(Conn {
+            stage: Stage::InSession(auth),
+            library,
+            ..
+        }) = self.conns.get_mut(&conn)
+        {
+            let (messages, next) = library.finished(request, result);
+            for message in &messages {
+                send(auth, conn, message, &mut actions);
+            }
+            if let Some((request, call)) = next {
+                actions.push(Action::Library {
+                    conn,
+                    request,
+                    call,
+                });
+            }
         }
         actions
     }
@@ -1687,7 +1766,7 @@ fn reply_error(
     actions: &mut Vec<Action>,
 ) {
     match message {
-        Message::Command { id, .. } | Message::Catalog { id, .. } => {
+        Message::Command { id, .. } | Message::Catalog { id, .. } | Message::Library { id, .. } => {
             error(auth, conn, Some(*id), ErrorCode::Unsupported, actions)
         }
         _ => error(auth, conn, None, ErrorCode::Unsupported, actions),

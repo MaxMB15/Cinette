@@ -495,6 +495,24 @@ async fn catalog_queries_are_answered_by_the_host() {
 }
 
 #[tokio::test]
+async fn a_host_with_no_library_says_so() {
+    let h = Harness::start(ControlMode::Always).await;
+    let mut phone = h.connect("Phone").await;
+    phone.connected().await;
+    let (id, bytes) = phone.controller.library(LibraryCall::Channels).unwrap();
+    phone.write(&bytes).await;
+    let result = phone
+        .wait_for(|e| match e {
+            Event::Reply { request, result } if *request == id => Some(*result),
+            Event::Library { request, .. } if *request == id => Some(Ok(0)),
+            _ => None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result, Err(ErrorCode::Unsupported));
+}
+
+#[tokio::test]
 async fn never_allow_ends_open_sessions_and_says_so_in_the_record() {
     let mut h = Harness::start(ControlMode::Always).await;
     let mut phone = h.connect("Phone").await;

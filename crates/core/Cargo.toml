@@ -37,6 +37,9 @@ getrandom = "0.3"
 # Clears the logins of providers sent to another device from memory once
 # they're saved. Already in the build through the Noise crates.
 zeroize = "1"
+# Packs a library sent to a controller, and reads it there.
+flate2 = "1.1"
+base64 = "0.22"
 
 # reqwest 0.13 switched its default TLS to rustls with aws-lc. Desktop and iOS
 # keep 0.12's default, the system's TLS: Security.framework on Apple platforms

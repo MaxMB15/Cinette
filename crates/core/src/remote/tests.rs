@@ -96,7 +96,7 @@ pub(crate) fn playing(id: &str, position: f64) -> PlaybackSnapshot {
 }
 
 /// The contents of the one frame in `bytes`.
-fn unframe(bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn unframe(bytes: &[u8]) -> Vec<u8> {
     let mut reader = FrameReader::new();
     reader.push(bytes);
     let frame = reader.next_frame().unwrap().unwrap();
@@ -106,14 +106,14 @@ fn unframe(bytes: &[u8]) -> Vec<u8> {
 
 /// A controller let through by a bare target handshake, for tests that
 /// play the target by hand. Returns the target's side of the channel.
-fn controller_and_bare_target(now: Instant) -> (Controller, Channel) {
+pub(crate) fn controller_and_bare_target(now: Instant) -> (Controller, Channel) {
     let target_key = DeviceKey::generate();
     let target_hello = hello(&target_key, "TV", DeviceType::FireTv);
     controller_and_bare_target_saying(target_key, target_hello, now)
 }
 
 /// [`controller_and_bare_target`] with the target's key and hello.
-fn controller_and_bare_target_saying(
+pub(crate) fn controller_and_bare_target_saying(
     target_key: DeviceKey,
     target_hello: Hello,
     now: Instant,
@@ -1736,7 +1736,7 @@ fn a_controllers_new_name_reaches_the_targets_list() {
 }
 
 /// The bare target lets the controller in.
-fn let_in(controller: &mut Controller, target: &mut Channel, now: Instant) {
+pub(crate) fn let_in(controller: &mut Controller, target: &mut Channel, now: Instant) {
     let accepted = target
         .seal(&Message::Accepted {
             session_id: "s".into(),

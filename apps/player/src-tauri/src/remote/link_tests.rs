@@ -10,13 +10,14 @@ use crate::remote::target::{self, CatalogPage, TargetHandle, TargetHost};
 use crate::remote::test_client::WAIT;
 use mvp_core::remote::consent::{Answer, RequestId};
 use mvp_core::remote::controller::GIVE_UP_AFTER;
+use mvp_core::remote::library::{unpack, MAX_UNPACKED, PIECE_BYTES};
 use mvp_core::remote::message::{DeviceType, Feature, PlaybackSnapshot, PROTOCOL_VERSION};
 use mvp_core::remote::settings::{ControlMode, RemoteSettings};
 use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
 use mvp_core::remote::transfer::flow::{
     ControllerEvent, Progress, ProviderKind, ProviderName, ProviderSettings, WRITE_TIMEOUT,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -32,6 +33,8 @@ struct Player {
     silent: Arc<std::sync::atomic::AtomicBool>,
     /// Saves of providers it never finishes, while silent.
     held: Mutex<Vec<target::SavedProviders>>,
+    /// How long it takes over each library call, in milliseconds.
+    slow: Arc<AtomicU64>,
 }
 
 impl TargetHost for Player {
@@ -67,7 +70,27 @@ impl TargetHost for Player {
             None,
         ))
     }
+    fn library(&self, call: LibraryCall) -> Result<Vec<u8>, ErrorCode> {
+        std::thread::sleep(Duration::from_millis(self.slow.load(Ordering::SeqCst)));
+        match call {
+            LibraryCall::Channels => Ok(library_answer()),
+            _ => Err(ErrorCode::Failed),
+        }
+    }
     fn advertise(&self, _: Option<Registration>) {}
+}
+
+/// An answer to a library call too big to go in one piece, since it
+/// doesn't deflate much.
+fn library_answer() -> Vec<u8> {
+    let mut seed = 7_u64;
+    let text: String = (0..200_000)
+        .map(|_| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            char::from(b"0123456789abcdef"[(seed >> 60) as usize])
+        })
+        .collect();
+    serde_json::to_vec(&text).unwrap()
 }
 
 struct Target {
@@ -78,6 +101,8 @@ struct Target {
     hidden: mpsc::UnboundedReceiver<RequestId>,
     /// While set, the player never finishes a command.
     silent: Arc<std::sync::atomic::AtomicBool>,
+    /// How long the player takes over each library call, in milliseconds.
+    slow: Arc<AtomicU64>,
 }
 
 async fn target(mode: ControlMode) -> Target {
@@ -91,12 +116,14 @@ async fn target_keyed(mode: ControlMode, key: DeviceKey) -> Target {
     let (tx, prompts) = mpsc::unbounded_channel();
     let (hide, hidden) = mpsc::unbounded_channel();
     let silent = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let slow = Arc::new(AtomicU64::new(0));
     let player = Arc::new(Player {
         target: Mutex::new(None),
         prompts: tx,
         hidden: hide,
         silent: silent.clone(),
         held: Mutex::new(Vec::new()),
+        slow: slow.clone(),
     });
     let settings = RemoteSettings {
         remote_control: mode,
@@ -123,6 +150,7 @@ async fn target_keyed(mode: ControlMode, key: DeviceKey) -> Target {
         prompts,
         hidden,
         silent,
+        slow,
     }
 }
 
@@ -433,6 +461,11 @@ async fn waits_for_consent_with_the_same_code_and_hears_a_denial() {
         }),
         "{:?}",
         link.phases()
+    );
+    // Nothing of the library comes before the target lets the link in.
+    assert_eq!(
+        link.handle.library(LibraryCall::Channels).await,
+        Err(LinkError::NotConnected)
     );
     t.handle.answer(request, Answer::Deny);
     assert_eq!(link.closed().await, Ended::Target(CloseReason::Denied));
@@ -1214,8 +1247,72 @@ async fn only_so_many_wait_for_answers() {
         link.handle.command(Command::Stop).await,
         Err(LinkError::Busy)
     );
+    assert_eq!(
+        link.handle.library(LibraryCall::Channels).await,
+        Err(LinkError::Busy)
+    );
     link.handle.leave().await;
     assert_eq!(first.await.unwrap(), Err(LinkError::NotConnected));
+}
+
+/// A link to a target whose requests time out after `request`.
+async fn link_waiting(t: &Target, request: Duration) -> Link {
+    let port = t.port;
+    let mut link = link_timed(
+        t,
+        Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
+        GRACE,
+        Limits { request, ..QUICK },
+    );
+    link.until_phase(Phase::Connected).await;
+    link
+}
+
+#[tokio::test]
+async fn a_library_call_gets_its_answer_in_pieces_or_its_failure() {
+    let t = target(ControlMode::Always).await;
+    let mut link = link_to(&t, t.port, GRACE);
+    link.until_phase(Phase::Connected).await;
+    let packed = link.handle.library(LibraryCall::Channels).await.unwrap();
+    assert!(packed.len() > PIECE_BYTES);
+    assert_eq!(unpack(&packed, MAX_UNPACKED).unwrap(), library_answer());
+    assert_eq!(
+        link.handle.library(LibraryCall::Providers).await,
+        Err(LinkError::Refused(ErrorCode::Failed))
+    );
+}
+
+#[tokio::test]
+async fn a_library_call_with_no_answer_times_out() {
+    let t = target(ControlMode::Always).await;
+    t.slow.store(1_000, Ordering::SeqCst);
+    let link = link_waiting(&t, Duration::from_millis(300)).await;
+    assert_eq!(
+        link.handle.library(LibraryCall::Channels).await,
+        Err(LinkError::TimedOut)
+    );
+    // The link goes on, and the late answer goes to nobody.
+    t.slow.store(0, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    let packed = link.handle.library(LibraryCall::Channels).await.unwrap();
+    assert_eq!(unpack(&packed, MAX_UNPACKED).unwrap(), library_answer());
+    assert_eq!(link.phases().last(), Some(&Phase::Connected));
+}
+
+#[tokio::test]
+async fn a_library_call_waits_while_the_one_before_it_is_answered() {
+    let t = target(ControlMode::Always).await;
+    // Each takes most of the wait, so the second, which the target starts
+    // after the first, only gets its answer because the first's restarted
+    // the wait.
+    t.slow.store(1_400, Ordering::SeqCst);
+    let link = link_waiting(&t, Duration::from_secs(2)).await;
+    let (first, second) = tokio::join!(
+        link.handle.library(LibraryCall::Channels),
+        link.handle.library(LibraryCall::Channels),
+    );
+    assert!(first.is_ok(), "{first:?}");
+    assert!(second.is_ok(), "{second:?}");
 }
 
 #[tokio::test]

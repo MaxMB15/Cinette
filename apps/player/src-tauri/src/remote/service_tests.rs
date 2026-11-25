@@ -13,6 +13,7 @@ use mvp_core::models::channel::Channel;
 use mvp_core::models::playlist::{Provider, ProviderType};
 use mvp_core::remote::catalog::CatalogItem;
 use mvp_core::remote::controller::Event;
+use mvp_core::remote::library::{unpack, LibraryCall, MAX_UNPACKED};
 use mvp_core::remote::message::{CloseReason, ErrorCode};
 use mvp_core::remote::settings::ControlMode;
 use serde_json::{json, Value};
@@ -34,8 +35,9 @@ struct Running {
     kept: Arc<Mutex<Vec<bool>>>,
 }
 
-const EVENTS: [&str; 14] = [
+const EVENTS: [&str; 15] = [
     "remote://save-progress",
+    "remote://library-changed",
     "remote://history-imported",
     "remote://consent",
     "remote://consent-hidden",
@@ -585,15 +587,16 @@ async fn channel_with_load(running: &mut Running, phone: &mut Client, item_id: &
     event.get("channel").cloned().unwrap_or(Value::Null)
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn episodes_are_loaded_from_the_provider_and_a_load_carries_the_episode() {
+/// A provider on a loopback panel with one series, `p1-series-7`, of one
+/// episode. The panel's URL and the requests it got come back too.
+async fn with_series() -> (Running, String, std::sync::mpsc::Receiver<String>) {
     let (url, requests) = serve_routes(vec![route(
         "action=get_series_info",
         "200 OK",
         r#"{"info":{"name":"The Show"},"episodes":{"1":[
             {"id":"9001","episode_num":1,"title":"First"}]}}"#,
     )]);
-    let mut running = Running::start(|app| {
+    let running = Running::start(|app| {
         let state = app.state();
         let cache = state.cache.lock().unwrap();
         cache
@@ -620,6 +623,12 @@ async fn episodes_are_loaded_from_the_provider_and_a_load_carries_the_episode() 
         cache.save_channels("p1", &[series]).unwrap();
     })
     .await;
+    (running, url, requests)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn episodes_are_loaded_from_the_provider_and_a_load_carries_the_episode() {
+    let (mut running, url, requests) = with_series().await;
     let mut phone = connected(&running).await;
     let items = ask_for_episodes(&mut phone, "p1-series-7").await;
     assert_eq!(items.len(), 1);
@@ -640,6 +649,52 @@ async fn episodes_are_loaded_from_the_provider_and_a_load_carries_the_episode() 
     assert!(channel["url"].as_str().unwrap().starts_with(&url));
     let other = channel_with_load(&mut running, &mut phone, "p1-live-1").await;
     assert_eq!(other, Value::Null, "only episodes come with a channel");
+}
+
+/// The JSON answer to `call`, as the phone gets it.
+async fn ask_library(phone: &mut Client, call: LibraryCall) -> Value {
+    let (id, bytes) = phone.controller.library(call).unwrap();
+    phone.write(&bytes).await;
+    let packed = phone
+        .wait_for(|e| match e {
+            Event::Library { request, packed } if *request == id => Some(packed.clone()),
+            _ => None,
+        })
+        .await
+        .unwrap();
+    serde_json::from_slice(&unpack(&packed, MAX_UNPACKED).unwrap()).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn library_episodes_can_be_played_and_an_edit_shows_on_this_device_too() {
+    let (mut running, _, _) = with_series().await;
+    let mut phone = connected(&running).await;
+    let episodes = ask_library(
+        &mut phone,
+        LibraryCall::SeriesEpisodes {
+            series_id: "p1-series-7".into(),
+        },
+    )
+    .await;
+    assert_eq!(episodes[0]["id"], "p1-xt-ep-7-s1-0");
+    assert_eq!(episodes[0]["url"], "");
+    let channel = channel_with_load(&mut running, &mut phone, "p1-xt-ep-7-s1-0").await;
+    assert_eq!(channel["id"], "p1-xt-ep-7-s1-0");
+
+    let call = LibraryCall::ToggleFavorite {
+        id: "p1-series-7".into(),
+    };
+    assert_eq!(ask_library(&mut phone, call.clone()).await, json!(true));
+    let changed = running.event("remote://library-changed").await;
+    assert_eq!(changed["call"], serde_json::to_value(&call).unwrap());
+    assert_eq!(changed["answer"], json!(true));
+    // Reading changes nothing, so nothing is said.
+    ask_library(&mut phone, LibraryCall::Providers).await;
+    ask_library(&mut phone, call).await;
+    assert_eq!(
+        running.event("remote://library-changed").await["answer"],
+        json!(false)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -847,6 +902,17 @@ async fn one_instance_controls_another() {
         )
         .unwrap();
     assert_eq!(page, json!({ "items": [], "next": null }));
+
+    // And a library call, answered from the TV's cache. The JSON comes as
+    // bytes, which the mock webview shows as an array of numbers.
+    let bytes = mac
+        .invoke(
+            "remote_library",
+            json!({ "call": { "name": "channels" }, "link": 1 }),
+        )
+        .unwrap();
+    let bytes: Vec<u8> = serde_json::from_value(bytes).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), json!([]));
 
     // Leaving ends the session on both sides. The webview asked, so no
     // event tells it.

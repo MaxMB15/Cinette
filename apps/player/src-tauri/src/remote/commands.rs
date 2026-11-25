@@ -617,6 +617,39 @@ pub async fn remote_catalog<R: Runtime>(
     }
 }
 
+/// Runs `call` on the library of the device link `link` controls. The
+/// answer is the JSON that device's own command gives, as bytes, so a big
+/// library doesn't go through a JSON value on the way.
+#[command]
+pub async fn remote_library<R: Runtime>(
+    app: AppHandle<R>,
+    link: u64,
+    call: mvp_core::remote::library::LibraryCall,
+) -> Result<tauri::ipc::Response, String> {
+    #[cfg(remote)]
+    {
+        use mvp_core::remote::library::{unpack, MAX_UNPACKED};
+        let link = imp::service(&app)?
+            .link(link)
+            .ok_or_else(imp::not_connected)?;
+        let packed = link.library(call.clone()).await.map_err(imp::link_error)?;
+        // Unpacking and reading a whole library takes a while.
+        let json = tokio::task::spawn_blocking(move || {
+            unpack(&packed, MAX_UNPACKED)
+                .and_then(|json| crate::remote::library::checked(&call, json))
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|code| imp::link_error(crate::remote::link::LinkError::Refused(code)))?;
+        Ok(tauri::ipc::Response::new(json))
+    }
+    #[cfg(not(remote))]
+    {
+        let _ = (app, link, call);
+        Err(UNAVAILABLE.into())
+    }
+}
+
 /// Asks the device link `link` controls to take the providers with these
 /// ids. Only their names go now; how it goes comes as `remote://transfer`.
 #[command]
