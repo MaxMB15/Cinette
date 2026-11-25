@@ -1041,6 +1041,79 @@ fn a_quiet_connection_times_out_and_can_resume() {
     assert!(net.clients[back].connected());
 }
 
+/// How a target app that was suspended finds out its connection dropped.
+#[derive(Debug, Clone, Copy)]
+enum Wake {
+    /// Its timer fires.
+    Tick,
+    /// It reads a ping the controller sent before it gave up.
+    Ping,
+    /// It reads that the connection closed.
+    Close,
+}
+
+/// A controller the user let in, then a target suspended for `asleep` that
+/// wakes as `wake` says. Also returns the controller, its key and its session.
+fn suspended(asleep: Duration, wake: Wake) -> (Net, usize, DeviceKey, String) {
+    let mut net = Net::new(RemoteSettings::default());
+    let key = DeviceKey::generate();
+    let phone = net.connect_with(key.clone(), "Phone", None);
+    net.answer(Answer::Allow);
+    let session = net.clients[phone]
+        .controller
+        .session_id()
+        .unwrap()
+        .to_owned();
+    let ping = net.clients[phone].controller.ping().unwrap();
+    // A suspended app runs no timer and reads nothing.
+    net.now += asleep;
+    match wake {
+        Wake::Tick => net.advance(Duration::ZERO),
+        Wake::Ping => net.send(phone, ping),
+        Wake::Close => net.drop_link(phone),
+    }
+    (net, phone, key, session)
+}
+
+#[test]
+fn a_target_asleep_until_the_controller_gave_up_ends_the_session_as_it_wakes() {
+    // The controller gives up once it heard nothing for IDLE_TIMEOUT and
+    // then couldn't resume for RESUME_GRACE.
+    for wake in [Wake::Tick, Wake::Ping, Wake::Close] {
+        let (mut net, _, key, session) = suspended(IDLE_TIMEOUT + RESUME_GRACE, wake);
+        assert!(net.target.sessions().is_empty(), "{wake:?}");
+        assert_eq!(net.last_sessions().map(Vec::len), Some(0), "{wake:?}");
+        let back = net.connect_with(key, "Phone", Some(session));
+        assert!(!net.clients[back].connected(), "{wake:?}");
+        assert!(net.prompt().is_some(), "{wake:?} asks again");
+    }
+}
+
+#[test]
+fn a_target_asleep_for_a_moment_keeps_its_session() {
+    for wake in [Wake::Tick, Wake::Ping] {
+        let (net, phone, _, _) = suspended(Duration::from_secs(10), wake);
+        assert!(net.clients[phone].connected(), "{wake:?}");
+        assert!(net.target.sessions()[0].connected, "{wake:?}");
+    }
+}
+
+#[test]
+fn a_target_asleep_for_less_than_the_controller_waits_can_still_resume() {
+    // The link went quiet 25 s in, so the session resumes for 30 s from then.
+    let asleep = Duration::from_secs(40);
+    let left = IDLE_TIMEOUT + RESUME_GRACE - asleep;
+    for wake in [Wake::Tick, Wake::Ping, Wake::Close] {
+        let (mut net, _, key, session) = suspended(asleep, wake);
+        assert!(!net.target.sessions()[0].connected, "{wake:?}");
+        assert_eq!(net.target.next_deadline(), Some(net.now + left), "{wake:?}");
+        net.advance(left - Duration::from_secs(1));
+        let back = net.connect_with(key, "Phone", Some(session));
+        assert!(net.clients[back].connected(), "{wake:?}");
+        assert_eq!(net.prompt(), None, "{wake:?}");
+    }
+}
+
 #[test]
 fn pings_keep_a_quiet_connection_open() {
     let mut net = Net::with_mode(ControlMode::Always);
