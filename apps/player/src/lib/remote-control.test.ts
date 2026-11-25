@@ -250,6 +250,20 @@ describe("createRemoteControl", () => {
 		expect(rc.getState().ended, "a new link clears it").toBeNull();
 	});
 
+	it("forgets why a link ended once that's dismissed", async () => {
+		const { b, emit } = backend();
+		const rc = createRemoteControl(b);
+		await rc.start();
+		await rc.connect(tv);
+		const { id } = rc.getState().link!;
+		emit("remote://controller", { deviceId: "tv1", link: id, phase: "closed", reason: "lost" });
+		const changes = vi.fn();
+		rc.subscribe(changes);
+		rc.dismiss();
+		expect(rc.getState().ended).toBeNull();
+		expect(changes).toHaveBeenCalledTimes(1);
+	});
+
 	it("drops the link when connecting fails", async () => {
 		const { b } = backend();
 		b.connect.mockRejectedValueOnce("That device isn't on the network now.");

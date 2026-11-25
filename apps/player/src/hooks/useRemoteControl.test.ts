@@ -117,6 +117,24 @@ describe("useRemoteControl", () => {
 		unmount();
 	});
 
+	it("dismisses why a link ended", async () => {
+		const { result, unmount } = renderHook(() => useRemoteControl());
+		await waitFor(() => expect(handlers.has("remote://controller")).toBe(true));
+		await act(() => result.current.connect(tv));
+		const id = result.current.link!.id;
+		act(() =>
+			handlers.get("remote://controller")!({
+				event: "",
+				id: 0,
+				payload: { deviceId: "tv1", link: id, phase: "closed", reason: "lost" },
+			})
+		);
+		expect(result.current.ended).toStrictEqual({ name: "Living Room", reason: "lost" });
+		act(() => result.current.dismiss());
+		expect(result.current.ended).toBeNull();
+		unmount();
+	});
+
 	it("keeps working when listening fails", async () => {
 		vi.mocked(listen).mockRejectedValueOnce(new Error("no Tauri"));
 		const { unmount } = renderHook(() => useRemoteControl());

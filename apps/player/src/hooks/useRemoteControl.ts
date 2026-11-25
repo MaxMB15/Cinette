@@ -52,6 +52,7 @@ export const remoteControl = (): RemoteControl => {
 export const useRemoteControl = (): RemoteControlState & {
 	connect: RemoteControl["connect"];
 	leave: RemoteControl["leave"];
+	dismiss: RemoteControl["dismiss"];
 } => {
 	const control = remoteControl();
 	const state = useSyncExternalStore(control.subscribe, control.getState);
@@ -68,5 +69,5 @@ export const useRemoteControl = (): RemoteControlState & {
 		// Stryker disable next-line ArrayDeclaration: control is the app's one store, so the effect runs once whatever the list holds.
 		[control]
 	);
-	return { ...state, connect: control.connect, leave: control.leave };
+	return { ...state, connect: control.connect, leave: control.leave, dismiss: control.dismiss };
 };

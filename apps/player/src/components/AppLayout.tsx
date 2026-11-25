@@ -55,6 +55,10 @@ const MainLayout = ({ compact }: { compact: boolean }) => {
 		mpvSetVisible(isPlayer).catch(() => {});
 	}, [isPlayer]);
 
+	// The player has the screen to itself on a phone, where the bars would
+	// sit under the status bar, and in full screen.
+	const barsHidden = isPlayer && (compact || isFullscreen);
+
 	// On a phone the player fills the screen and brings its own back button,
 	// so the tab bar and the insets go away there.
 	return (
@@ -75,12 +79,12 @@ const MainLayout = ({ compact }: { compact: boolean }) => {
 					compact && !isPlayer && "pt-safe pl-safe pr-safe"
 				)}
 			>
-				{/* A phone's player keeps the whole screen; the bars would sit
-				    under the status bar there. */}
-				{!(compact && isPlayer) && controlsOthers() && <RemoteBar />}
+				{!barsHidden && controlsOthers() && <RemoteBar />}
 				{/* A TV that plays over AirPlay or Cast, from any page. */}
-				{!(compact && isPlayer) && playsOnTvs(platform) && <TvBar />}
-				{!(compact && isPlayer) && <ControllersBar />}
+				{!barsHidden && playsOnTvs(platform) && <TvBar />}
+				{!barsHidden && <ControllersBar />}
+				{/* What another device sent here floats over the page, and over
+				    a full screen player too. */}
 				{!(compact && isPlayer) && <ProvidersAddedNotice />}
 				{!(compact && isPlayer) && <HistoryImportedNotice />}
 				<div className="flex-1 min-h-0">

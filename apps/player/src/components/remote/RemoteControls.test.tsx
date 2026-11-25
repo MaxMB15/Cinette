@@ -12,12 +12,14 @@ const control = vi.hoisted(() => ({
 	state: { devices: [], link: null, ended: null } as unknown as RemoteControlState,
 	connect: vi.fn(),
 	leave: vi.fn(),
+	dismiss: vi.fn(),
 }));
 vi.mock("@/hooks/useRemoteControl", () => ({
 	useRemoteControl: () => ({
 		...control.state,
 		connect: control.connect,
 		leave: control.leave,
+		dismiss: control.dismiss,
 	}),
 }));
 
@@ -132,6 +134,7 @@ beforeEach(() => {
 	control.state = { devices: [tv, den], link: null, ended: null };
 	control.connect.mockReset().mockResolvedValue(undefined);
 	control.leave.mockReset().mockResolvedValue(undefined);
+	control.dismiss.mockReset();
 	send.mockClear();
 });
 
@@ -771,8 +774,11 @@ describe("RemoteBar", () => {
 			screen.getByRole("status").querySelector(".lucide-monitor-smartphone")
 		).not.toBeNull();
 		expect(screen.getByRole("status").querySelector(".lucide-tv")).toBeNull();
+		// Dismissing it tells the store, so it stays gone when the bar
+		// comes back after a full screen player.
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-		expect(screen.queryByRole("status")).toBeNull();
+		expect(control.dismiss).toHaveBeenCalledTimes(1);
+		control.state = { ...control.state, ended: null };
 		rerender(<RemoteBar />);
 		expect(screen.queryByRole("status")).toBeNull();
 		control.state = { ...control.state, ended: { name: "Den", reason: "lost" } };

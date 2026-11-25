@@ -36,7 +36,7 @@ export interface Link {
 export interface RemoteControlState {
 	devices: RemoteDevice[];
 	link: Link | null;
-	/** The last link that ended, and why, until another starts. */
+	/** The last link that ended, and why, until another starts or it's dismissed. */
 	ended: { name: string; reason: LinkEnded } | null;
 }
 
@@ -63,6 +63,8 @@ export interface RemoteControl {
 	connect(device: RemoteDevice): Promise<void>;
 	/** Ends the session, or stops asking. */
 	leave(): Promise<void>;
+	/** Forgets the link that ended, once its notice is dismissed. */
+	dismiss(): void;
 }
 
 type ControllerEvent = { deviceId: string; link: number } & LinkPhase;
@@ -194,5 +196,6 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 			set({ link: null });
 			await backend.leave(link.id);
 		},
+		dismiss: () => set({ ended: null }),
 	};
 };

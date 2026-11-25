@@ -61,6 +61,12 @@ const tree = (path: string) => (
 	</MemoryRouter>
 );
 
+const fullscreen = (path: string) => (
+	<FullscreenContext.Provider value={{ isFullscreen: true, setFullscreen: () => {} }}>
+		{tree(path)}
+	</FullscreenContext.Provider>
+);
+
 describe("AppLayout", () => {
 	afterEach(() => {
 		cleanup();
@@ -95,11 +101,6 @@ describe("AppLayout", () => {
 
 	it("hides the sidebar for a full screen player only", () => {
 		platform.layoutMode = "tablet";
-		const fullscreen = (path: string) => (
-			<FullscreenContext.Provider value={{ isFullscreen: true, setFullscreen: () => {} }}>
-				{tree(path)}
-			</FullscreenContext.Provider>
-		);
 		render(fullscreen("/player"));
 		expect(screen.getByRole("complementary").className).toContain("hidden");
 		cleanup();
@@ -236,6 +237,33 @@ describe("AppLayout", () => {
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 			expect(screen.getByText("Providers added")).toBeInTheDocument();
 			expect(screen.getByText("History imported")).toBeInTheDocument();
+		});
+
+		it("leaves the bars off a full screen player, on a Mac and an iPad", () => {
+			for (const [os, layoutMode] of [
+				["macos", "desktop"],
+				["ios", "tablet"],
+			] as const) {
+				platform.os = os;
+				platform.layoutMode = layoutMode;
+				const { unmount } = render(fullscreen("/player"));
+				expect(screen.queryByText("Remote bar")).toBeNull();
+				expect(screen.queryByText("TV bar")).toBeNull();
+				expect(screen.queryByText("Controllers bar")).toBeNull();
+				// What another device sent floats over the video, and comes
+				// only when that device sends it.
+				expect(screen.getByText("Providers added")).toBeInTheDocument();
+				expect(screen.getByText("History imported")).toBeInTheDocument();
+				expect(screen.getByText("page")).toBeInTheDocument();
+				unmount();
+			}
+		});
+
+		it("keeps the bars on the other pages while the window is full screen", () => {
+			render(fullscreen("/"));
+			expect(screen.getByText("Remote bar")).toBeInTheDocument();
+			expect(screen.getByText("TV bar")).toBeInTheDocument();
+			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 		});
 
 		it("shows a device that's only controlled who controls it, and nothing to control others with", () => {
