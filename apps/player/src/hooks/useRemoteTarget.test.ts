@@ -94,7 +94,7 @@ const fakeDestination = () => {
 	const listeners = new Set<(s: PlaybackState) => void>();
 	let current = playingState;
 	const destination = {
-		capabilities: localCapabilities(false),
+		capabilities: localCapabilities(false, 0, 0),
 		getState: () => current,
 		subscribe: (l: (s: PlaybackState) => void) => {
 			listeners.add(l);

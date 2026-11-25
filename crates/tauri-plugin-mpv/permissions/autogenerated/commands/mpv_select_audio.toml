@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-mpv-select-audio"
+description = "Enables the mpv_select_audio command without any pre-configured scope."
+commands.allow = ["mpv_select_audio"]
+
+[[permission]]
+identifier = "deny-mpv-select-audio"
+description = "Denies the mpv_select_audio command without any pre-configured scope."
+commands.deny = ["mpv_select_audio"]

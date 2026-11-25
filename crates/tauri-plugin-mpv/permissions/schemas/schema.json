@@ -487,6 +487,30 @@
           "markdownDescription": "Denies the mpv_seek command without any pre-configured scope."
         },
         {
+          "description": "Enables the mpv_select_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mpv-select-audio",
+          "markdownDescription": "Enables the mpv_select_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mpv_select_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mpv-select-audio",
+          "markdownDescription": "Denies the mpv_select_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mpv_select_subtitle command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mpv-select-subtitle",
+          "markdownDescription": "Enables the mpv_select_subtitle command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mpv_select_subtitle command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mpv-select-subtitle",
+          "markdownDescription": "Denies the mpv_select_subtitle command without any pre-configured scope."
+        },
+        {
           "description": "Enables the mpv_set_bounds command without any pre-configured scope.",
           "type": "string",
           "const": "allow-mpv-set-bounds",
@@ -595,10 +619,10 @@
           "markdownDescription": "Denies the mpv_sub_remove command without any pre-configured scope."
         },
         {
-          "description": "Allows all MPV player and AirPlay commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`\n- `allow-airplay-set-detection`\n- `allow-airplay-choose`\n- `allow-airplay-get-route`\n- `allow-airplay-play`\n- `allow-airplay-pause`\n- `allow-airplay-seek`\n- `allow-airplay-select-subtitle`\n- `allow-airplay-select-audio`\n- `allow-airplay-stop`\n- `allow-airplay-get-state`",
+          "description": "Allows all MPV player and AirPlay commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-select-subtitle`\n- `allow-mpv-select-audio`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`\n- `allow-airplay-set-detection`\n- `allow-airplay-choose`\n- `allow-airplay-get-route`\n- `allow-airplay-play`\n- `allow-airplay-pause`\n- `allow-airplay-seek`\n- `allow-airplay-select-subtitle`\n- `allow-airplay-select-audio`\n- `allow-airplay-stop`\n- `allow-airplay-get-state`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Allows all MPV player and AirPlay commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`\n- `allow-airplay-set-detection`\n- `allow-airplay-choose`\n- `allow-airplay-get-route`\n- `allow-airplay-play`\n- `allow-airplay-pause`\n- `allow-airplay-seek`\n- `allow-airplay-select-subtitle`\n- `allow-airplay-select-audio`\n- `allow-airplay-stop`\n- `allow-airplay-get-state`"
+          "markdownDescription": "Allows all MPV player and AirPlay commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-select-subtitle`\n- `allow-mpv-select-audio`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`\n- `allow-airplay-set-detection`\n- `allow-airplay-choose`\n- `allow-airplay-get-route`\n- `allow-airplay-play`\n- `allow-airplay-pause`\n- `allow-airplay-seek`\n- `allow-airplay-select-subtitle`\n- `allow-airplay-select-audio`\n- `allow-airplay-stop`\n- `allow-airplay-get-state`"
         }
       ]
     }

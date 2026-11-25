@@ -34,12 +34,21 @@ pub struct MediaInfo {
 }
 
 /// One of the item's tracks, as mpv's `track-list` lists it.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ListedTrack {
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ListedTrack {
+    /// The id `aid` and `sid` take. Each kind counts from 1.
+    pub id: i64,
     /// `video`, `audio` or `sub`.
+    #[serde(rename = "type")]
     pub kind: String,
+    pub title: Option<String>,
+    pub lang: Option<String>,
     pub codec: Option<String>,
     pub default: bool,
+    pub selected: bool,
+    /// The track came from a file of its own, as a subtitle file does.
+    pub external: bool,
 }
 
 /// The codec of the audio track a receiver plays from `tracks`: the one
@@ -88,6 +97,8 @@ pub struct PlayerState {
     /// mpv plays in a window of its own, which the frontend can't draw over.
     /// `MpvState` sets it, since the engine doesn't know which window it has.
     pub fallback_active: bool,
+    /// The item's tracks of every kind. Empty until mpv has opened it.
+    pub tracks: Vec<ListedTrack>,
 }
 
 /// Written out by hand so a logged state shows only the stream's origin,
@@ -460,12 +471,8 @@ impl MpvEngine {
             tracing::warn!("[MPV] sub-add failed: {}", e);
             return Err(e.to_string());
         }
-        // A track that came with the stream can't be removed, and is only no
-        // longer selected.
-        if let Some(id) = in_use
-            && let Err(e) = mpv.command("sub-remove", &[&id.to_string()])
-        {
-            tracing::debug!("[MPV] sub-remove {} failed: {}", id, e);
+        if let Some(id) = in_use {
+            remove_replaced_sub(mpv, id);
         }
         if visible {
             set_visible();
@@ -496,9 +503,8 @@ impl MpvEngine {
             Ok(()) => {
                 if let Some(id) = in_use
                     && sub_in_use(mpv) != Some(id)
-                    && let Err(e) = mpv.command("sub-remove", &[&id.to_string()])
                 {
-                    tracing::debug!("[MPV] sub-remove {} failed: {}", id, e);
+                    remove_replaced_sub(mpv, id);
                 }
             }
             Err(e) => tracing::warn!("[MPV] sub-add once open failed: {}", e),
@@ -552,6 +558,38 @@ impl MpvEngine {
             .map_err(|e| e.to_string())
     }
 
+    /// Shows subtitle track `id` of the item, or none. mpv draws it. A file
+    /// `sub_add` added goes, as it does when another file takes its place,
+    /// and mpv no longer adds it when it reloads the stream.
+    pub fn select_subtitle(&mut self, id: Option<i64>) -> Result<(), String> {
+        let mpv = self
+            .mpv
+            .as_ref()
+            .ok_or_else(|| "no mpv instance".to_string())?;
+        let in_use = sub_in_use(mpv);
+        self.sub_on_open = None;
+        let _ = set_sub_files(mpv, None);
+        let sid = id.map_or_else(|| "no".to_string(), |id| id.to_string());
+        mpv.set_property("sid", sid.as_str())
+            .and_then(|()| mpv.set_property("sub-visibility", true))
+            .map_err(|e| e.to_string())?;
+        if let Some(old) = in_use
+            && Some(old) != id
+        {
+            remove_replaced_sub(mpv, old);
+        }
+        Ok(())
+    }
+
+    /// Plays audio track `id` of the item.
+    pub fn select_audio(&self, id: i64) -> Result<(), String> {
+        self.mpv
+            .as_ref()
+            .ok_or_else(|| "no mpv instance".to_string())?
+            .set_property("aid", id)
+            .map_err(|e| e.to_string())
+    }
+
     /// What the current item holds. Empty with no item or no instance.
     pub fn media_info(&self) -> MediaInfo {
         let Some(ref mpv) = self.mpv else {
@@ -562,20 +600,10 @@ impl MpvEngine {
                 .ok()
                 .filter(|v| !v.is_empty())
         };
-        let count = mpv.get_property::<i64>("track-list/count").unwrap_or(0);
-        let tracks: Vec<ListedTrack> = (0..count)
-            .map(|i| ListedTrack {
-                kind: text(&format!("track-list/{i}/type")).unwrap_or_default(),
-                codec: text(&format!("track-list/{i}/codec")),
-                default: mpv
-                    .get_property::<bool>(&format!("track-list/{i}/default"))
-                    .unwrap_or(false),
-            })
-            .collect();
         MediaInfo {
             file_format: text("file-format"),
             video_codec: text("current-tracks/video/codec"),
-            audio_codec: receiver_audio(&tracks),
+            audio_codec: receiver_audio(&track_list(mpv)),
             interlaced: mpv
                 .get_property::<bool>("video-frame-info/interlaced")
                 .unwrap_or(false),
@@ -613,6 +641,7 @@ impl MpvEngine {
                     && !ended_early(Some(state.position), Some(state.duration));
             }
             state.playback_started = self.playback_started;
+            state.tracks = track_list(mpv);
         }
         // After the open check, so the poll that first reports playback has
         // started has the subtitle too.
@@ -653,6 +682,23 @@ fn sub_in_use(mpv: &Mpv) -> Option<i64> {
     mpv.get_property::<String>("sid")
         .ok()
         .and_then(|id| id.parse::<i64>().ok())
+}
+
+/// The tracks of the file mpv has open. mpv gives `track-list` as JSON.
+fn track_list(mpv: &Mpv) -> Vec<ListedTrack> {
+    mpv.get_property::<String>("track-list")
+        .ok()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+/// Removes subtitle track `id`, which another took the place of. A track
+/// that came with the stream can't be removed, and is only no longer
+/// selected.
+fn remove_replaced_sub(mpv: &Mpv, id: i64) {
+    if let Err(e) = mpv.command("sub-remove", &[&id.to_string()]) {
+        tracing::debug!("[MPV] sub-remove {} failed: {}", id, e);
+    }
 }
 
 /// Whether mpv has a file open. `playback-abort` is true from a `loadfile`
@@ -769,6 +815,7 @@ mod tests {
             kind: kind.into(),
             codec: Some(codec.into()),
             default,
+            ..Default::default()
         }
     }
 
@@ -791,8 +838,7 @@ mod tests {
         assert_eq!(receiver_audio(&[track("video", "h264", true)]), None);
         let unknown = ListedTrack {
             kind: "audio".into(),
-            codec: None,
-            default: false,
+            ..Default::default()
         };
         assert_eq!(
             receiver_audio(&[unknown, track("audio", "aac", false)]),
@@ -860,6 +906,21 @@ mod tests {
         assert_eq!(json["reachedEnd"], true);
         assert_eq!(json["waiting"], true);
         assert_eq!(json["fallbackActive"], false);
+    }
+
+    #[test]
+    fn a_track_keeps_the_field_names_mpv_gives_it() {
+        let track = ListedTrack {
+            id: 2,
+            kind: "sub".into(),
+            external: true,
+            ..Default::default()
+        };
+        let json = serde_json::json!({ "id": 2, "type": "sub", "external": true, "src-id": 3 });
+        assert_eq!(serde_json::from_value::<ListedTrack>(json).unwrap(), track);
+        let sent = serde_json::to_value(&track).unwrap();
+        assert_eq!(sent["type"], "sub");
+        assert_eq!(sent["title"], serde_json::Value::Null);
     }
 
     #[test]

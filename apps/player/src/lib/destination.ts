@@ -8,7 +8,7 @@
  */
 
 import type { PlayRoute, RouteDecision } from "@/lib/route";
-import type { Channel, PlayerState, PolledMpvState, SubtitleCue } from "@/lib/types";
+import type { Channel, MpvTrack, PlayerState, PolledMpvState, SubtitleCue } from "@/lib/types";
 
 export type DestinationKind = "local" | "cast" | "airplay" | "cinette";
 
@@ -256,6 +256,23 @@ const localError = (report: LocalPlayerReport): PlaybackError | null => {
 	return null;
 };
 
+/** mpv's tracks of one type as the destination lists them. A subtitle file
+ *  the app added has its file name for a title, so it goes by what it is. */
+const mpvTracks = (tracks: MpvTrack[], type: MpvTrack["type"]): Track[] =>
+	tracks
+		.filter((t) => t.type === type)
+		.map((t) => ({
+			id: String(t.id),
+			label: t.external ? "Downloaded subtitles" : (t.title ?? t.lang ?? `Track ${t.id}`),
+			language: t.lang ?? undefined,
+		}));
+
+/** The id of the track of one type mpv plays, or null for none. */
+const mpvTrackInUse = (tracks: MpvTrack[], type: MpvTrack["type"]): string | null => {
+	const track = tracks.find((t) => t.type === type && t.selected);
+	return track ? String(track.id) : null;
+};
+
 /** The local player's state in the destination's terms. */
 export const localPlaybackState = (
 	report: LocalPlayerReport,
@@ -269,25 +286,28 @@ export const localPlaybackState = (
 	positionAt: report.state.positionAt,
 	duration: report.state.duration,
 	volume: report.state.volume,
-	// mpv's own tracks aren't offered yet. Subtitles come from files the
-	// app downloads, as `externalSubtitles` says.
-	subtitles: [],
-	subtitleId: null,
-	audio: [],
-	audioId: null,
+	subtitles: mpvTracks(report.state.tracks, "sub"),
+	subtitleId: mpvTrackInUse(report.state.tracks, "sub"),
+	audio: mpvTracks(report.state.tracks, "audio"),
+	audioId: mpvTrackInUse(report.state.tracks, "audio"),
 	connection: "connected",
 	error: localError(report),
 });
 
-/** What this device's player can do. Seeking needs a known length, so live
+/** What this device's player can do with `subtitleTracks` subtitle tracks
+ *  and `audioTracks` audio tracks. Seeking needs a known length, so live
  *  channels can't seek. */
-export const localCapabilities = (seekable: boolean): PlaybackCapabilities => ({
+export const localCapabilities = (
+	seekable: boolean,
+	subtitleTracks: number,
+	audioTracks: number
+): PlaybackCapabilities => ({
 	seek: seekable,
 	pause: true,
 	volume: "absolute",
-	subtitles: "none",
+	subtitles: subtitleTracks > 0 ? "select" : "none",
 	externalSubtitles: true,
-	audioTracks: false,
+	audioTracks: audioTracks > 1,
 	resumeAt: true,
 	catalog: false,
 });

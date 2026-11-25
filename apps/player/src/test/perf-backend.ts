@@ -142,6 +142,7 @@ const idleMpv: MpvPlayerState = {
 	reachedEnd: false,
 	waiting: false,
 	fallbackActive: false,
+	tracks: [],
 };
 
 /**

@@ -28,11 +28,11 @@ import type {
 
 // --- MPV Player Commands ---
 
-// Loads, stops and subtitle changes reach mpv one at a time, in the order
-// they were called. Rust runs each command on its own thread, so a stop sent
-// without waiting for it could otherwise land after a newer load and end that
-// stream. A subtitle add names its stream. Sent while that stream still
-// loads, it could reach mpv first and fail.
+// Loads, stops, and subtitle and track changes reach mpv one at a time, in
+// the order they were called. Rust runs each command on its own thread, so a
+// stop sent without waiting for it could otherwise land after a newer load
+// and end that stream. A subtitle add names its stream. Sent while that
+// stream still loads, it could reach mpv first and fail.
 let lastTransition: Promise<void> = Promise.resolve();
 
 const inOrder = (run: () => Promise<void>): Promise<void> => {
@@ -336,6 +336,17 @@ export const mpvSubAdd = (path: string, overlay: boolean, url: string): Promise<
  */
 export const mpvSubRemove = (id: number, url?: string): Promise<void> =>
 	inOrder(() => invoke("plugin:mpv|mpv_sub_remove", { id, url }));
+
+/**
+ * Shows subtitle track `id` from the stream's track list, or none, in place of
+ * a file `mpvSubAdd` added. mpv draws it. It fails once another stream plays.
+ */
+export const mpvSelectSubtitle = (id: number | null, url: string): Promise<void> =>
+	inOrder(() => invoke("plugin:mpv|mpv_select_subtitle", { id, url }));
+
+/** Plays audio track `id` from the stream's track list. It fails once another stream plays. */
+export const mpvSelectAudio = (id: number, url: string): Promise<void> =>
+	inOrder(() => invoke("plugin:mpv|mpv_select_audio", { id, url }));
 
 export const mpvSetSubDelay = (delay: number): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_sub_delay", { delay });

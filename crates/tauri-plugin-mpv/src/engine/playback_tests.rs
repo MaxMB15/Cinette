@@ -3,7 +3,7 @@
 
 //! The engine against a real, headless mpv playing generated local files.
 
-use super::{MediaInfo, MpvEngine, PlayerState};
+use super::{ListedTrack, MediaInfo, MpvEngine, PlayerState};
 use crate::test_support::{
     after_seconds, headless, wait_for, wait_for_position, wait_until, wav, y4m, Hook, MediaDir,
     Reply, Server, POSITION_SLACK,
@@ -137,6 +137,8 @@ fn every_command_needs_a_player() {
     assert_eq!(engine.sub_remove(-1), missing);
     assert_eq!(engine.restore_subtitles("/subs/en.srt", true, 0.0), missing);
     assert_eq!(engine.set_sub_delay(0.5), missing);
+    assert_eq!(engine.select_subtitle(Some(1)), missing);
+    assert_eq!(engine.select_audio(1), missing);
     assert_eq!(
         engine.loadfile("http://example.test/live.ts", None),
         missing
@@ -153,6 +155,7 @@ fn every_command_needs_a_player() {
     assert_eq!(state.volume, 100.0);
     assert!(!state.is_playing && !state.is_paused);
     assert!(!state.playback_started && !state.open_failed);
+    assert!(state.tracks.is_empty());
     // Nothing has played, so the audio check waits for a later poll.
     assert_eq!(state.position, 0.0);
     assert!(!engine.audio_logged_playing);
@@ -677,6 +680,70 @@ fn removes_a_subtitle_track_by_id_while_another_is_selected() {
     engine.sub_remove(1).unwrap();
     assert_eq!(tracks(&engine), 2);
     assert_eq!(selected(&engine), "2");
+}
+
+#[test]
+fn reports_the_tracks_and_switches_to_the_one_picked() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let dub = media.file("dub.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT.as_bytes());
+    let mut engine = engine(&[("pause", "yes")]);
+    start(&mut engine, &path, None);
+    // Tracks with a name and a language, as a stream has them.
+    mpv(&engine)
+        .command("audio-add", &[&dub, "auto", "Dub", "fr"])
+        .unwrap();
+    mpv(&engine)
+        .command("sub-add", &[&format!("memory://{SRT}"), "auto", "English", "en"])
+        .unwrap();
+    engine.sub_add(&subtitles, false).unwrap();
+    let selected = |engine: &mut MpvEngine, kind: &str| -> Vec<i64> {
+        let tracks = engine.get_state().tracks;
+        tracks
+            .iter()
+            .filter(|t| t.kind == kind && t.selected)
+            .map(|t| t.id)
+            .collect()
+    };
+
+    let tracks = engine.get_state().tracks;
+    assert_eq!(tracks.len(), 4, "{tracks:?}");
+    assert_eq!(
+        tracks[1],
+        ListedTrack {
+            id: 2,
+            kind: "audio".into(),
+            title: Some("Dub".into()),
+            lang: Some("fr".into()),
+            codec: Some("pcm_s16le".into()),
+            default: false,
+            selected: false,
+            external: true,
+        }
+    );
+    assert_eq!(tracks[2].title.as_deref(), Some("English"));
+    assert_eq!(selected(&mut engine, "audio"), [1]);
+    assert_eq!(selected(&mut engine, "sub"), [2]);
+
+    engine.select_audio(2).unwrap();
+    assert_eq!(selected(&mut engine, "audio"), [2]);
+
+    // The file the frontend added goes, and mpv draws the track picked.
+    engine.select_subtitle(Some(1)).unwrap();
+    assert_eq!(selected_sub(&engine), "1");
+    assert!(sub_visible(&engine));
+    assert_eq!(track_count(&engine), 3);
+
+    // Picking the track in use keeps it.
+    engine.select_subtitle(Some(1)).unwrap();
+    assert_eq!(track_count(&engine), 3);
+
+    // None shows no subtitles. A reload adds no file.
+    engine.select_subtitle(None).unwrap();
+    assert_eq!(selected_sub(&engine), "no");
+    reload(&engine, &dub);
+    assert_eq!(track_count(&engine), 1);
 }
 
 #[test]

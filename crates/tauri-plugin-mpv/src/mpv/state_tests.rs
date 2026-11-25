@@ -323,6 +323,36 @@ fn subtitles_reach_only_the_stream_they_are_for() {
 }
 
 #[test]
+fn picks_tracks_only_of_the_stream_that_plays() {
+    let app = TestApp::new();
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let dub = media.file("dub.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT);
+    let state = app.state();
+    let not_playing = Err(NOT_PLAYING.to_string());
+    load(&app, &path);
+    wait_for_playback(&state);
+    state.sub_add(&subtitles, true, &path).unwrap();
+    let client = state.inner.lock().unwrap().create_event_client().unwrap();
+    client.command("audio-add", &[&dub, "auto"]).unwrap();
+
+    let other = "http://example.test/other.ts";
+    assert_eq!(state.select_subtitle(None, other), not_playing);
+    assert_eq!(state.select_audio(2, other), not_playing);
+    assert_eq!(property(&state, "sid"), "1");
+    assert_eq!(property(&state, "aid"), "1");
+
+    state.select_audio(2, &path).unwrap();
+    assert_eq!(property(&state, "aid"), "2");
+    // A track of the stream takes the place of the file, which a load for
+    // the same item doesn't bring back.
+    state.select_subtitle(None, &path).unwrap();
+    assert_eq!(property(&state, "sid"), "no");
+    assert_eq!(*state.subtitles.lock().unwrap(), KeptSubtitles::default());
+}
+
+#[test]
 fn closing_the_fallback_window_stops_playback() {
     let app = TestApp::new();
     let events = app.record(&[WINDOW_CLOSED]);

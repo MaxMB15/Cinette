@@ -62,7 +62,7 @@ const state = (overrides: Partial<PlaybackState> = {}): PlaybackState => ({
 
 describe("remotePlayerState", () => {
 	it("moves a playing position on by the time since it was read", () => {
-		const remote = remotePlayerState(state(), channel, localCapabilities(false), 3_500);
+		const remote = remotePlayerState(state(), channel, localCapabilities(false, 0, 0), 3_500);
 		expect(remote.position).toBe(102.5);
 	});
 
@@ -70,19 +70,19 @@ describe("remotePlayerState", () => {
 		const remote = remotePlayerState(
 			state({ status: "paused" }),
 			channel,
-			localCapabilities(true),
+			localCapabilities(true, 0, 0),
 			3_500
 		);
 		expect(remote.position).toBe(100);
 	});
 
 	it("never moves a position back for a clock read before the state", () => {
-		const remote = remotePlayerState(state(), channel, localCapabilities(false), 500);
+		const remote = remotePlayerState(state(), channel, localCapabilities(false, 0, 0), 500);
 		expect(remote.position).toBe(100);
 	});
 
 	it("names the channel with only the fields a controller may see", () => {
-		const remote = remotePlayerState(state(), channel, localCapabilities(false), 1_000);
+		const remote = remotePlayerState(state(), channel, localCapabilities(false, 0, 0), 1_000);
 		expect(remote.item).toStrictEqual({
 			id: "p1-live-7",
 			name: "News",
@@ -103,7 +103,7 @@ describe("remotePlayerState", () => {
 			url: "http://user:pass@Panel.Example:8080/live/1.ts",
 			sources: ["http://backup.example/1.ts", "not a url", "file:///local/1.ts"],
 		};
-		const remote = remotePlayerState(state(), backed, localCapabilities(false), 0);
+		const remote = remotePlayerState(state(), backed, localCapabilities(false, 0, 0), 0);
 		expect(remote.item?.streamHosts).toStrictEqual(["panel.example", "backup.example"]);
 		expect(JSON.stringify(remote)).not.toContain("pass");
 	});
@@ -112,7 +112,7 @@ describe("remotePlayerState", () => {
 		const remote = remotePlayerState(
 			state({ item: { title: "Pilot", contentType: "series", ref: episode.id } }),
 			episode,
-			localCapabilities(true),
+			localCapabilities(true, 0, 0),
 			1_000
 		);
 		expect(remote.item).toMatchObject({
@@ -125,15 +125,15 @@ describe("remotePlayerState", () => {
 
 	it("has no item when nothing plays, even with a channel picked", () => {
 		const idle = state({ status: "idle", item: null });
-		expect(remotePlayerState(idle, channel, localCapabilities(false), 0).item).toBeNull();
-		expect(remotePlayerState(state(), null, localCapabilities(false), 0).item).toBeNull();
+		expect(remotePlayerState(idle, channel, localCapabilities(false, 0, 0), 0).item).toBeNull();
+		expect(remotePlayerState(state(), null, localCapabilities(false, 0, 0), 0).item).toBeNull();
 	});
 
 	it("passes the rest of the state through", () => {
 		const remote = remotePlayerState(
 			state({ status: "buffering", duration: 3_600 }),
 			channel,
-			localCapabilities(true),
+			localCapabilities(true, 0, 0),
 			1_000
 		);
 		expect(remote).toMatchObject({
@@ -179,11 +179,13 @@ describe("remotePlayerState", () => {
 			status: "error",
 			error: { code: "failed", message: "http://iptv.example/user/pass/1.ts ended" },
 		});
-		expect(remotePlayerState(withMessage, channel, localCapabilities(false), 0).error).toBe(
-			"failed"
-		);
+		expect(
+			remotePlayerState(withMessage, channel, localCapabilities(false, 0, 0), 0).error
+		).toBe("failed");
 		const bare = state({ status: "error", error: { code: "refused" } });
-		expect(remotePlayerState(bare, channel, localCapabilities(false), 0).error).toBe("refused");
+		expect(remotePlayerState(bare, channel, localCapabilities(false, 0, 0), 0).error).toBe(
+			"refused"
+		);
 	});
 });
 

@@ -33,8 +33,9 @@ use crate::android::{embedded_options as android_embedded_options, AndroidSurfac
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) type EmbeddedRenderer = (Box<dyn PlatformRenderer>, Vec<(&'static str, &'static str)>);
 
-/// The error for a subtitle change sent for a stream that isn't playing.
-pub(crate) const NOT_PLAYING: &str = "the subtitles are for a stream that isn't playing";
+/// The error for a subtitle or track change sent for a stream that isn't
+/// playing.
+pub(crate) const NOT_PLAYING: &str = "the change is for a stream that isn't playing";
 
 /// The subtitles the frontend gave mpv for the item that plays.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -678,9 +679,27 @@ impl MpvState {
         lock_or_recover(&self.inner).sub_remove(id)
     }
 
-    /// Fails unless `url` plays. Subtitle changes go through here with
-    /// `transition` held, so no load or stop can come between the check and
-    /// the change.
+    /// Shows subtitle track `id` of the stream `url`, or none, in place of
+    /// the subtitle file the frontend added. Nothing changes once another
+    /// stream plays or playback has stopped.
+    pub fn select_subtitle(&self, id: Option<i64>, url: &str) -> Result<(), String> {
+        let _transition = lock_or_recover(&self.transition);
+        self.check_playing(url)?;
+        lock_or_recover(&self.subtitles).file = None;
+        lock_or_recover(&self.inner).select_subtitle(id)
+    }
+
+    /// Plays audio track `id` of the stream `url`. Nothing changes once
+    /// another stream plays or playback has stopped.
+    pub fn select_audio(&self, id: i64, url: &str) -> Result<(), String> {
+        let _transition = lock_or_recover(&self.transition);
+        self.check_playing(url)?;
+        lock_or_recover(&self.inner).select_audio(id)
+    }
+
+    /// Fails unless `url` plays. Subtitle and track changes go through here
+    /// with `transition` held, so no load or stop can come between the check
+    /// and the change.
     fn check_playing(&self, url: &str) -> Result<(), String> {
         if lock_or_recover(&self.inner).current_url() == Some(url) {
             Ok(())

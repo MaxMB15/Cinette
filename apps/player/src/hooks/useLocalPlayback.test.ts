@@ -6,6 +6,7 @@ import { renderHook } from "@testing-library/react";
 import { useLocalPlayback, type LocalPlayer } from "./useLocalPlayback";
 import { UnsupportedError, type PlaybackState } from "@/lib/destination";
 import type { Channel, PolledMpvState } from "@/lib/types";
+import { mpvTrack } from "@/test/destination-fixtures";
 
 const mpvState = (over: Partial<PolledMpvState> = {}): PolledMpvState => ({
 	isPlaying: false,
@@ -19,6 +20,7 @@ const mpvState = (over: Partial<PolledMpvState> = {}): PolledMpvState => ({
 	reachedEnd: false,
 	waiting: false,
 	fallbackActive: false,
+	tracks: [],
 	positionAt: 0,
 	...over,
 });
@@ -36,6 +38,8 @@ const player = (over: Partial<LocalPlayer> = {}): LocalPlayer => ({
 	seek: vi.fn(async () => {}),
 	setVolume: vi.fn(async () => {}),
 	stop: vi.fn(async () => {}),
+	selectSubtitle: vi.fn(async () => {}),
+	selectAudio: vi.fn(async () => {}),
 	...over,
 });
 
@@ -141,16 +145,34 @@ describe("useLocalPlayback", () => {
 		expect(loadChannel).not.toHaveBeenCalled();
 	});
 
-	it("refuses track choices it can't make yet", async () => {
-		const { result } = renderHook(() => useLocalPlayback(player(), null, vi.fn()));
-		await expect(result.current.selectSubtitle("en")).rejects.toMatchObject({
-			code: "unsupported",
-			message: "Choosing a subtitle track isn't supported here",
+	it("picks the tracks by mpv's ids", async () => {
+		const p = player();
+		const { result } = renderHook(() => useLocalPlayback(p, channel, loadChannel));
+		await result.current.selectSubtitle("2");
+		await result.current.selectSubtitle(null);
+		await result.current.selectAudio("3");
+		expect(vi.mocked(p.selectSubtitle).mock.calls).toEqual([[2], [null]]);
+		expect(p.selectAudio).toHaveBeenCalledWith(3);
+	});
+
+	it("offers the track picks once mpv lists the tracks", () => {
+		let p = player();
+		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel, loadChannel));
+		const before = result.current;
+		expect(before.capabilities).toMatchObject({ subtitles: "none", audioTracks: false });
+		const tracks = [
+			mpvTrack({ type: "audio" }),
+			mpvTrack({ type: "audio", id: 2 }),
+			mpvTrack({ type: "sub" }),
+		];
+		p = player({ state: mpvState({ tracks }) });
+		rerender();
+		expect(result.current.capabilities).toMatchObject({
+			subtitles: "select",
+			audioTracks: true,
 		});
-		await expect(result.current.selectAudio("1")).rejects.toMatchObject({
-			code: "unsupported",
-			message: "Choosing an audio track isn't supported here",
-		});
+		expect(result.current).not.toBe(before);
+		expect(result.current.getState().subtitles).toHaveLength(1);
 	});
 
 	it("can seek once the length is known", () => {

@@ -35,7 +35,10 @@ vi.mock("@/lib/tauri", () => ({
 		reachedEnd: false,
 		waiting: false,
 		fallbackActive: false,
+		tracks: [],
 	})),
+	mpvSelectSubtitle: vi.fn(async () => {}),
+	mpvSelectAudio: vi.fn(async () => {}),
 }));
 
 import {
@@ -46,9 +49,12 @@ import {
 	mpvSeek,
 	mpvSetVolume,
 	mpvGetState,
+	mpvSelectSubtitle,
+	mpvSelectAudio,
 } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { deferred } from "@/test/deferred";
+import { mpvTrack } from "@/test/destination-fixtures";
 import { useMpv } from "./useMpv";
 
 const mockMpvLoad = vi.mocked(mpvLoad);
@@ -58,6 +64,8 @@ const mockMpvStop = vi.mocked(mpvStop);
 const mockMpvSeek = vi.mocked(mpvSeek);
 const mockMpvSetVolume = vi.mocked(mpvSetVolume);
 const mockMpvGetState = vi.mocked(mpvGetState);
+const mockMpvSelectSubtitle = vi.mocked(mpvSelectSubtitle);
+const mockMpvSelectAudio = vi.mocked(mpvSelectAudio);
 
 describe("useMpv", () => {
 	beforeEach(() => {
@@ -89,6 +97,7 @@ describe("useMpv", () => {
 			reachedEnd: false,
 			waiting: false,
 			fallbackActive: false,
+			tracks: [],
 			positionAt: expect.any(Number),
 		});
 		expect(result.current.error).toBeNull();
@@ -189,11 +198,13 @@ describe("useMpv", () => {
 			duration: 120,
 			reachedEnd: true,
 			waiting: true,
+			tracks: [mpvTrack({ selected: true })],
 		} as never);
 
 		const { result } = renderHook(() => useMpv());
 		await waitFor(() => expect(result.current.state.reachedEnd).toBe(true));
 		expect(result.current.state.waiting).toBe(true);
+		expect(result.current.state.tracks).toEqual([mpvTrack({ selected: true })]);
 
 		// Now load resets position/duration immediately
 		mockMpvLoad.mockResolvedValue(undefined);
@@ -207,6 +218,7 @@ describe("useMpv", () => {
 		expect(result.current.state.waiting).toBe(false);
 		expect(result.current.state.duration).toBe(0);
 		expect(result.current.state.reachedEnd).toBe(false);
+		expect(result.current.state.tracks).toEqual([]);
 		expect(result.current.firstFrameReady).toBe(false);
 	});
 
@@ -267,6 +279,7 @@ describe("useMpv", () => {
 			reachedEnd: false,
 			waiting: false,
 			fallbackActive: false,
+			tracks: [],
 			positionAt: expect.any(Number),
 		});
 	});
@@ -295,6 +308,55 @@ describe("useMpv", () => {
 
 		expect(mockMpvSetVolume).toHaveBeenCalledWith(75);
 		expect(result.current.state.volume).toBe(75);
+	});
+
+	// ── tracks ────────────────────────────────────────────────────────
+
+	it("picks a track of the stream that plays and shows the pick at once", async () => {
+		mockMpvGetState.mockResolvedValue({
+			currentUrl: "http://vod.url",
+			tracks: [mpvTrack({ id: 1, selected: true }), mpvTrack({ id: 2 })],
+		} as never);
+		const { result } = renderHook(() => useMpv());
+		await waitFor(() => expect(result.current.state.currentUrl).toBe("http://vod.url"));
+
+		const picked = [mpvTrack({ id: 1 }), mpvTrack({ id: 2, selected: true })];
+		mockMpvSelectSubtitle.mockImplementationOnce(async () => {
+			mockMpvGetState.mockResolvedValue({
+				currentUrl: "http://vod.url",
+				tracks: picked,
+			} as never);
+		});
+		await act(async () => {
+			await result.current.selectSubtitle(2);
+		});
+		expect(mockMpvSelectSubtitle).toHaveBeenCalledWith(2, "http://vod.url");
+		expect(result.current.state.tracks).toEqual(picked);
+
+		const audio = [mpvTrack({ id: 1, type: "audio", selected: true })];
+		mockMpvSelectAudio.mockImplementationOnce(async () => {
+			mockMpvGetState.mockResolvedValue({
+				currentUrl: "http://vod.url",
+				tracks: audio,
+			} as never);
+		});
+		await act(async () => {
+			await result.current.selectAudio(1);
+		});
+		expect(mockMpvSelectAudio).toHaveBeenCalledWith(1, "http://vod.url");
+		expect(result.current.state.tracks).toEqual(audio);
+	});
+
+	it("names no stream in a track pick when nothing plays", async () => {
+		const { result } = renderHook(() => useMpv());
+		await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+		await act(async () => {
+			await result.current.selectSubtitle(null);
+			await result.current.selectAudio(2);
+		});
+		expect(mockMpvSelectSubtitle).toHaveBeenCalledWith(null, "");
+		expect(mockMpvSelectAudio).toHaveBeenCalledWith(2, "");
 	});
 
 	describe("polls that cross a seek or volume change", () => {

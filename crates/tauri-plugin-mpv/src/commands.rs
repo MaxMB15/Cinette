@@ -157,6 +157,32 @@ pub async fn mpv_sub_remove<R: Runtime>(
     Ok(())
 }
 
+/// Shows subtitle track `id` of the stream `url`, or none, in place of the
+/// subtitle file the frontend added. It fails once another stream plays.
+#[command]
+pub async fn mpv_select_subtitle<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, MpvState>,
+    id: Option<i64>,
+    url: String,
+) -> Result<(), String> {
+    tracing::info!("[MPV cmd] select_subtitle id={:?}", id);
+    state.select_subtitle(id, &url)
+}
+
+/// Plays audio track `id` of the stream `url`. It fails once another
+/// stream plays.
+#[command]
+pub async fn mpv_select_audio<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, MpvState>,
+    id: i64,
+    url: String,
+) -> Result<(), String> {
+    tracing::info!("[MPV cmd] select_audio id={}", id);
+    state.select_audio(id, &url)
+}
+
 #[command]
 pub async fn mpv_set_sub_delay(
     delay: f64,

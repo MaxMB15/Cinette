@@ -16,6 +16,8 @@ Allows all MPV player and AirPlay commands
 - `allow-mpv-get-media-info`
 - `allow-mpv-sub-add`
 - `allow-mpv-sub-remove`
+- `allow-mpv-select-subtitle`
+- `allow-mpv-select-audio`
 - `allow-mpv-set-sub-delay`
 - `allow-mpv-set-media-info`
 - `allow-mpv-set-skip-intervals`
@@ -451,6 +453,58 @@ Enables the mpv_seek command without any pre-configured scope.
 <td>
 
 Denies the mpv_seek command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-mpv-select-audio`
+
+</td>
+<td>
+
+Enables the mpv_select_audio command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-mpv-select-audio`
+
+</td>
+<td>
+
+Denies the mpv_select_audio command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-mpv-select-subtitle`
+
+</td>
+<td>
+
+Enables the mpv_select_subtitle command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-mpv-select-subtitle`
+
+</td>
+<td>
+
+Denies the mpv_select_subtitle command without any pre-configured scope.
 
 </td>
 </tr>
