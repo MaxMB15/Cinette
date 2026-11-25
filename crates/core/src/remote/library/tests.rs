@@ -278,6 +278,7 @@ fn a_call_goes_over_the_wire_by_name_in_camel_case() {
             re: 3,
             seq: 0,
             last: false,
+            size: None,
             data: String::new(),
         }
     );
@@ -289,6 +290,7 @@ fn a_full_piece_fits_a_frame() {
         re: u64::MAX,
         seq: u32::MAX,
         last: true,
+        size: Some(u64::MAX),
         data: BASE64.encode(vec![0xff; PIECE_BYTES]),
     };
     let len = message::encode(&piece).len();
@@ -330,7 +332,19 @@ fn pieces(messages: &[Message]) -> Vec<(u64, u32, bool, Vec<u8>)> {
                 seq,
                 last,
                 data,
+                ..
             } => (*re, *seq, *last, BASE64.decode(data).unwrap()),
+            other => panic!("not a piece: {other:?}"),
+        })
+        .collect()
+}
+
+/// The size each piece gives.
+fn sizes(messages: &[Message]) -> Vec<Option<u64>> {
+    messages
+        .iter()
+        .map(|m| match m {
+            Message::LibraryData { size, .. } => *size,
             other => panic!("not a piece: {other:?}"),
         })
         .collect()
@@ -382,6 +396,10 @@ fn an_answer_goes_out_a_window_at_a_time() {
     let (messages, _) = library.finished(1, Ok(packed.clone()));
     let first = pieces(&messages);
     assert_eq!(first.len(), WINDOW);
+    // Only the first piece says how big the whole answer is.
+    let mut size = vec![None; WINDOW];
+    size[0] = Some(packed.len() as u64);
+    assert_eq!(sizes(&messages), size);
     for (seq, piece) in first.iter().enumerate() {
         assert_eq!((piece.0, piece.1, piece.2), (1, seq as u32, false));
         assert_eq!(piece.3.len(), PIECE_BYTES);
@@ -393,7 +411,9 @@ fn an_answer_goes_out_a_window_at_a_time() {
     // Only the oldest piece out can be acknowledged.
     assert_eq!(library.acked(1, 1), None);
     assert_eq!(library.acked(2, 0), None);
-    let rest = pieces(&library.acked(1, 0).unwrap());
+    let rest = library.acked(1, 0).unwrap();
+    assert_eq!(sizes(&rest), [None]);
+    let rest = pieces(&rest);
     assert_eq!(rest.len(), 1);
     assert_eq!((rest[0].0, rest[0].1, rest[0].2), (1, WINDOW as u32, true));
     let whole: Vec<u8> = first.into_iter().chain(rest).flat_map(|p| p.3).collect();
@@ -468,35 +488,60 @@ fn an_answer_over_the_limits_is_refused() {
 #[test]
 fn pieces_in_order_make_the_answer() {
     let mut incoming = Incoming::default();
-    assert_eq!(incoming.add(0, false, &BASE64.encode([1, 2])), Piece::More);
-    assert_eq!(incoming.add(1, false, &BASE64.encode([3])), Piece::More);
     assert_eq!(
-        incoming.add(2, true, &BASE64.encode([4])),
+        incoming.add(0, false, Some(4), &BASE64.encode([1, 2])),
+        Piece::More {
+            received: 2,
+            size: Some(4)
+        }
+    );
+    // A size on a later piece counts for nothing.
+    assert_eq!(
+        incoming.add(1, false, Some(9), &BASE64.encode([3])),
+        Piece::More {
+            received: 3,
+            size: Some(4)
+        }
+    );
+    assert_eq!(
+        incoming.add(2, true, None, &BASE64.encode([4])),
         Piece::Done(vec![1, 2, 3, 4])
+    );
+    // An older target says no size.
+    let mut incoming = Incoming::default();
+    assert_eq!(
+        incoming.add(0, false, None, &BASE64.encode([1])),
+        Piece::More {
+            received: 1,
+            size: None
+        }
     );
 }
 
 #[test]
 fn a_piece_out_of_order_bad_or_too_big_breaks_the_answer() {
     let mut incoming = Incoming::default();
-    assert_eq!(incoming.add(1, false, ""), Piece::Broken);
-    assert_eq!(incoming.add(0, false, "not base64!"), Piece::Broken);
+    assert_eq!(incoming.add(1, false, None, ""), Piece::Broken);
+    assert_eq!(incoming.add(0, false, None, "not base64!"), Piece::Broken);
     let full = BASE64.encode(vec![0; PIECE_BYTES]);
-    assert_eq!(incoming.add(0, false, &full), Piece::More);
+    assert!(matches!(
+        incoming.add(0, false, None, &full),
+        Piece::More { .. }
+    ));
     // The same piece again is out of order.
-    assert_eq!(incoming.add(0, false, &full), Piece::Broken);
+    assert_eq!(incoming.add(0, false, None, &full), Piece::Broken);
     let over = BASE64.encode(vec![0; PIECE_BYTES + 1]);
-    assert_eq!(incoming.add(1, false, &over), Piece::Broken);
+    assert_eq!(incoming.add(1, false, None, &over), Piece::Broken);
     // The whole answer may come to MAX_PACKED, and no more.
     let mut incoming = Incoming {
         packed: vec![0; MAX_PACKED - 1],
-        seq: 0,
+        ..Incoming::default()
     };
     assert_eq!(
-        incoming.add(0, false, &BASE64.encode([0, 0])),
+        incoming.add(0, false, None, &BASE64.encode([0, 0])),
         Piece::Broken
     );
-    match incoming.add(0, true, &BASE64.encode([0])) {
+    match incoming.add(0, true, None, &BASE64.encode([0])) {
         Piece::Done(packed) => assert_eq!(packed.len(), MAX_PACKED),
         other => panic!("{other:?}"),
     }
@@ -543,11 +588,23 @@ fn a_big_answer_reaches_the_controller_whole() {
     let packed = data(3 * WINDOW * PIECE_BYTES);
     finish(&mut net, conn, request, Ok(packed.clone()));
     let events = &net.clients[phone].events;
-    let more = events
+    let total = packed.len() as u64;
+    // Every piece says how much came, the last one too.
+    let progress: Vec<_> = events
         .iter()
-        .filter(|e| **e == Event::LibraryPiece { request: id })
-        .count();
-    assert_eq!(more, 3 * WINDOW - 1);
+        .filter_map(|e| match e {
+            Event::LibraryPiece {
+                request,
+                received,
+                total,
+            } => Some((*request, *received, *total)),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<_> = (1..=3 * WINDOW as u64)
+        .map(|n| (id, n * PIECE_BYTES as u64, Some(total)))
+        .collect();
+    assert_eq!(progress, expected);
     assert_eq!(
         events.last(),
         Some(&Event::Library {
@@ -684,6 +741,7 @@ fn piece(re: u64, seq: u32, last: bool, bytes: &[u8]) -> Message {
         re,
         seq,
         last,
+        size: None,
         data: BASE64.encode(bytes),
     }
 }
@@ -695,7 +753,14 @@ fn a_controller_acknowledges_every_piece_even_of_a_broken_answer() {
     let id = ask_for(&mut controller, LibraryCall::Channels);
     assert_eq!(
         piece_to(&mut controller, &mut target, &piece(id, 0, false, &[1])),
-        (vec![Event::LibraryPiece { request: id }], 1)
+        (
+            vec![Event::LibraryPiece {
+                request: id,
+                received: 1,
+                total: None
+            }],
+            1
+        )
     );
     assert_eq!(
         piece_to(&mut controller, &mut target, &piece(id, 2, true, &[3])),
@@ -723,10 +788,18 @@ fn the_last_piece_hands_over_the_answer_once() {
     let (events, _) = piece_to(&mut controller, &mut target, &piece(id, 1, true, &[3]));
     assert_eq!(
         events,
-        [Event::Library {
-            request: id,
-            packed: vec![1, 2, 3]
-        }]
+        [
+            // The last piece of an answer in pieces says all of it came.
+            Event::LibraryPiece {
+                request: id,
+                received: 3,
+                total: Some(3)
+            },
+            Event::Library {
+                request: id,
+                packed: vec![1, 2, 3]
+            }
+        ]
     );
     let (events, _) = piece_to(&mut controller, &mut target, &piece(id, 0, true, &[1]));
     assert!(events.is_empty());

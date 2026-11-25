@@ -243,6 +243,8 @@ struct Seen {
     states: Vec<VersionedState>,
     transfers: Vec<ControllerEvent>,
     names: Vec<String>,
+    /// How much of a library answer had come, and of how much.
+    progress: Vec<(u64, Option<u64>)>,
 }
 
 struct Recorder {
@@ -268,6 +270,10 @@ impl LinkHost for Recorder {
     }
     fn renamed(&self, _: u64, _: &DeviceId, name: &str) {
         self.seen.lock().unwrap().names.push(name.to_owned());
+        let _ = self.tx.send(());
+    }
+    fn library_progress(&self, _: u64, _: &DeviceId, received: u64, total: Option<u64>) {
+        self.seen.lock().unwrap().progress.push((received, total));
         let _ = self.tx.send(());
     }
 }
@@ -1276,6 +1282,12 @@ async fn a_library_call_gets_its_answer_in_pieces_or_its_failure() {
     let packed = link.handle.library(LibraryCall::Channels).await.unwrap();
     assert!(packed.len() > PIECE_BYTES);
     assert_eq!(unpack(&packed, MAX_UNPACKED).unwrap(), library_answer());
+    // Each piece told the host how much had come, ending with all of it.
+    let size = packed.len() as u64;
+    let progress = link.recorder.seen.lock().unwrap().progress.clone();
+    assert_eq!(progress.first(), Some(&(PIECE_BYTES as u64, Some(size))));
+    assert_eq!(progress.last(), Some(&(size, Some(size))));
+    assert!(progress.windows(2).all(|w| w[0].0 < w[1].0), "{progress:?}");
     assert_eq!(
         link.handle.library(LibraryCall::Providers).await,
         Err(LinkError::Refused(ErrorCode::Failed))

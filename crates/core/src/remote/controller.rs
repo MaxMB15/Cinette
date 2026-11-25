@@ -70,8 +70,15 @@ pub enum Event {
     /// [`super::library::unpack`]. A call that failed gets
     /// [`Event::Reply`] instead.
     Library { request: u64, packed: Vec<u8> },
-    /// A piece of the answer to a library call came, and more are coming.
-    LibraryPiece { request: u64 },
+    /// A piece of an answer to a library call that comes in more than one
+    /// piece. `received` deflated bytes of it came, of `total` when the
+    /// target said. On the last piece they're the same, and
+    /// [`Event::Library`] follows.
+    LibraryPiece {
+        request: u64,
+        received: u64,
+        total: Option<u64>,
+    },
     /// An error not tied to a request.
     Error(ErrorCode),
     /// Something about the transfer this controller asked for.
@@ -317,6 +324,7 @@ impl Controller {
                         re,
                         seq,
                         last,
+                        size,
                         data,
                     }) => {
                         // Every piece is acknowledged, even of an answer
@@ -324,12 +332,30 @@ impl Controller {
                         if let Ok(bytes) = channel.seal(&Message::LibraryAck { re, seq }) {
                             out.send.push(bytes);
                         }
-                        let piece = self.library.get_mut(&re).map(|i| i.add(seq, last, &data));
+                        let piece = self
+                            .library
+                            .get_mut(&re)
+                            .map(|i| i.add(seq, last, size, &data));
                         match piece {
                             None => {}
-                            Some(Piece::More) => out.events.push(Event::LibraryPiece { request: re }),
+                            Some(Piece::More { received, size }) => {
+                                out.events.push(Event::LibraryPiece {
+                                    request: re,
+                                    received,
+                                    total: size,
+                                })
+                            }
                             Some(Piece::Done(packed)) => {
                                 self.library.remove(&re);
+                                // An answer in one piece needs no progress.
+                                if seq > 0 {
+                                    let size = packed.len() as u64;
+                                    out.events.push(Event::LibraryPiece {
+                                        request: re,
+                                        received: size,
+                                        total: Some(size),
+                                    });
+                                }
                                 out.events.push(Event::Library {
                                     request: re,
                                     packed,

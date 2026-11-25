@@ -6,12 +6,13 @@ import { useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { ChannelList } from "@/components/channels/ChannelList";
+import { RemoteLoading } from "@/components/remote/RemoteLoading";
 import { ChannelsContext, useChannels } from "@/hooks/useChannels";
 import { NoDownloadsProvider } from "@/hooks/useDownloads";
 import { LibraryProvider, type PlayState } from "@/hooks/useLibrary";
 import { deriveCategories } from "@/lib/channels";
 import type { PlaybackItem } from "@/lib/destination";
-import { libraryOf, remoteItemId, remoteSource } from "@/lib/library";
+import { libraryOf, remoteItemId, remoteSource, type Source } from "@/lib/library";
 import { channelsQuery, providersQuery, showFavorite } from "@/lib/queries";
 import type { Link } from "@/lib/remote-control";
 import type { Channel, Provider } from "@/lib/types";
@@ -27,17 +28,54 @@ const NO_PROVIDERS: Provider[] = [];
 const KEEP_MS = 60 * 60 * 1000;
 
 /**
+ * The last link to each device, by its id. A new link to the same device
+ * shows what that one loaded at once, while its own copy loads.
+ */
+const lastLinks = new Map<string, number>();
+
+/**
+ * How long a list stays as it is. One an earlier link loaded, which has no
+ * load time, loads again; one this link loaded stays.
+ */
+const loadIfEarlier = (query: { state: { dataUpdatedAt: number } }) =>
+	query.state.dataUpdatedAt === 0 ? 0 : Infinity;
+
+/**
  * This device's channel screens, showing the library of the device `link`
  * controls. Picking an item there plays it on that device, and a change to a
- * favorite, a pinned group or the history changes it there.
+ * favorite, a pinned group or the history changes it there. Until the
+ * library loads, it shows how far it got and `onLeave` disconnects.
  */
-export const RemoteLibrary = ({ link }: { link: Link }) => {
+export const RemoteLibrary = ({ link, onLeave }: { link: Link; onLeave: () => void }) => {
 	const source = remoteSource(link.id);
 	const own = useChannels();
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
-	const channels = useQuery({ ...channelsQuery(source), gcTime: KEEP_MS });
-	const providers = useQuery({ ...providersQuery(source), gcTime: KEEP_MS });
+	const earlier = lastLinks.get(link.deviceId);
+	/** What the earlier link to this device loaded for `query`, if anything. */
+	const earlierData = <T,>(query: (source: Source) => { queryKey: readonly unknown[] }) =>
+		// Stryker disable next-line ConditionalExpression: remoteSource(undefined) is "remote:undefined", which names no list, so getQueryData gives undefined either way.
+		earlier === undefined
+			? undefined
+			: queryClient.getQueryData<T>(query(remoteSource(earlier)).queryKey);
+	const reuse = { gcTime: KEEP_MS, staleTime: loadIfEarlier, initialDataUpdatedAt: 0 };
+	const channels = useQuery({
+		...channelsQuery(source),
+		...reuse,
+		initialData: () => earlierData<Channel[]>(channelsQuery),
+	});
+	const providers = useQuery({
+		...providersQuery(source),
+		...reuse,
+		initialData: () => earlierData<Provider[]>(providersQuery),
+	});
+	useEffect(
+		() => {
+			lastLinks.set(link.deviceId, link.id);
+		},
+		// Stryker disable next-line ArrayDeclaration: the page keys this by the link, so neither changes while it shows.
+		[link.deviceId, link.id]
+	);
 	const list = channels.data ?? NO_CHANNELS;
 	const categories = useMemo(() => deriveCategories(list), [list]);
 	const [message, setMessage] = useState<string | null>(null);
@@ -75,12 +113,20 @@ export const RemoteLibrary = ({ link }: { link: Link }) => {
 	const toggleFavorite = async (id: string) => {
 		try {
 			showFavorite(queryClient, source, id, await libraryOf(source).toggleFavorite(id));
+			// A copy that was loading may have been read before the change.
+			const { queryKey } = channelsQuery(source);
+			if (queryClient.isFetching({ queryKey }) > 0)
+				void queryClient.refetchQueries({ queryKey });
 		} catch {
 			setMessage(`Couldn't change the favorites on ${link.name}.`);
 		}
 	};
 
-	if (channels.isError) {
+	if (channels.data === undefined && !channels.isError) {
+		return <RemoteLoading link={link} onLeave={onLeave} />;
+	}
+
+	if (channels.data === undefined) {
 		return (
 			<div className="flex flex-col items-center justify-center h-full gap-3 p-8 text-center">
 				<p className="text-sm text-muted-foreground">
@@ -93,7 +139,7 @@ export const RemoteLibrary = ({ link }: { link: Link }) => {
 		);
 	}
 
-	if (channels.isSuccess && list.length === 0) {
+	if (list.length === 0) {
 		return (
 			<div className="flex flex-col items-center justify-center h-full gap-3 p-8 text-center">
 				<p className="text-base font-semibold">No channels on {link.name}</p>
@@ -112,7 +158,7 @@ export const RemoteLibrary = ({ link }: { link: Link }) => {
 					channels: list,
 					categories,
 					providers: providers.data ?? NO_PROVIDERS,
-					loading: channels.isPending,
+					loading: false,
 					toggleFavorite,
 					// This device's guide refreshes say nothing about that one's.
 					guideVersion: 0,

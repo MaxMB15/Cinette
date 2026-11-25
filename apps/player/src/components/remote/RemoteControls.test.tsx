@@ -118,7 +118,16 @@ const send = vi.fn<(command: unknown) => Promise<number>>(() => Promise.resolve(
 
 const link = (phase: Link["phase"], code: string | null = null, features: string[] = []): Link => {
 	const destination = createCinetteDestination("tv1", "Living Room", send);
-	return { id: 3, deviceId: "tv1", name: "Living Room", phase, code, features, destination };
+	return {
+		id: 3,
+		deviceId: "tv1",
+		name: "Living Room",
+		deviceType: "fire-tv",
+		phase,
+		code,
+		features,
+		destination,
+	};
 };
 
 /** A leave as the store does it: the link goes here at once, and then

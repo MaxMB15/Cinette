@@ -35,7 +35,7 @@ struct Running {
     kept: Arc<Mutex<Vec<bool>>>,
 }
 
-const EVENTS: [&str; 15] = [
+const EVENTS: [&str; 16] = [
     "remote://save-progress",
     "remote://library-changed",
     "remote://history-imported",
@@ -51,6 +51,7 @@ const EVENTS: [&str; 15] = [
     "remote://providers-added",
     "remote://renamed",
     "remote://blocked",
+    "remote://library-progress",
 ];
 
 impl Running {
@@ -1184,6 +1185,30 @@ async fn only_the_current_link_reaches_the_webview() {
     assert_eq!(controller["phase"], json!("connected"));
     let shown = running.event("remote://state").await;
     assert_eq!(shown["state"]["version"], json!(2));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn library_progress_reaches_the_webview_for_the_current_link_only() {
+    let mut running = Running::start(|_| {}).await;
+    let own = DeviceKey::generate().device_id();
+    let device = DeviceKey::generate().device_id();
+    let host = TauriLinkHost {
+        transfers: Arc::new(Transfers::untracked()),
+        app: running.app.handle(),
+        devices: Arc::new(Mutex::new(Devices::new(own))),
+        link: Arc::new(Mutex::new(Some(LinkHandle::detached(2, device.clone())))),
+        throttle: Arc::new(Mutex::new(Throttle::default())),
+        sending: Arc::new(Mutex::new(None)),
+        history: Arc::new(Mutex::new(None)),
+    };
+    // Link 1 was replaced by link 2.
+    host.library_progress(1, &device, 7, Some(9));
+    host.library_progress(2, &device, 3, Some(8));
+    host.library_progress(2, &device, 5, None);
+    let first = running.event("remote://library-progress").await;
+    assert_eq!(first, json!({ "link": 2, "received": 3, "total": 8 }));
+    let second = running.event("remote://library-progress").await;
+    assert_eq!(second, json!({ "link": 2, "received": 5, "total": null }));
 }
 
 #[test]

@@ -5210,6 +5210,7 @@ describe("another Cinette device", () => {
 			id: 1,
 			deviceId: "dev1",
 			name,
+			deviceType: "mac",
 			phase,
 			code: null,
 			features: [],

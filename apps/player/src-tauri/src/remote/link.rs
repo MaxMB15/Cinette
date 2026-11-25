@@ -140,6 +140,16 @@ pub trait LinkHost: Send + Sync + 'static {
     fn transfer(&self, _link: u64, _device: &DeviceId, _event: &ControllerEvent) {}
     /// The other device has a new name.
     fn renamed(&self, _link: u64, _device: &DeviceId, _name: &str) {}
+    /// A piece of a library answer that comes in pieces came: `received`
+    /// deflated bytes of `total`, when the other device said.
+    fn library_progress(
+        &self,
+        _link: u64,
+        _device: &DeviceId,
+        _received: u64,
+        _total: Option<u64>,
+    ) {
+    }
 }
 
 /// Where to reach the target. Asked again before each attempt, since its
@@ -710,8 +720,11 @@ async fn connection(
                             }
                             wait_for_library(&mut waiting, last_heard + config.limits.request);
                         }
-                        Event::LibraryPiece { .. } => {
+                        Event::LibraryPiece {
+                            received, total, ..
+                        } => {
                             wait_for_library(&mut waiting, last_heard + config.limits.request);
+                            host.library_progress(link, device, received, total);
                         }
                         Event::Page { request, items, next } => {
                             if let Some((Waiting::Catalog(reply), _)) = waiting.remove(&request) {

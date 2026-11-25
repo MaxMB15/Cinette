@@ -39,17 +39,27 @@ const BUTTON = cn(
 	"px-3 py-1.5 text-xs rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
 );
 
+/** Another Cinette device: a TV, or a phone or computer. */
+export const DeviceIcon = ({
+	deviceType,
+	className,
+}: {
+	deviceType?: string;
+	className: string;
+}) =>
+	deviceType && isTv(deviceType) ? (
+		<Tv className={className} aria-hidden />
+	) : (
+		<MonitorSmartphone className={className} aria-hidden />
+	);
+
 const EntryIcon = ({ entry }: { entry: PickerEntry }) => {
 	const className = cn("h-5 w-5 shrink-0");
 	switch (entry.kind) {
 		case "local":
 			return <Laptop className={className} aria-hidden />;
 		case "cinette":
-			return entry.deviceType && isTv(entry.deviceType) ? (
-				<Tv className={className} aria-hidden />
-			) : (
-				<MonitorSmartphone className={className} aria-hidden />
-			);
+			return <DeviceIcon deviceType={entry.deviceType} className={className} />;
 		case "cast":
 			return <Cast className={className} aria-hidden />;
 		case "airplay":
