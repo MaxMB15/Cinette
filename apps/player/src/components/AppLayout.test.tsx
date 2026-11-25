@@ -72,6 +72,7 @@ describe("AppLayout", () => {
 		cleanup();
 		mounts.mockClear();
 		vi.mocked(mpvSetVisible).mockClear();
+		platform.os = "ios";
 		platform.layoutMode = "desktop";
 	});
 
@@ -97,6 +98,34 @@ describe("AppLayout", () => {
 		cleanup();
 		render(tree("/player"));
 		expect(screen.getByRole("navigation").className).toContain("hidden");
+	});
+
+	it("keeps a phone's pages clear of the notch, and an iPhone's top only upright", () => {
+		platform.layoutMode = "mobile";
+		const { unmount } = render(tree("/"));
+		// Sideways, an iPhone's notch is at a side and the status bar is hidden.
+		expect(screen.getByRole("main")).toHaveClass("portrait:pt-safe", "pl-safe", "pr-safe");
+		expect(screen.getByRole("main")).not.toHaveClass("pt-safe");
+		unmount();
+		// An Android phone shows its status bar sideways too.
+		platform.os = "android";
+		render(tree("/"));
+		expect(screen.getByRole("main")).toHaveClass("pt-safe", "pl-safe", "pr-safe");
+		expect(screen.getByRole("main")).not.toHaveClass("portrait:pt-safe");
+	});
+
+	it("leaves the insets of the page to the sidebar layout and a phone's player", () => {
+		for (const [layoutMode, path] of [
+			["desktop", "/"],
+			["tablet", "/"],
+			["mobile", "/player"],
+		] as const) {
+			platform.layoutMode = layoutMode;
+			const { unmount } = render(tree(path));
+			for (const inset of ["pt-safe", "portrait:pt-safe", "pl-safe", "pr-safe"])
+				expect(screen.getByRole("main")).not.toHaveClass(inset);
+			unmount();
+		}
 	});
 
 	it("hides the sidebar for a full screen player only", () => {

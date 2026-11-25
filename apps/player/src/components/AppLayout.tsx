@@ -76,7 +76,15 @@ const MainLayout = ({ compact }: { compact: boolean }) => {
 				className={cn(
 					"flex-1 overflow-hidden flex flex-col",
 					compact && "min-h-0",
-					compact && !isPlayer && "pt-safe pl-safe pr-safe"
+					// An iPhone in landscape hides the status bar and has its
+					// notch or Dynamic Island at a side, so only the sides need
+					// room. iOS 26 can still report a top inset there after the
+					// phone turns, which left a gap above the bars.
+					compact &&
+						!isPlayer && [
+							"pl-safe pr-safe",
+							platform === "ios" ? "portrait:pt-safe" : "pt-safe",
+						]
 				)}
 			>
 				{!barsHidden && controlsOthers() && <RemoteBar />}
