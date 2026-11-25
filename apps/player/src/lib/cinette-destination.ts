@@ -203,6 +203,22 @@ export class RemoteCommandError extends Error {
 	}
 }
 
+/** What to say when a command to `name` failed. Only a link that isn't up
+ *  means the device couldn't be reached; it answered every other code. */
+export const remoteControlMessage = (name: string, error: unknown): string => {
+	switch (error instanceof RemoteCommandError ? error.code : null) {
+		case "link_not_connected":
+			return `Couldn't reach ${name}.`;
+		case "link_timed_out":
+			return `${name} didn't respond.`;
+		case "link_busy":
+		case "rate_limited":
+			return `Too many commands went to ${name} at once. Try again in a moment.`;
+		default:
+			return `${name} couldn't do that.`;
+	}
+};
+
 /** What a rejected command becomes: the destination's own error for what
  *  isn't supported there, and a {@link RemoteCommandError} for the rest. */
 export const commandError = (e: unknown): Error => {
@@ -211,6 +227,11 @@ export const commandError = (e: unknown): Error => {
 		? new UnsupportedError("That on the other device")
 		: new RemoteCommandError(code);
 };
+
+/** The least time between two volumes sent to the other device. A slider
+ *  sets one for every step it moves, faster than the other device takes
+ *  commands. */
+export const VOLUME_GAP_MS = 100;
 
 /** A destination for another Cinette device, and the way to feed it. */
 export interface CinetteDestination extends PlaybackDestination {
@@ -257,6 +278,21 @@ export const createCinetteDestination = (
 	};
 	const run = async (command: () => RemoteCommand): Promise<void> => {
 		await sent(command());
+	};
+	// One volume goes out at a time, at most one every VOLUME_GAP_MS. Only the
+	// newest one set meanwhile goes next, and the ones it replaced resolve
+	// without being sent.
+	let volumeTurn: Promise<unknown> = Promise.resolve();
+	let newestVolume = {};
+	const setVolume = async (volume: number): Promise<void> => {
+		const mine = {};
+		newestVolume = mine;
+		await volumeTurn;
+		if (newestVolume !== mine) return;
+		const done = run(() => ({ action: "volume", value: Math.round(volume) }));
+		const gap = new Promise((resolve) => setTimeout(resolve, VOLUME_GAP_MS));
+		volumeTurn = Promise.allSettled([done, gap]);
+		await done;
 	};
 	return {
 		id: `cinette:${deviceId}`,
@@ -312,7 +348,7 @@ export const createCinetteDestination = (
 		play: () => run(() => ({ action: "play", itemId: current() })),
 		pause: () => run(() => ({ action: "pause", itemId: current() })),
 		seek: (seconds) => run(() => ({ action: "seek", itemId: current(), to: seconds })),
-		setVolume: (volume) => run(() => ({ action: "volume", value: Math.round(volume) })),
+		setVolume,
 		selectSubtitle: (trackId) =>
 			run(() => ({ action: "subtitle", itemId: current(), trackId })),
 		selectAudio: (trackId) => run(() => ({ action: "audio", itemId: current(), trackId })),

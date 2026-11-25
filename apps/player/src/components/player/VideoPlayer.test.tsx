@@ -5259,10 +5259,26 @@ describe("another Cinette device", () => {
 		renderPlayer(null);
 		await flush();
 		const { link, send } = linkTo();
-		send.mockRejectedValue("unreachable");
+		send.mockRejectedValue("link_not_connected");
 		act(() => fakeRemote.set(link));
 		await press(" ");
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
+	});
+
+	it("says the other device refused a volume, not that it couldn't be reached", async () => {
+		renderPlayer(null);
+		await flush();
+		const { link, send } = linkTo();
+		send.mockRejectedValue("rate_limited");
+		act(() => fakeRemote.set(link));
+		const volume = within(panel()!).getByRole("slider", { name: "Volume" });
+		fireEvent.keyDown(volume, { key: "ArrowLeft" });
+		await flush();
+		expect(send.mock.calls).toStrictEqual([[{ action: "volume", value: 54 }]]);
+		// The device answered, so it was reached.
+		expect(screen.getByRole("alert").textContent).toBe(
+			"Too many commands went to Den Mac at once. Try again in a moment."
+		);
 	});
 
 	/** An episode of the series s9 on the other device. */
@@ -5310,7 +5326,7 @@ describe("another Cinette device", () => {
 
 	it("says when the episode couldn't go to the other device", async () => {
 		const { send } = await playingEpisodeTwo();
-		send.mockRejectedValueOnce("unreachable");
+		send.mockRejectedValueOnce("link_not_connected");
 		fireEvent.click(within(panel()!).getByRole("button", { name: "Next episode" }));
 		await flush();
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
@@ -5344,7 +5360,7 @@ describe("another Cinette device", () => {
 		renderPlayer(null);
 		await flush();
 		const { link, send } = linkTo();
-		send.mockRejectedValue("unreachable");
+		send.mockRejectedValue("link_not_connected");
 		act(() => fakeRemote.set({ ...link, name: "Study Mac" }));
 		await press(" ");
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Study Mac.");
@@ -5353,7 +5369,7 @@ describe("another Cinette device", () => {
 	it("keeps its note when a cast starts later", async () => {
 		await openItem(lanternKeeper());
 		const { link, send } = linkTo();
-		send.mockRejectedValue("unreachable");
+		send.mockRejectedValue("link_not_connected");
 		act(() => fakeRemote.set(link));
 		await press(" ");
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
@@ -5417,7 +5433,7 @@ describe("another Cinette device", () => {
 		renderPlayer(null);
 		await flush();
 		const { link, send } = linkTo();
-		send.mockRejectedValue("unreachable");
+		send.mockRejectedValue("link_not_connected");
 		act(() => fakeRemote.set(link));
 		fireEvent.click(within(panel()!).getByRole("button", { name: "Pause" }));
 		await flush();

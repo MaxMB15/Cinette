@@ -8,7 +8,9 @@ import {
 	createCinetteDestination,
 	RemoteCommandError,
 	remoteCapabilities,
+	remoteControlMessage,
 	remotePlaybackState,
+	VOLUME_GAP_MS,
 	type RemoteSnapshot,
 	type VersionedSnapshot,
 } from "./cinette-destination";
@@ -274,6 +276,66 @@ describe("createCinetteDestination", () => {
 		expect(new RemoteCommandError("link_busy").name).toBe("RemoteCommandError");
 	});
 
+	it("sends only the newest of the volumes set while one is on its way", async () => {
+		vi.useFakeTimers();
+		try {
+			const sent: RemoteCommand[] = [];
+			let answer = () => {};
+			const send = vi.fn((command: RemoteCommand) => {
+				sent.push(command);
+				return new Promise<unknown>((resolve) => {
+					answer = () => resolve(undefined);
+				});
+			});
+			const d = createCinetteDestination("dev1", "TV", send);
+			const first = d.setVolume(10);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(sent).toStrictEqual([{ action: "volume", value: 10 }]);
+			// A slider moving on sets these before the first is done.
+			const replaced = d.setVolume(20);
+			const newest = d.setVolume(30);
+			await vi.advanceTimersByTimeAsync(VOLUME_GAP_MS * 3);
+			expect(sent, "nothing more until the first is done").toHaveLength(1);
+			answer();
+			await vi.advanceTimersByTimeAsync(0);
+			await expect(first).resolves.toBeUndefined();
+			await expect(replaced).resolves.toBeUndefined();
+			expect(sent).toStrictEqual([
+				{ action: "volume", value: 10 },
+				{ action: "volume", value: 30 },
+			]);
+			answer();
+			await expect(newest).resolves.toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("waits a moment after a volume before it sends the next, even a refused one", async () => {
+		vi.useFakeTimers();
+		try {
+			const sent: RemoteCommand[] = [];
+			const send = vi.fn(async (command: RemoteCommand): Promise<unknown> => {
+				sent.push(command);
+				if (command.action === "volume" && command.value === 10) throw "rate_limited";
+				return undefined;
+			});
+			const d = createCinetteDestination("dev1", "TV", send);
+			await expect(d.setVolume(10)).rejects.toMatchObject({ code: "rate_limited" });
+			const next = d.setVolume(20);
+			await vi.advanceTimersByTimeAsync(VOLUME_GAP_MS - 1);
+			expect(sent).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(1);
+			await expect(next).resolves.toBeUndefined();
+			expect(sent).toStrictEqual([
+				{ action: "volume", value: 10 },
+				{ action: "volume", value: 20 },
+			]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("names a loaded item until the other device's next state", async () => {
 		const { d } = destination();
 		d.receive(
@@ -402,5 +464,24 @@ describe("createCinetteDestination", () => {
 		d.receive(versioned(snapshot()), 900);
 		expect(seen).toStrictEqual(["idle/connected/0", "paused/connected/500"]);
 		expect(d.getState().positionAt).toBe(900);
+	});
+});
+
+describe("remoteControlMessage", () => {
+	it("says the device couldn't be reached only when the link isn't up", () => {
+		const said = (code: string) => remoteControlMessage("TV", new RemoteCommandError(code));
+		expect(said("link_not_connected")).toBe("Couldn't reach TV.");
+		expect(said("link_timed_out")).toBe("TV didn't respond.");
+		const tooMany = "Too many commands went to TV at once. Try again in a moment.";
+		expect(said("link_busy")).toBe(tooMany);
+		expect(said("rate_limited")).toBe(tooMany);
+		expect(said("stale_item")).toBe("TV couldn't do that.");
+		expect(remoteControlMessage("TV", new UnsupportedError("That"))).toBe(
+			"TV couldn't do that."
+		);
+		// Only a refused command's code counts.
+		expect(remoteControlMessage("TV", { code: "link_not_connected" })).toBe(
+			"TV couldn't do that."
+		);
 	});
 });
