@@ -205,6 +205,7 @@ fn known_types_match_the_message_enum() {
             re: 0,
             seq: 0,
             last: true,
+            size: Some(1),
             data: String::new(),
         },
         Message::LibraryAck { re: 0, seq: 0 },

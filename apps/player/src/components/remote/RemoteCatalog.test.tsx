@@ -30,6 +30,7 @@ const link = (): Link => ({
 	id: 9,
 	deviceId: "tv1",
 	name: "Living Room",
+	deviceType: "fire-tv",
 	phase: { phase: "connected" },
 	code: null,
 	features: [],

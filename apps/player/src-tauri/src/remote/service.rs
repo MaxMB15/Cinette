@@ -1205,6 +1205,15 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
         );
     }
 
+    fn library_progress(&self, link: u64, _: &DeviceId, received: u64, total: Option<u64>) {
+        if self.current(link) {
+            let _ = self.app.emit(
+                "remote://library-progress",
+                serde_json::json!({ "link": link, "received": received, "total": total }),
+            );
+        }
+    }
+
     fn transfer(&self, link: u64, device: &DeviceId, event: &TransferUpdate) {
         if !self.current(link) {
             return;

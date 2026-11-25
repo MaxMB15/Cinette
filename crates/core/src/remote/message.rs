@@ -407,6 +407,10 @@ pub enum Message {
         seq: u32,
         #[serde(default)]
         last: bool,
+        /// The whole deflated answer's length, on the first piece, so the
+        /// controller can show how much came.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u64>,
         data: String,
     },
     LibraryAck {

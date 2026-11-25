@@ -68,8 +68,8 @@ const ICON_BUTTON = cn("inline-flex items-center justify-center", TOUCH);
  * the primary color, so it's plain which device receives commands.
  */
 export const DevicesButton = ({ className }: { className?: string }) => {
-	const { devices, link, connect, leave } = useRemoteControl();
-	const [leaveFailed, setLeaveFailed] = useState(false);
+	const { devices, link, connect } = useRemoteControl();
+	const { leave, failed } = useLeave();
 	const [open, setOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [denied, setDenied] = useState(false);
@@ -106,8 +106,7 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 		if (id === activeId) return;
 		// Choosing this device is returning to independent playback.
 		if (id === LOCAL_ENTRY.id) {
-			setLeaveFailed(false);
-			leave().catch(() => setLeaveFailed(true));
+			leave();
 			return;
 		}
 		// The picker's rows come from this list, so the device is in it.
@@ -152,9 +151,7 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 				}
 			/>
 			{error && <Notice message={error} onDismiss={() => setError(null)} raised />}
-			{leaveFailed && (
-				<Notice message={LEAVE_FAILED} onDismiss={() => setLeaveFailed(false)} raised />
-			)}
+			{failed}
 		</>
 	);
 };
@@ -172,6 +169,25 @@ export const NONE_FOUND =
 /** What shows when ending a session didn't work. */
 export const LEAVE_FAILED =
 	"Couldn't end the session. If the other device still shows this one, disconnect it there.";
+
+/**
+ * Ends the session, with the note that shows when that didn't work. Leaving
+ * clears the link before the backend answers, so the note belongs to the
+ * component that calls this, which has to stay once the link is gone.
+ */
+export const useLeave = () => {
+	const { leave } = useRemoteControl();
+	const [failed, setFailed] = useState(false);
+	return {
+		leave: () => {
+			setFailed(false);
+			leave().catch(() => setFailed(true));
+		},
+		failed: failed && (
+			<Notice message={LEAVE_FAILED} onDismiss={() => setFailed(false)} raised />
+		),
+	};
+};
 
 /** A note at the bottom of the screen. A `raised` one sits above the
  *  others, so two don't cover each other. On a TV it takes the focus, so
@@ -214,16 +230,9 @@ const Notice = ({
  * with the one on that screen, and Cancel.
  */
 export const ConnectStatusDialog = () => {
-	const { link, leave } = useRemoteControl();
+	const { link } = useRemoteControl();
 	const titleId = useId();
-	const [leaveFailed, setLeaveFailed] = useState(false);
-	const cancel = () => {
-		setLeaveFailed(false);
-		leave().catch(() => setLeaveFailed(true));
-	};
-	const failed = leaveFailed && (
-		<Notice message={LEAVE_FAILED} onDismiss={() => setLeaveFailed(false)} raised />
-	);
+	const { leave: cancel, failed } = useLeave();
 	const phase = link?.phase.phase;
 	if (!link || (phase !== "connecting" && phase !== "verifying" && phase !== "pending"))
 		return failed || null;
@@ -368,20 +377,15 @@ export const ControllersBar = () => {
  * independent playback. When a link ends by itself, it says why once.
  */
 export const RemoteBar = () => {
-	const { link, ended, leave } = useRemoteControl();
+	const { link, ended } = useRemoteControl();
 	const [dismissed, setDismissed] = useState<typeof ended>(null);
-	const [leaveFailed, setLeaveFailed] = useState(false);
+	const { leave, failed } = useLeave();
 	// The link each dialog was opened for, so neither comes back by itself
 	// on the next link.
 	const [sendingFor, setSendingFor] = useState<number | null>(null);
 	const [transferringFor, setTransferringFor] = useState<number | null>(null);
 	// The link the menu was opened for, so it doesn't open by itself on the next.
 	const [menuFor, setMenuFor] = useState<number | null>(null);
-	// Leaving clears the link here before the backend answers, so this
-	// shows whatever the bar shows by then.
-	const failed = leaveFailed && (
-		<Notice message={LEAVE_FAILED} onDismiss={() => setLeaveFailed(false)} raised />
-	);
 	if (link && (link.phase.phase === "connected" || link.phase.phase === "reconnecting")) {
 		const connected = link.phase.phase === "connected";
 		// Transfers need the session up, and a device that offers them.
@@ -398,10 +402,7 @@ export const RemoteBar = () => {
 				},
 			{
 				label: "Return to independent playback",
-				run: () => {
-					setLeaveFailed(false);
-					leave().catch(() => setLeaveFailed(true));
-				},
+				run: leave,
 			},
 		].filter((action) => action !== false);
 		return (

@@ -25,6 +25,8 @@ export interface Link {
 	id: number;
 	deviceId: string;
 	name: string;
+	/** The device's type, as the protocol spells it, like `iphone`. */
+	deviceType: string;
 	phase: LinkPhase;
 	/** The verification code, once the handshake is done. */
 	code: string | null;
@@ -173,6 +175,7 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 					id,
 					deviceId: device.deviceId,
 					name: device.name,
+					deviceType: device.deviceType,
 					phase: { phase: "connecting" },
 					code: null,
 					features: [],

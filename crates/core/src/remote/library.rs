@@ -334,6 +334,7 @@ impl TargetLibrary {
                 re: out.re,
                 seq: out.seq,
                 last,
+                size: (out.seq == 0).then_some(out.packed.len() as u64),
                 data: BASE64.encode(&out.packed[out.sent..end]),
             });
             self.unacked.push_back((out.re, out.seq));
@@ -351,13 +352,16 @@ impl TargetLibrary {
 pub(crate) struct Incoming {
     packed: Vec<u8>,
     seq: u32,
+    /// The whole answer's length, as its first piece gave it.
+    size: Option<u64>,
 }
 
 /// What a piece did to the answer it's part of.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Piece {
-    /// More is coming.
-    More,
+    /// More is coming. `received` bytes came so far, of `size` when the
+    /// target said.
+    More { received: u64, size: Option<u64> },
     /// That was the last piece: here's the whole answer, still packed.
     Done(Vec<u8>),
     /// Out of order, not base64, or too big. The answer is lost.
@@ -365,8 +369,8 @@ pub(crate) enum Piece {
 }
 
 impl Incoming {
-    /// Adds the piece `seq`.
-    pub(crate) fn add(&mut self, seq: u32, last: bool, data: &str) -> Piece {
+    /// Adds the piece `seq`. `size` counts only on the first piece.
+    pub(crate) fn add(&mut self, seq: u32, last: bool, size: Option<u64>, data: &str) -> Piece {
         if seq != self.seq {
             return Piece::Broken;
         }
@@ -376,12 +380,18 @@ impl Incoming {
         if bytes.len() > PIECE_BYTES || self.packed.len() + bytes.len() > MAX_PACKED {
             return Piece::Broken;
         }
+        if seq == 0 {
+            self.size = size;
+        }
         self.packed.extend_from_slice(&bytes);
         self.seq += 1;
         if last {
             Piece::Done(std::mem::take(&mut self.packed))
         } else {
-            Piece::More
+            Piece::More {
+                received: self.packed.len() as u64,
+                size: self.size,
+            }
         }
     }
 }

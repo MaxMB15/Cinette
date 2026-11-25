@@ -110,6 +110,7 @@ describe("createRemoteControl", () => {
 		expect(link.id).toBeGreaterThan(Date.now() - 60_000);
 		expect(link.deviceId).toBe("tv1");
 		expect(link.name).toBe("Living Room");
+		expect(link.deviceType).toBe("fire-tv");
 		expect(link.phase).toStrictEqual({ phase: "connecting" });
 		expect(link.destination.id).toBe("cinette:tv1");
 
