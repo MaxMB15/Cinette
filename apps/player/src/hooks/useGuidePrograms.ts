@@ -10,7 +10,14 @@ import {
 	type QueryKey,
 } from "@tanstack/react-query";
 import type { TimeRange } from "@/lib/epg-window";
-import { channelGuideKey, channelGuideQuery, guideKey, guideQuery } from "@/lib/queries";
+import {
+	channelGuideKey,
+	channelGuideQuery,
+	guideKey,
+	guideQuery,
+	type Source,
+} from "@/lib/queries";
+import { useLibrarySource } from "@/hooks/useLibrary";
 import type { EpgProgram } from "@/lib/types";
 
 /** Every channel's programs, or only those of the channels with these guide ids. */
@@ -59,11 +66,12 @@ const NO_RANGE: TimeRange = { from: 0, to: 0 };
  */
 const channelsLoaded = (
 	client: QueryClient,
+	source: Source,
 	range: TimeRange,
 	version: string
 ): EpgProgram[] | undefined => {
 	const found = client
-		.getQueriesData<EpgProgram[]>({ queryKey: channelGuideKey(range, version) })
+		.getQueriesData<EpgProgram[]>({ queryKey: channelGuideKey(range, version, source) })
 		.flatMap(([, data]) => data ?? []);
 	// TanStack Query keeps showing a placeholder while the function that made
 	// it stays the same, as it does compiled, so an empty one would hide the
@@ -79,11 +87,12 @@ const channelsLoaded = (
  */
 const newestLoaded = (
 	client: QueryClient,
+	source: Source,
 	matches: (key: QueryKey) => boolean
 ): EpgProgram[] | undefined => {
 	const newest = client
 		.getQueryCache()
-		.findAll({ queryKey: guideKey() })
+		.findAll({ queryKey: guideKey(source) })
 		.filter((q) => matches(q.queryKey))
 		.sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt)[0];
 	return newest?.state.data as EpgProgram[] | undefined;
@@ -93,8 +102,12 @@ const newestLoaded = (
  * The programs last loaded for one channel, over any range, which stand in
  * while its programs load for a new one, and stay when that load fails.
  */
-const lastLoaded = (client: QueryClient, id: string): EpgProgram[] | undefined =>
-	newestLoaded(client, (key) => key[key.length - 2] === "channel" && key[key.length - 1] === id);
+const lastLoaded = (client: QueryClient, source: Source, id: string): EpgProgram[] | undefined =>
+	newestLoaded(
+		client,
+		source,
+		(key) => key[key.length - 2] === "channel" && key[key.length - 1] === id
+	);
 
 // How long every channel's key is. A single channel's key adds its guide id,
 // so the length tells them apart, even for a guide id of "all".
@@ -108,11 +121,12 @@ const ALL_KEY_LENGTH = guideQuery(NO_RANGE, "").queryKey.length;
  */
 const lastShown = (
 	client: QueryClient,
+	source: Source,
 	range: TimeRange,
 	version: string
 ): EpgProgram[] | undefined =>
-	newestLoaded(client, (key) => key.length === ALL_KEY_LENGTH) ??
-	channelsLoaded(client, range, version);
+	newestLoaded(client, source, (key) => key.length === ALL_KEY_LENGTH) ??
+	channelsLoaded(client, source, range, version);
 
 /**
  * The guide's programs over `range` by guide id, for `channels`. With null it
@@ -142,36 +156,39 @@ export const useGuidePrograms = (
 		[key]
 	);
 	const queryClient = useQueryClient();
+	const source = useLibrarySource();
 	const version = String(resetKey);
 	const guideRange = range ?? NO_RANGE;
 
 	// Read on the Favorites tab too, without loading, since every channel's
 	// programs cover the favorites'.
 	const all = useQuery({
-		...guideQuery(guideRange, version),
+		...guideQuery(guideRange, version, source),
 		enabled: range !== null && key === "all",
 		// While it loads, the last range's programs, or else the single
 		// channels' already loaded for this one, keep the rows filled.
-		placeholderData: (previous) => previous ?? channelsLoaded(queryClient, guideRange, version),
+		placeholderData: (previous) =>
+			previous ?? channelsLoaded(queryClient, source, guideRange, version),
 	});
 	const allLoaded = all.isSuccess && !all.isPlaceholderData;
 	const allData =
-		all.data ?? (all.isError ? lastShown(queryClient, guideRange, version) : undefined);
+		all.data ?? (all.isError ? lastShown(queryClient, source, guideRange, version) : undefined);
 	// Grouped here rather than in the query's select, which runs again on each
 	// read while a placeholder shows and would give a new map every time.
 	const allPrograms = useMemo(() => (allData ? byChannel(allData) : EMPTY), [allData]);
 
 	const perChannel = useQueries({
 		queries: ids.map((id) => ({
-			...channelGuideQuery(guideRange, version, id),
+			...channelGuideQuery(guideRange, version, id, source),
 			enabled: range !== null && !allLoaded,
-			placeholderData: () => lastLoaded(queryClient, id),
+			placeholderData: () => lastLoaded(queryClient, source, id),
 		})),
 		combine: (results) => {
 			const programs = new Map<string, EpgProgram[]>();
 			const waiting = new Set<string>();
 			results.forEach((r, i) => {
-				const data = r.data ?? (r.isError ? lastLoaded(queryClient, ids[i]) : undefined);
+				const data =
+					r.data ?? (r.isError ? lastLoaded(queryClient, source, ids[i]) : undefined);
 				if (data && data.length > 0) programs.set(ids[i], data);
 				if (r.isPending || r.isPlaceholderData) waiting.add(ids[i]);
 			});

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Download, CloudDownload, CircleCheck, LoaderCircle, CircleAlert } from "lucide-react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { isMobilePlatform } from "@/lib/platform";
+import { useRemoteLibrary } from "@/hooks/useLibrary";
 import type { DownloadIconState } from "@/lib/types";
 
 /** The mobile apps can't run the ffmpeg sidecar, so they have no downloads. */
@@ -53,8 +54,10 @@ export const DownloadButton = ({
 		setConfirmItemId(itemId);
 		setConfirm(null);
 	}
+	// This device downloads only from its own library.
+	const remote = useRemoteLibrary();
 
-	if (!DOWNLOADS_SUPPORTED) return null;
+	if (!DOWNLOADS_SUPPORTED || remote) return null;
 
 	const handleClick = (e: React.MouseEvent) => {
 		e.stopPropagation();

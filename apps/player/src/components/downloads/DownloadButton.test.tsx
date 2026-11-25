@@ -4,6 +4,8 @@
 import { render, screen, fireEvent, cleanup, act, within } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { DownloadButton } from "./DownloadButton";
+import { LibraryProvider } from "@/hooks/useLibrary";
+import { remoteSource } from "@/lib/library";
 
 const renderComplete = (onRemove: () => Promise<unknown>, removeSummary?: string) =>
 	render(
@@ -23,6 +25,21 @@ const confirmRemove = () => {
 
 describe("DownloadButton", () => {
 	afterEach(cleanup);
+
+	it("isn't there for another device's library", () => {
+		const button = (
+			<DownloadButton
+				state="complete"
+				onStart={vi.fn()}
+				onStop={vi.fn()}
+				onRemove={vi.fn()}
+			/>
+		);
+		const { rerender } = render(button);
+		expect(screen.getByRole("button", { name: "Downloaded" })).toBeInTheDocument();
+		rerender(<LibraryProvider value={{ source: remoteSource(2) }}>{button}</LibraryProvider>);
+		expect(screen.queryByRole("button")).toBeNull();
+	});
 
 	it("removes once the user confirms", async () => {
 		const onRemove = vi.fn(() => Promise.resolve());

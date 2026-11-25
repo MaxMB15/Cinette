@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { getOmdbApiKey } from "@/lib/tauri";
+import { useRemoteLibrary } from "@/hooks/useLibrary";
 import type { OmdbData } from "@/lib/types";
 
 // The last answer, so a sheet that opens again shows it at once while it checks.
@@ -45,13 +46,16 @@ const useHasOmdbKey = (needed: boolean): boolean | null => {
  * What a movie or series sheet needs to know about OMDb. The key only matters
  * when OMDb came back with nothing, so it isn't checked while OMDb loads or
  * once it has details. Without details the sheet keeps loading until the key
- * check answers too, so the hint about adding a key doesn't flash.
+ * check answers too, so the hint about adding a key doesn't flash. Another
+ * device's details come with its own key, so this device's isn't checked.
  */
 export const useOmdbInfoState = (
 	omdbData: OmdbData | null,
 	omdbLoading: boolean
 ): { hasOmdbKey: boolean | null; infoLoading: boolean } => {
-	const hasOmdbKey = useHasOmdbKey(!omdbLoading && !omdbData);
+	const remote = useRemoteLibrary();
+	const own = useHasOmdbKey(!remote && !omdbLoading && !omdbData);
+	const hasOmdbKey = remote ? true : own;
 	const infoLoading = omdbLoading || (!omdbData && hasOmdbKey === null);
 	return { hasOmdbKey, infoLoading };
 };

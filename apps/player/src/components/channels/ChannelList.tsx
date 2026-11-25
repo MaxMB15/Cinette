@@ -48,8 +48,9 @@ import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useNow } from "@/hooks/useNow";
 import { useGuidePrograms, type GuideChannels } from "@/hooks/useGuidePrograms";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { getXtreamSeriesEpisodes, getCachedSeriesEpisodes } from "@/lib/tauri";
+import { LOCAL, libraryOf } from "@/lib/library";
 import { guideSearchQuery } from "@/lib/queries";
+import { useLibrarySource, usePlay } from "@/hooks/useLibrary";
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
 import { findEpisode, sortEpisodes } from "@/lib/episodes";
 import { categoriesByCount, channelCountFor, dedupeByTitle, seriesTitleOf } from "@/lib/channels";
@@ -77,11 +78,11 @@ const ALL_TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
 	{ id: "history", label: "History", icon: RotateCcwClock },
 ];
 
-// The mobile apps have no downloads.
-const TABS = ALL_TABS.filter((t) => t.id !== "downloads" || !isMobilePlatform());
+// The mobile apps have no downloads, and neither has another device's library here.
+const NO_DOWNLOADS_TABS = ALL_TABS.filter((t) => t.id !== "downloads");
 
-/** Whether `v` names a tab this platform shows, such as one saved before playback. */
-const isTab = (v: unknown): v is Tab => TABS.some((t) => t.id === v);
+/** Whether `v` names one of `tabs`, such as a tab saved before playback. */
+const isTab = (v: unknown, tabs: typeof ALL_TABS): v is Tab => tabs.some((t) => t.id === v);
 
 /** Pixels per hour for the dynamic window (higher = wider spacing between gridlines). */
 const PX_PER_HOUR = 150;
@@ -124,11 +125,17 @@ export const ChannelList = () => {
 	const rowVariant = compactRows ? "compact" : "row";
 	const { byChannel, bySeries } = useDownloads();
 	const navigate = useNavigate();
+	const play = usePlay();
+	const source = useLibrarySource();
+	// Another device's library can only be browsed and played from here.
+	const local = source === LOCAL;
+	const downloadsShown = local && !isMobilePlatform();
+	const tabs = downloadsShown ? ALL_TABS : NO_DOWNLOADS_TABS;
 
 	// Tab and search are restored when coming back from the player (see lib/browse-state).
 	const [initialBrowse] = useState(consumeBrowseState);
 	const [activeTab, setActiveTab] = useState<Tab>(
-		isTab(initialBrowse.tab) ? initialBrowse.tab : "live"
+		isTab(initialBrowse.tab, tabs) ? initialBrowse.tab : "live"
 	);
 	const [search, setSearch] = useState(initialBrowse.search);
 	// Debounced search — updated 250ms after user stops typing to avoid per-keystroke re-renders
@@ -264,13 +271,13 @@ export const ChannelList = () => {
 			// The clicked entry first so its episodes stay the default source.
 			const ordered = [container, ...containers.filter((c) => c.id !== container.id)];
 			const results = await Promise.allSettled(
-				ordered.map((c) => getXtreamSeriesEpisodes(c.id))
+				ordered.map((c) => libraryOf(source).getXtreamSeriesEpisodes(c.id))
 			);
 			const first = results[0];
 			if (first.status === "rejected") throw first.reason;
 			return results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
 		},
-		[xtreamSeriesByTitle]
+		[xtreamSeriesByTitle, source]
 	);
 
 	const movieTitles = useMemo(() => dedupeByTitle(byType.movie), [byType.movie]);
@@ -382,7 +389,7 @@ export const ChannelList = () => {
 		return () => clearTimeout(timer);
 	}, [epgQuery]);
 	const epgSearch = useQuery({
-		...guideSearchQuery(epgTerm),
+		...guideSearchQuery(epgTerm, source),
 		enabled: epgTerm !== "",
 		// The last search's results stay while the next one's load.
 		placeholderData: keepPreviousData,
@@ -415,7 +422,7 @@ export const ChannelList = () => {
 					eps = byType.series.filter((ep) => seriesTitleOf(ep) === showName);
 				}
 				if (cacheFallback && eps.length === 0) {
-					eps = await getCachedSeriesEpisodes(channel.id);
+					eps = await libraryOf(source).getCachedSeriesEpisodes(channel.id);
 				}
 				setSeriesModalData({
 					showTitle: showName,
@@ -429,7 +436,7 @@ export const ChannelList = () => {
 				.catch((e) => console.error("[ChannelList] failed to load series episodes:", e))
 				.finally(() => setSeriesLoading(false));
 		},
-		[byType.series, fetchXtreamShowEpisodes]
+		[byType.series, fetchXtreamShowEpisodes, source]
 	);
 
 	// Shows open their episode list and movies with sources open their drawer.
@@ -445,12 +452,10 @@ export const ChannelList = () => {
 			) {
 				setSelectedMovie(channel);
 			} else {
-				navigate("/player", {
-					state: { url: channel.url, channelName: channel.name, channel },
-				});
+				play({ url: channel.url, channelName: channel.name, channel });
 			}
 		},
-		[activeTab, navigate, openSeries]
+		[activeTab, play, openSeries]
 	);
 
 	const handleEpgResultPlay = useCallback(
@@ -481,13 +486,11 @@ export const ChannelList = () => {
 				const playOrPick = (eps: Channel[]) => {
 					const ep = findEpisode(eps, entry.channelId, entry.channelName);
 					if (ep) {
-						navigate("/player", {
-							state: {
-								url: ep.url,
-								channelName: ep.name,
-								channel: ep,
-								seriesEpisodes: sortEpisodes(eps),
-							},
+						play({
+							url: ep.url,
+							channelName: ep.name,
+							channel: ep,
+							seriesEpisodes: sortEpisodes(eps),
 						});
 					} else if (eps.length > 0) {
 						setSeriesModalData({
@@ -514,16 +517,14 @@ export const ChannelList = () => {
 				const rec = byChannel.get(entry.channelId);
 				if (rec?.kind !== "recording" || rec.status !== "completed") return;
 				const ch = recordingChannel(rec);
-				navigate("/player", { state: { url: ch.url, channelName: ch.name, channel: ch } });
+				play({ url: ch.url, channelName: ch.name, channel: ch });
 			} else {
 				const ch = byType.live.find((c) => c.id === entry.channelId);
 				if (!ch) return;
-				navigate("/player", {
-					state: { url: ch.url, channelName: entry.channelName, channel: ch },
-				});
+				play({ url: ch.url, channelName: entry.channelName, channel: ch });
 			}
 		},
-		[byType, byChannel, navigate, fetchXtreamShowEpisodes]
+		[byType, byChannel, play, fetchXtreamShowEpisodes]
 	);
 
 	const favoritesByType = useMemo(() => {
@@ -639,7 +640,7 @@ export const ChannelList = () => {
 						compactRows ? "px-1" : "flex-1"
 					)}
 				>
-					{TABS.map(({ id, label, icon: Icon }) => {
+					{tabs.map(({ id, label, icon: Icon }) => {
 						const count =
 							id === "history"
 								? null
@@ -713,7 +714,7 @@ export const ChannelList = () => {
 					{activeTab !== "favorites" &&
 						activeTab !== "history" &&
 						activeTab !== "downloads" &&
-						!isMobilePlatform() && (
+						downloadsShown && (
 							<button
 								onClick={() => setShowDownloadsOnly((v) => !v)}
 								className={`h-8 w-8 flex items-center justify-center rounded-md ml-1 transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring ${
@@ -773,7 +774,9 @@ export const ChannelList = () => {
 										onSelectGroup={(name) =>
 											setNavState({ level: "group", name })
 										}
-										onManage={() => setShowCategoryManager(true)}
+										onManage={
+											local ? () => setShowCategoryManager(true) : undefined
+										}
 									/>
 								) : categories.length > 1 ? (
 									<div className="px-3 pt-2.5">
@@ -784,7 +787,8 @@ export const ChannelList = () => {
 										/>
 									</div>
 								) : null}
-								{!hierarchy.hasHierarchy &&
+								{local &&
+									!hierarchy.hasHierarchy &&
 									hierarchy.entries.length === 0 &&
 									categories.length > 1 && (
 										<div className="mx-4 mt-2 p-3 rounded-lg bg-primary/5 border border-primary/20 text-sm">
@@ -937,16 +941,14 @@ export const ChannelList = () => {
 					episodes={seriesModalData.episodes}
 					seriesChannelId={seriesModalData.seriesChannelId}
 					onClose={() => setSeriesModalData(null)}
-					onPlay={(ch) => {
-						navigate("/player", {
-							state: {
-								url: ch.url,
-								channelName: ch.name,
-								channel: ch,
-								seriesEpisodes: sortEpisodes(seriesModalData.episodes),
-							},
-						});
-					}}
+					onPlay={(ch) =>
+						play({
+							url: ch.url,
+							channelName: ch.name,
+							channel: ch,
+							seriesEpisodes: sortEpisodes(seriesModalData.episodes),
+						})
+					}
 				/>
 			)}
 
@@ -954,11 +956,7 @@ export const ChannelList = () => {
 				<MovieInfoDrawer
 					movie={selectedMovie}
 					onClose={() => setSelectedMovie(null)}
-					onPlay={(ch) =>
-						navigate("/player", {
-							state: { url: ch.url, channelName: ch.name, channel: ch },
-						})
-					}
+					onPlay={(ch) => play({ url: ch.url, channelName: ch.name, channel: ch })}
 				/>
 			)}
 

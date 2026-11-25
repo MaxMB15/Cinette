@@ -4,13 +4,15 @@
 import { useNavigate } from "react-router";
 import { ChannelList } from "@/components/channels/ChannelList";
 import { RemoteCatalog } from "@/components/remote/RemoteCatalog";
+import { RemoteLibrary } from "@/components/remote/RemoteLibrary";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
 import { controlsOthers } from "@/lib/platform";
 
 /**
  * The channels page: this device's channels, or, while another device is
- * the one that plays, that device's catalog, since its ids and channels are
- * its own.
+ * the one that plays, that device's, since its ids and channels are its own.
+ * A device that sends its library shows in the same screens as this one's,
+ * and an older one in its catalog.
  */
 export const ChannelsPage = () => (controlsOthers() ? <ChannelsOrRemote /> : <ChannelList />);
 
@@ -19,9 +21,10 @@ const ChannelsOrRemote = () => {
 	const navigate = useNavigate();
 	const remote = link?.phase.phase === "connected" || link?.phase.phase === "reconnecting";
 	// Once the other device takes an item, its controls are on the player page.
-	return remote ? (
-		<RemoteCatalog key={link.deviceId} link={link} onPlayed={() => navigate("/player")} />
+	if (!remote) return <ChannelList />;
+	return link.features.includes("library") ? (
+		<RemoteLibrary key={link.id} link={link} />
 	) : (
-		<ChannelList />
+		<RemoteCatalog key={link.deviceId} link={link} onPlayed={() => navigate("/player")} />
 	);
 };

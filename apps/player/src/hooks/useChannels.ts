@@ -21,7 +21,7 @@ import {
 import { deriveCategories } from "@/lib/channels";
 import { readStorage, writeStorage } from "@/lib/storage";
 import { useLatestRef } from "@/hooks/useLatestRef";
-import { channelsQuery, historyKey, providersQuery } from "@/lib/queries";
+import { LOCAL, channelsQuery, historyKey, providersQuery, showFavorite } from "@/lib/queries";
 import {
 	loadM3uPlaylist,
 	loadM3uFile as loadM3uFileApi,
@@ -310,13 +310,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	const toggleFavorite = useCallback(
 		async (channelId: string) => {
 			try {
-				const newFavorite = await toggleFavoriteApi(channelId);
-				// Only this channel changes, so the list isn't loaded again.
-				queryClient.setQueryData(channelsQuery().queryKey, (prev) =>
-					prev?.map((ch) =>
-						ch.id === channelId ? { ...ch, isFavorite: newFavorite } : ch
-					)
-				);
+				showFavorite(queryClient, LOCAL, channelId, await toggleFavoriteApi(channelId));
 			} catch (e) {
 				setActionError(String(e));
 			}

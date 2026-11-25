@@ -4,7 +4,6 @@
 import { useMemo } from "react";
 import { X } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { clearWatchHistoryOfType, deleteHistoryEntry, deleteHistorySeries } from "@/lib/tauri";
 import { useWatchHistory } from "@/hooks/useWatchHistory";
 import type { WatchHistoryEntry } from "@/lib/types";
 
@@ -28,7 +27,7 @@ interface DisplayEntry {
 const showOf = (entry: WatchHistoryEntry): string => entry.seriesTitle ?? entry.channelName;
 
 export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProps) => {
-	const { entries, change } = useWatchHistory(
+	const { entries, change, library } = useWatchHistory(
 		ROW_LIMIT,
 		contentType,
 		"[RecentlyPlayedRow] failed to load watch history:"
@@ -54,10 +53,10 @@ export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProp
 	const dismiss = async ({ entry, seriesTitle }: DisplayEntry) => {
 		try {
 			if (seriesTitle === undefined) {
-				await deleteHistoryEntry(entry.channelId);
+				await library.deleteHistoryEntry(entry.channelId);
 				change((prev) => prev.filter((e) => e.channelId !== entry.channelId));
 			} else {
-				await deleteHistorySeries(seriesTitle);
+				await library.deleteHistorySeries(seriesTitle);
 				// The backend only deletes series entries.
 				change((prev) =>
 					prev.filter((e) => e.contentType !== "series" || showOf(e) !== seriesTitle)
@@ -70,7 +69,7 @@ export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProp
 
 	const handleClearAll = async () => {
 		try {
-			await clearWatchHistoryOfType(contentType);
+			await library.clearWatchHistoryOfType(contentType);
 			change((prev) => prev.filter((e) => e.contentType !== contentType));
 		} catch (err) {
 			console.error("[RecentlyPlayedRow] failed to clear history:", err);

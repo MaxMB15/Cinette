@@ -3,7 +3,6 @@
 
 import { Trash, LoaderCircle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { deleteHistoryEntry, clearWatchHistory } from "@/lib/tauri";
 import { useWatchHistory } from "@/hooks/useWatchHistory";
 import { ask } from "@tauri-apps/plugin-dialog";
 import type { WatchHistoryEntry } from "@/lib/types";
@@ -32,7 +31,7 @@ const ContentTypeBadge = ({ type }: { type: string }) => {
 };
 
 export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
-	const { entries, loading, change } = useWatchHistory(
+	const { entries, loading, change, library } = useWatchHistory(
 		200,
 		undefined,
 		"[HistoryTab] failed to fetch history:"
@@ -43,7 +42,7 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 	const handleDelete = async (e: React.MouseEvent, channelId: string) => {
 		e.stopPropagation();
 		try {
-			await deleteHistoryEntry(channelId);
+			await library.deleteHistoryEntry(channelId);
 			change((prev) => prev.filter((entry) => entry.channelId !== channelId));
 		} catch (err) {
 			console.error("[HistoryTab] failed to delete entry:", err);
@@ -57,7 +56,7 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 		});
 		if (!confirmed) return;
 		try {
-			await clearWatchHistory();
+			await library.clearWatchHistory();
 			change(() => []);
 		} catch (err) {
 			console.error("[HistoryTab] failed to clear history:", err);

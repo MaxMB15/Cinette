@@ -3,10 +3,12 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { useChannels } from "@/hooks/useChannels";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import type { PlaybackDestination } from "@/lib/destination";
+import { historyKey, LOCAL, pinnedGroupsQuery, showFavorite } from "@/lib/queries";
 import {
 	applyRemoteCommand,
 	getMountedPlayer,
@@ -22,6 +24,7 @@ import {
 	remoteBlocked,
 	type BlockedDevice,
 	type ConsentAnswer,
+	type LibraryCall,
 	remotePendingConsent,
 	remoteFinishCommand,
 	remoteSessions,
@@ -70,6 +73,7 @@ export const useRemoteTarget = (): void => {
 	const navigate = useNavigate();
 	const channelsRef = useLatestRef(channels);
 	const navigateRef = useLatestRef(navigate);
+	const queryClient = useQueryClient();
 	useTauriEvent<{ token: number; command: RemoteCommand; channel?: Channel }>(
 		"remote://command",
 		({ token, command, channel }) => {
@@ -93,6 +97,20 @@ export const useRemoteTarget = (): void => {
 			.then((playing) => remoteProgressSaved(playing))
 			.catch(() => {});
 	});
+	// A controller changed this device's library, so its own screens show it.
+	useTauriEvent<{ call: LibraryCall; answer: unknown }>(
+		"remote://library-changed",
+		({ call, answer }) => {
+			if (call.name === "toggleFavorite") {
+				showFavorite(queryClient, LOCAL, call.id, answer === true);
+			} else if (call.name === "pinGroup" || call.name === "unpinGroup") {
+				const { queryKey } = pinnedGroupsQuery(call.providerId, call.contentType);
+				void queryClient.invalidateQueries({ queryKey });
+			} else {
+				void queryClient.invalidateQueries({ queryKey: historyKey() });
+			}
+		}
+	);
 };
 
 /** A list the backend keeps: `load` once, then each `event` in its place.

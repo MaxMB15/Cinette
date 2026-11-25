@@ -13,6 +13,7 @@ vi.mock("./tauri", () => ({
 	searchEpgProgrammes: vi.fn(async () => [{ title: "Found" }]),
 	fetchOmdbData: vi.fn(async () => ({ title: "Sintel" })),
 	fetchWhatsonData: vi.fn(async () => ({ certification: "12A" })),
+	remoteLibrary: vi.fn(async () => [{ id: "remote" }]),
 }));
 
 import {
@@ -24,11 +25,14 @@ import {
 	getGroupHierarchy,
 	getPinnedGroups,
 	getProviders,
+	remoteLibrary,
 	searchEpgProgrammes,
 } from "./tauri";
+import { remoteSource } from "./library";
 import {
 	channelGuideQuery,
 	channelsQuery,
+	GUIDE_IDS_PER_CALL,
 	groupHierarchyQuery,
 	guideQuery,
 	guideSearchQuery,
@@ -40,9 +44,11 @@ import {
 	reloadClearedCaches,
 	SCHEDULE_STEP,
 	scheduleQuery,
+	showFavorite,
+	watchHistoryQuery,
 	whatsonQuery,
 } from "./queries";
-import type { EpgProgram } from "./types";
+import type { Channel, EpgProgram } from "./types";
 import { answerFrom } from "@/test/guide-answers";
 import { createTestQueryClient } from "@/test/query";
 
@@ -112,6 +118,55 @@ describe("queries", () => {
 		expect(getAllChannels).toHaveBeenCalledTimes(1);
 		expect(getAllChannels).toHaveBeenCalledWith();
 		expect(getProviders).not.toHaveBeenCalled();
+	});
+});
+
+describe("queries of another device", () => {
+	const tv = remoteSource(4);
+
+	it("ask that device, not this one", async () => {
+		const client = createTestQueryClient();
+		await expect(client.fetchQuery(channelsQuery(tv))).resolves.toEqual([{ id: "remote" }]);
+		await client.fetchQuery(watchHistoryQuery(20, "movie", tv));
+		expect(vi.mocked(remoteLibrary).mock.calls).toEqual([
+			[4, { name: "channels" }],
+			[4, { name: "history", limit: 20, contentType: "movie" }],
+		]);
+		expect(getAllChannels).not.toHaveBeenCalled();
+	});
+
+	it("keep their answers apart from this device's", () => {
+		expect(channelsQuery(tv).queryKey).toEqual(["remote:4", "channels"]);
+		expect(watchHistoryQuery(20, undefined, tv).queryKey).toEqual([
+			"remote:4",
+			"history",
+			"all",
+			20,
+		]);
+	});
+});
+
+describe("showFavorite", () => {
+	const ch = (id: string) => ({ id, isFavorite: false }) as Channel;
+
+	it("marks one channel of the source's list and leaves the rest", () => {
+		const client = createTestQueryClient();
+		client.setQueryData(channelsQuery().queryKey, [ch("a"), ch("b")]);
+		client.setQueryData(channelsQuery(remoteSource(1)).queryKey, [ch("a")]);
+		showFavorite(client, LOCAL, "a", true);
+		expect(client.getQueryData(channelsQuery().queryKey)).toEqual([
+			{ id: "a", isFavorite: true },
+			{ id: "b", isFavorite: false },
+		]);
+		expect(client.getQueryData(channelsQuery(remoteSource(1)).queryKey)).toEqual([
+			{ id: "a", isFavorite: false },
+		]);
+	});
+
+	it("leaves a list that isn't loaded unloaded", () => {
+		const client = createTestQueryClient();
+		showFavorite(client, LOCAL, "a", true);
+		expect(client.getQueryData(channelsQuery().queryKey)).toBeUndefined();
 	});
 });
 
@@ -189,6 +244,44 @@ describe("loadChannelGuide", () => {
 			[1000, 8000, ["news.tv"]],
 			[1000, 8000, ["sport.tv"]],
 		]);
+	});
+
+	it("asks for at most GUIDE_IDS_PER_CALL ids in each call", async () => {
+		const ids = (n: number) => Array.from({ length: n }, (_, i) => `ch${i}.tv`);
+		await Promise.all(ids(GUIDE_IDS_PER_CALL).map((id) => loadChannelGuide(morning, id)));
+		expect(getEpgForLiveChannels).toHaveBeenCalledTimes(1);
+
+		vi.mocked(getEpgForLiveChannels).mockClear();
+		const asked = ids(GUIDE_IDS_PER_CALL + 1);
+		await Promise.all(asked.map((id) => loadChannelGuide(morning, id)));
+		expect(vi.mocked(getEpgForLiveChannels).mock.calls).toEqual([
+			[1000, 8000, asked.slice(0, GUIDE_IDS_PER_CALL)],
+			[1000, 8000, [asked[GUIDE_IDS_PER_CALL]]],
+		]);
+	});
+
+	it("gives each id its programs from whichever call had it", async () => {
+		const asked = Array.from({ length: GUIDE_IDS_PER_CALL }, (_, i) => `ch${i}.tv`);
+		const answers = await Promise.all(
+			[...asked, "news.tv"].map((id) => loadChannelGuide(morning, id))
+		);
+		expect(answers[answers.length - 1]).toEqual([program("news.tv", "Noon News")]);
+	});
+
+	it("asks this device and another in calls of their own", async () => {
+		vi.mocked(remoteLibrary).mockResolvedValueOnce([program("news.tv", "Their News")]);
+		const [mine, theirs] = await Promise.all([
+			loadChannelGuide(morning, "news.tv"),
+			loadChannelGuide(morning, "news.tv", remoteSource(4)),
+		]);
+		expect(mine).toEqual([program("news.tv", "Noon News")]);
+		expect(theirs).toEqual([program("news.tv", "Their News")]);
+		expect(remoteLibrary).toHaveBeenCalledExactlyOnceWith(4, {
+			name: "guide",
+			from: 1000,
+			to: 8000,
+			ids: ["news.tv"],
+		});
 	});
 
 	it("gives every id in a call that fails the failure", async () => {

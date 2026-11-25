@@ -27,6 +27,7 @@ const tauri = vi.hoisted(() => ({
 	getEpgProgrammes: vi.fn<(id: string, start: number, end: number) => Promise<EpgProgram[]>>(),
 	scheduleRecording: vi.fn(() => Promise.resolve({})),
 	stopRecording: vi.fn<(id: string) => Promise<void>>(() => Promise.resolve()),
+	remoteLibrary: vi.fn<(link: number, call: unknown) => Promise<EpgProgram[]>>(),
 }));
 const state = vi.hoisted(() => ({ downloads: [] as DownloadRecord[] }));
 
@@ -34,6 +35,7 @@ vi.mock("@/lib/tauri", () => ({
 	getEpgProgrammes: tauri.getEpgProgrammes,
 	scheduleRecording: tauri.scheduleRecording,
 	stopRecording: tauri.stopRecording,
+	remoteLibrary: tauri.remoteLibrary,
 }));
 vi.mock("@/hooks/useDownloads", () => ({ useDownloads: () => ({ downloads: state.downloads }) }));
 const guide = vi.hoisted(() => ({ version: 0 }));
@@ -43,6 +45,8 @@ vi.mock("@/hooks/useChannels", () => ({
 }));
 
 import { LiveInfoDrawer } from "./LiveInfoDrawer";
+import { LibraryProvider } from "@/hooks/useLibrary";
+import { remoteSource } from "@/lib/library";
 
 /** Each drawer gets a new cache, as each app does. */
 const render = (ui: ReactElement) => renderUi(ui, { wrapper: wrapperFor() });
@@ -438,6 +442,8 @@ describe("LiveInfoDrawer recording", () => {
 	it("records a program from the schedule, but not one that's over", async () => {
 		await renderDrawer();
 		expect(screen.queryByLabelText("Record Morning Show")).toBeNull();
+		// A program that's over keeps its row as wide as the others.
+		expect(row("Morning Show").nextElementSibling).toHaveAttribute("aria-hidden");
 		fireEvent.click(screen.getByLabelText("Record Late Show"));
 		expect(screen.getByRole("dialog", { name: "Record this program" })).toBeDefined();
 	});
@@ -492,6 +498,29 @@ describe("LiveInfoDrawer recording", () => {
 		expect(screen.queryByText("Record")).toBeNull();
 		fireEvent.click(screen.getByText("Stop recording"));
 		expect(screen.getByRole("dialog", { name: "Stop recording?" })).toBeDefined();
+	});
+
+	it("records nothing on another device's channel, and shows that device's guide", async () => {
+		state.downloads = [rec({ status: "recording", startAt: now - MIN, endAt: now + 35 * MIN })];
+		tauri.remoteLibrary.mockResolvedValue(schedule);
+		render(
+			<LibraryProvider value={{ source: remoteSource(2) }}>
+				<LiveInfoDrawer channel={channel} onClose={vi.fn()} />
+			</LibraryProvider>
+		);
+		await screen.findAllByText("Late Show");
+		expect(tauri.getEpgProgrammes).not.toHaveBeenCalled();
+		expect(tauri.remoteLibrary).toHaveBeenCalledWith(
+			2,
+			expect.objectContaining({ name: "schedule" })
+		);
+		expect(screen.queryByText("Record")).toBeNull();
+		expect(screen.queryByText("Stop recording")).toBeNull();
+		expect(screen.queryByLabelText("Record Late Show")).toBeNull();
+		expect(screen.queryByLabelText("Cancel the recording of Late Show")).toBeNull();
+		expect(screen.queryByLabelText("Record a time range")).toBeNull();
+		expect(row("Morning Show").nextElementSibling).toBeNull();
+		expect(row("Late Show").nextElementSibling).toBeNull();
 	});
 
 	it("records a time range", async () => {

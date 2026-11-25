@@ -144,6 +144,20 @@ export const DownloadsProvider = ({ children }: { children: ReactNode }) => {
 	);
 };
 
+const NONE: DownloadsContextValue = {
+	downloads: NO_DOWNLOADS,
+	byChannel: new Map(),
+	bySeries: new Map(),
+	refresh: () => Promise.resolve(),
+	retentionDays: null,
+	setRetentionDays: () => Promise.resolve(0),
+};
+
+/** No downloads, for the screens that show another device's library. */
+export const NoDownloadsProvider = ({ children }: { children: ReactNode }) => (
+	<DownloadsContext.Provider value={NONE}>{children}</DownloadsContext.Provider>
+);
+
 export const useDownloads = (): DownloadsContextValue => {
 	const ctx = useContext(DownloadsContext);
 	if (!ctx) throw new Error("useDownloads must be used within DownloadsProvider");

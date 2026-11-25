@@ -3,8 +3,9 @@
 
 import { useEffect, useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { pinGroup as pinGroupApi, unpinGroup as unpinGroupApi } from "@/lib/tauri";
+import { libraryOf } from "@/lib/library";
 import { groupHierarchyQuery, pinnedGroupsQuery } from "@/lib/queries";
+import { useLibrarySource } from "@/hooks/useLibrary";
 import { superCategoryNames } from "@/lib/group-hierarchy";
 import type { GroupHierarchyEntry, PinnedGroup } from "@/lib/types";
 
@@ -14,15 +15,16 @@ const NO_PINNED: PinnedGroup[] = [];
 
 export const useGroupHierarchy = (providerId: string | null, contentType: string) => {
 	const queryClient = useQueryClient();
+	const source = useLibrarySource();
 	// No provider is chosen yet, so nothing loads. The key is never fetched.
 	// Stryker disable next-line StringLiteral: no query loads without a provider, so its placeholder id is never seen.
 	const id = providerId ?? "";
 	const hierarchyResult = useQuery({
-		...groupHierarchyQuery(id, contentType),
+		...groupHierarchyQuery(id, contentType, source),
 		enabled: providerId !== null,
 	});
 	const pinnedResult = useQuery({
-		...pinnedGroupsQuery(id, contentType),
+		...pinnedGroupsQuery(id, contentType, source),
 		enabled: providerId !== null,
 	});
 	const entries = hierarchyResult.data ?? NO_ENTRIES;
@@ -57,9 +59,9 @@ export const useGroupHierarchy = (providerId: string | null, contentType: string
 	const reloadPinned = useCallback(
 		(id: string) =>
 			queryClient.invalidateQueries({
-				queryKey: pinnedGroupsQuery(id, contentType).queryKey,
+				queryKey: pinnedGroupsQuery(id, contentType, source).queryKey,
 			}),
-		[queryClient, contentType]
+		[queryClient, contentType, source]
 	);
 
 	const pinGroup = useCallback(
@@ -67,19 +69,19 @@ export const useGroupHierarchy = (providerId: string | null, contentType: string
 			if (!providerId) return;
 			const nextOrder =
 				pinnedGroups.length > 0 ? pinnedGroups[pinnedGroups.length - 1].sortOrder + 100 : 0;
-			await pinGroupApi(providerId, contentType, groupName, nextOrder);
+			await libraryOf(source).pinGroup(providerId, contentType, groupName, nextOrder);
 			await reloadPinned(providerId);
 		},
-		[providerId, contentType, pinnedGroups, reloadPinned]
+		[providerId, contentType, pinnedGroups, reloadPinned, source]
 	);
 
 	const unpinGroup = useCallback(
 		async (groupName: string) => {
 			if (!providerId) return;
-			await unpinGroupApi(providerId, contentType, groupName);
+			await libraryOf(source).unpinGroup(providerId, contentType, groupName);
 			await reloadPinned(providerId);
 		},
-		[providerId, contentType, reloadPinned]
+		[providerId, contentType, reloadPinned, source]
 	);
 
 	const isPinned = useCallback(

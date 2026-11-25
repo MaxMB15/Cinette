@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchOmdbData, fetchWhatsonData } from "@/lib/tauri";
 import { omdbQuery, whatsonQuery } from "@/lib/queries";
+import { useLibrarySource } from "@/hooks/useLibrary";
 import type { OmdbData, WhatsonData } from "@/lib/types";
 import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
 
@@ -74,17 +75,18 @@ export const useMediaDetails = (request: MediaDetailsRequest | null): MediaDetai
  * player still uses useMediaDetails, until its own tests give it a cache.
  */
 export const useCachedMediaDetails = (request: MediaDetailsRequest | null): MediaDetails => {
+	const source = useLibrarySource();
 	// Without a request, or an IMDb id for Whatson, a query loads nothing, so
 	// its key's placeholder values are never seen.
 	const omdb = useQuery({
 		// Stryker disable next-line StringLiteral: no query loads without a request.
-		...omdbQuery(request?.id ?? "", request?.title ?? "", request?.kind ?? "movie"),
+		...omdbQuery(request?.id ?? "", request?.title ?? "", request?.kind ?? "movie", source),
 		enabled: request !== null,
 	});
 	const imdbId = omdb.data?.imdbId;
 	const whatson = useQuery({
 		// Stryker disable next-line StringLiteral: no query loads without an IMDb id, which needs a request.
-		...whatsonQuery(imdbId ?? "", request?.kind ?? "movie"),
+		...whatsonQuery(imdbId ?? "", request?.kind ?? "movie", source),
 		// OMDb only gives an IMDb id for a request.
 		enabled: !!imdbId,
 	});
