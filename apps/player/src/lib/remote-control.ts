@@ -17,7 +17,7 @@ import {
 	type VersionedSnapshot,
 } from "@/lib/cinette-destination";
 import type { RemoteCommand } from "@/lib/remote-target";
-import type { RemoteDevice } from "@/lib/tauri";
+import type { RemoteDevice, RemoteSession } from "@/lib/tauri";
 
 /** The device this one controls, and how the connection stands. */
 export interface Link {
@@ -36,13 +36,17 @@ export interface Link {
 export interface RemoteControlState {
 	devices: RemoteDevice[];
 	link: Link | null;
-	/** The last link that ended, and why, until another starts or it's dismissed. */
+	/** The last link that ended, and why, until it's dismissed or something
+	 *  newer happens: this device connects to another, or another starts
+	 *  controlling this one. */
 	ended: { name: string; reason: LinkEnded } | null;
 }
 
 /** What the store needs from the backend. */
 export interface RemoteControlBackend {
 	devices(): Promise<RemoteDevice[]>;
+	/** The devices controlling this one. */
+	sessions(): Promise<RemoteSession[]>;
 	connect(deviceId: string, link: number): Promise<void>;
 	/** The link the backend holds, which a reloaded page may not know. */
 	current(): Promise<number | null>;
@@ -122,6 +126,17 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 		link.destination.receive(versioned, backend.now());
 	};
 
+	/** The sessions of the devices controlling this one, when last heard. */
+	let sessionIds = new Set<string>();
+	/** A device that starts controlling this one is newer news than a link
+	 *  that ended. One that reconnects keeps its session, so it isn't. */
+	const onSessions = (sessions: RemoteSession[]) => {
+		const ids = new Set(sessions.map((s) => s.sessionId));
+		const started = [...ids].some((id) => !sessionIds.has(id));
+		sessionIds = ids;
+		if (started) set({ ended: null });
+	};
+
 	/** Ends `link` here: its destination hears it closed. */
 	const drop = (link: Link | null) => {
 		link?.destination.setPhase({
@@ -145,12 +160,20 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 				backend.listen<ControllerEvent>("remote://controller", onPhase),
 				backend.listen<StateEvent>("remote://state", onState),
 				backend.listen<RenamedEvent>("remote://renamed", onRenamed),
+				backend.listen<RemoteSession[]>("remote://sessions", onSessions),
 			]);
 			// Events that came before listening started are in this list.
 			backend
 				.devices()
 				// Anything but a list, as from a backend without remote control, is none.
 				.then((devices) => set({ devices: Array.isArray(devices) ? devices : [] }))
+				.catch(() => {});
+			// The devices controlling this one already aren't news. Anything
+			// but a list, as from a backend without remote control, throws in
+			// onSessions and changes nothing.
+			backend
+				.sessions()
+				.then(onSessions)
 				.catch(() => {});
 			// A link from before the page reloaded has no one to show it.
 			backend

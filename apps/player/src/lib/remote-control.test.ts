@@ -4,7 +4,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createRemoteControl, type RemoteControlBackend } from "./remote-control";
 import type { RemoteSnapshot } from "./cinette-destination";
-import type { RemoteDevice } from "./tauri";
+import type { RemoteDevice, RemoteSession } from "./tauri";
 
 const tv: RemoteDevice = {
 	deviceId: "tv1",
@@ -15,6 +15,15 @@ const tv: RemoteDevice = {
 };
 
 const den: RemoteDevice = { ...tv, deviceId: "den1", name: "Den" };
+
+/** A device controlling this one. */
+const controller = (sessionId: string, connected = true): RemoteSession => ({
+	sessionId,
+	deviceId: `mac-${sessionId}`,
+	name: "MacBook Pro",
+	deviceType: "mac",
+	connected,
+});
 
 const snapshot: RemoteSnapshot = {
 	status: "playing",
@@ -42,6 +51,7 @@ const backend = () => {
 	const stops: ReturnType<typeof vi.fn>[] = [];
 	const b = {
 		devices: vi.fn(() => Promise.resolve([tv])),
+		sessions: vi.fn<() => Promise<RemoteSession[]>>(() => Promise.resolve([])),
 		connect: vi.fn<(deviceId: string, link: number) => Promise<void>>(() => Promise.resolve()),
 		current: vi.fn<() => Promise<number | null>>(() => Promise.resolve(null)),
 		leave: vi.fn<(link: number) => Promise<void>>(() => Promise.resolve()),
@@ -77,7 +87,7 @@ describe("createRemoteControl", () => {
 		expect(rc.getState().devices).toStrictEqual([tv, den]);
 		expect(changes).toHaveBeenCalledTimes(2);
 		stop();
-		expect(stops).toHaveLength(4);
+		expect(stops).toHaveLength(5);
 		for (const s of stops) expect(s).toHaveBeenCalledTimes(1);
 	});
 
@@ -248,6 +258,61 @@ describe("createRemoteControl", () => {
 		expect(destination.getState().connection).toBe("lost");
 		await rc.connect(den);
 		expect(rc.getState().ended, "a new link clears it").toBeNull();
+	});
+
+	it("forgets why a link ended once another device starts controlling this one", async () => {
+		const { b, emit } = backend();
+		b.sessions.mockResolvedValueOnce([controller("s1"), controller("s2")]);
+		const rc = createRemoteControl(b);
+		await rc.start();
+		await flush();
+		await rc.connect(tv);
+		const { id } = rc.getState().link!;
+		emit("remote://controller", {
+			deviceId: "tv1",
+			link: id,
+			phase: "closed",
+			reason: { target: "denied" },
+		});
+		const ended = rc.getState().ended;
+		expect(ended).not.toBeNull();
+		// The ones that controlled this device before are old news, as one
+		// drops and reconnects in the same session, and as one goes.
+		emit("remote://sessions", [controller("s1", false), controller("s2")]);
+		emit("remote://sessions", [controller("s1"), controller("s2")]);
+		emit("remote://sessions", [controller("s2")]);
+		expect(rc.getState().ended).toBe(ended);
+		emit("remote://sessions", [controller("s2"), controller("s3")]);
+		expect(rc.getState().ended).toBeNull();
+	});
+
+	it("forgets why a link ended for a device that started controlling this one unheard", async () => {
+		const { b, emit } = backend();
+		const rc = createRemoteControl(b);
+		const stop = await rc.start();
+		await rc.connect(tv);
+		const { id } = rc.getState().link!;
+		emit("remote://controller", { deviceId: "tv1", link: id, phase: "closed", reason: "lost" });
+		stop();
+		// Another device connected while no one used the store.
+		b.sessions.mockResolvedValueOnce([controller("s1")]);
+		await rc.start();
+		await flush();
+		expect(rc.getState().ended).toBeNull();
+	});
+
+	it("keeps why a link ended when the backend can't list the devices controlling this one", async () => {
+		const { b, emit } = backend();
+		b.sessions.mockResolvedValueOnce(undefined as never);
+		const rc = createRemoteControl(b);
+		await rc.start();
+		await rc.connect(tv);
+		const { id } = rc.getState().link!;
+		emit("remote://controller", { deviceId: "tv1", link: id, phase: "closed", reason: "lost" });
+		b.sessions.mockRejectedValueOnce("unavailable");
+		await rc.start();
+		await flush();
+		expect(rc.getState().ended).toStrictEqual({ name: "Living Room", reason: "lost" });
 	});
 
 	it("forgets why a link ended once that's dismissed", async () => {

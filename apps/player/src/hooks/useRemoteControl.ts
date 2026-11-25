@@ -8,7 +8,14 @@ import {
 	type RemoteControl,
 	type RemoteControlState,
 } from "@/lib/remote-control";
-import { remoteCommand, remoteConnect, remoteDevices, remoteLeave, remoteLink } from "@/lib/tauri";
+import {
+	remoteCommand,
+	remoteConnect,
+	remoteDevices,
+	remoteLeave,
+	remoteLink,
+	remoteSessions,
+} from "@/lib/tauri";
 
 /** The app's one remote control, made on first use. */
 let shared: RemoteControl | null = null;
@@ -32,6 +39,7 @@ export const remoteControl = (): RemoteControl => {
 	if (!shared) {
 		const control = createRemoteControl({
 			devices: remoteDevices,
+			sessions: remoteSessions,
 			connect: remoteConnect,
 			current: remoteLink,
 			leave: remoteLeave,
