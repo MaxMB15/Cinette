@@ -2,47 +2,42 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 // Every TanStack Query the app makes, with its key and the backend call that
-// answers it. Each key starts with where the data comes from, so another
-// device can later answer the same queries when the remote control browses
-// its catalog.
+// answers it. Each key starts with where the data comes from: this device,
+// or the device the remote control controls, which answers the same queries.
 
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
-import {
-	getAllChannels,
-	getEpgForLiveChannels,
-	getEpgProgrammes,
-	getWatchHistory,
-	getDownloadRetention,
-	listDownloads,
-	fetchOmdbData,
-	fetchWhatsonData,
-	getGroupHierarchy,
-	getPinnedGroups,
-	getProviders,
-	searchEpgProgrammes,
-} from "./tauri";
+import { getDownloadRetention, listDownloads } from "./tauri";
+import { LOCAL, libraryOf, type Source } from "./library";
 import { nowSeconds } from "./date";
 import type { TimeRange } from "./epg-window";
-import type { EpgProgram } from "./types";
+import type { Channel, EpgProgram } from "./types";
 
-/** Where a query's data comes from. Only this device for now. */
-export type Source = "local";
-
-export const LOCAL: Source = "local";
+export { LOCAL, type Source };
 
 /** The user's providers, with their settings and channel counts. */
 export const providersQuery = (source: Source = LOCAL) =>
 	queryOptions({
 		queryKey: [source, "providers"] as const,
-		queryFn: () => getProviders(),
+		queryFn: () => libraryOf(source).getProviders(),
 	});
 
 /** Every channel, movie and series of every provider. */
 export const channelsQuery = (source: Source = LOCAL) =>
 	queryOptions({
 		queryKey: [source, "channels"] as const,
-		queryFn: () => getAllChannels(),
+		queryFn: () => libraryOf(source).getAllChannels(),
 	});
+
+/** Shows a channel's new favorite mark in the channel list, which isn't loaded again for it. */
+export const showFavorite = (
+	client: QueryClient,
+	source: Source,
+	channelId: string,
+	isFavorite: boolean
+) =>
+	client.setQueryData(channelsQuery(source).queryKey, (prev: Channel[] | undefined) =>
+		prev?.map((ch) => (ch.id === channelId ? { ...ch, isFavorite } : ch))
+	);
 
 /**
  * How a provider's groups of one content type sort into categories. Empty
@@ -55,7 +50,7 @@ export const groupHierarchyQuery = (
 ) =>
 	queryOptions({
 		queryKey: [source, "groupHierarchy", providerId, contentType] as const,
-		queryFn: () => getGroupHierarchy(providerId, contentType),
+		queryFn: () => libraryOf(source).getGroupHierarchy(providerId, contentType),
 	});
 
 /** The groups pinned above the others, in order. */
@@ -66,7 +61,7 @@ export const pinnedGroupsQuery = (
 ) =>
 	queryOptions({
 		queryKey: [source, "pinnedGroups", providerId, contentType] as const,
-		queryFn: () => getPinnedGroups(providerId, contentType),
+		queryFn: () => libraryOf(source).getPinnedGroups(providerId, contentType),
 	});
 
 /**
@@ -76,7 +71,7 @@ export const pinnedGroupsQuery = (
 export const guideQuery = (range: TimeRange, version: string, source: Source = LOCAL) =>
 	queryOptions({
 		queryKey: [source, "guide", range.from, range.to, version, "all"] as const,
-		queryFn: () => getEpgForLiveChannels(range.from, range.to),
+		queryFn: () => libraryOf(source).getEpgForLiveChannels(range.from, range.to),
 	});
 
 /** The guide ids asked for in the same moment, for one range, with the call that loads them. */
@@ -87,20 +82,33 @@ interface GuideBatch {
 
 const guideBatches = new Map<string, GuideBatch>();
 
+/** The most guide ids one call names, which is all another device takes. */
+export const GUIDE_IDS_PER_CALL = 1000;
+
 /**
  * One channel's programs over a range. The ids that ask in the same moment
- * share one backend call, so a list of channels costs one call, as it did
- * before each id had its own query.
+ * share one backend call for each {@link GUIDE_IDS_PER_CALL} of them, so a
+ * list of channels costs one call, as it did before each id had its own query.
  */
-export const loadChannelGuide = (range: TimeRange, id: string): Promise<EpgProgram[]> => {
-	const batchKey = `${range.from}:${range.to}`;
+export const loadChannelGuide = (
+	range: TimeRange,
+	id: string,
+	source: Source = LOCAL
+): Promise<EpgProgram[]> => {
+	const batchKey = `${source}:${range.from}:${range.to}`;
 	let batch = guideBatches.get(batchKey);
 	if (!batch) {
 		const ids: string[] = [];
 		// The call waits for the other ids asked for in this moment.
 		const answer = Promise.resolve().then(() => {
 			guideBatches.delete(batchKey);
-			return getEpgForLiveChannels(range.from, range.to, ids);
+			// Stryker disable next-line ArrayDeclaration: Each caller keeps only the programs of its own id, so an extra item in the list reaches no one.
+			const calls: Promise<EpgProgram[]>[] = [];
+			for (let at = 0; at < ids.length; at += GUIDE_IDS_PER_CALL) {
+				const some = ids.slice(at, at + GUIDE_IDS_PER_CALL);
+				calls.push(libraryOf(source).getEpgForLiveChannels(range.from, range.to, some));
+			}
+			return Promise.all(calls).then((answers) => answers.flat());
 		});
 		batch = { ids, answer };
 		guideBatches.set(batchKey, batch);
@@ -125,7 +133,7 @@ export const channelGuideQuery = (
 ) =>
 	queryOptions({
 		queryKey: [...channelGuideKey(range, version, source), id] as const,
-		queryFn: () => loadChannelGuide(range, id),
+		queryFn: () => loadChannelGuide(range, id, source),
 	});
 
 /** How far apart the schedule's start can be and still read the same cache. */
@@ -140,7 +148,12 @@ export const SCHEDULE_STEP = 600;
 export const scheduleQuery = (epgId: string, at: number, version: number, source: Source = LOCAL) =>
 	queryOptions({
 		queryKey: [source, "schedule", epgId, at, version] as const,
-		queryFn: () => getEpgProgrammes(epgId, at - 12 * 3600, at + 12 * 3600 + SCHEDULE_STEP),
+		queryFn: () =>
+			libraryOf(source).getEpgProgrammes(
+				epgId,
+				at - 12 * 3600,
+				at + 12 * 3600 + SCHEDULE_STEP
+			),
 	});
 
 /**
@@ -150,7 +163,7 @@ export const scheduleQuery = (epgId: string, at: number, version: number, source
 export const guideSearchQuery = (term: string, source: Source = LOCAL) =>
 	queryOptions({
 		queryKey: [source, "guideSearch", term] as const,
-		queryFn: () => searchEpgProgrammes(term, nowSeconds()),
+		queryFn: () => libraryOf(source).searchEpgProgrammes(term, nowSeconds()),
 		staleTime: 60_000,
 	});
 
@@ -174,7 +187,7 @@ export const omdbQuery = (
 ) =>
 	queryOptions({
 		queryKey: [source, "omdb", id, title, kind] as const,
-		queryFn: () => fetchOmdbData(id, title, kind),
+		queryFn: () => libraryOf(source).fetchOmdbData(id, title, kind),
 		staleTime: keepFound,
 	});
 
@@ -182,7 +195,8 @@ export const omdbQuery = (
 export const whatsonQuery = (imdbId: string, kind: "movie" | "series", source: Source = LOCAL) =>
 	queryOptions({
 		queryKey: [source, "whatson", imdbId, kind] as const,
-		queryFn: () => fetchWhatsonData(imdbId, kind === "series" ? "show" : "movie"),
+		queryFn: () =>
+			libraryOf(source).fetchWhatsonData(imdbId, kind === "series" ? "show" : "movie"),
 		staleTime: keepFound,
 	});
 
@@ -204,7 +218,7 @@ export const historyKey = (source: Source = LOCAL) => [source, "history"] as con
 export const watchHistoryQuery = (limit: number, contentType?: string, source: Source = LOCAL) =>
 	queryOptions({
 		queryKey: [...historyKey(source), contentType ?? "all", limit] as const,
-		queryFn: () => getWatchHistory(limit, contentType),
+		queryFn: () => libraryOf(source).getWatchHistory(limit, contentType),
 	});
 
 /**

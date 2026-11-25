@@ -3,7 +3,9 @@
 
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { libraryOf } from "@/lib/library";
 import { historyKey, watchHistoryQuery } from "@/lib/queries";
+import { useLibrarySource } from "@/hooks/useLibrary";
 import type { WatchHistoryEntry } from "@/lib/types";
 
 const NO_ENTRIES: WatchHistoryEntry[] = [];
@@ -18,7 +20,8 @@ export const useWatchHistory = (
 	logPrefix: string
 ) => {
 	const queryClient = useQueryClient();
-	const result = useQuery(watchHistoryQuery(limit, contentType));
+	const source = useLibrarySource();
+	const result = useQuery(watchHistoryQuery(limit, contentType, source));
 
 	useEffect(() => {
 		if (result.error) console.error(logPrefix, result.error);
@@ -32,14 +35,16 @@ export const useWatchHistory = (
 	 */
 	const change = (edit: (entries: WatchHistoryEntry[]) => WatchHistoryEntry[]) => {
 		queryClient.setQueriesData<WatchHistoryEntry[]>(
-			{ queryKey: historyKey() },
+			{ queryKey: historyKey(source) },
 			(prev) => prev && edit(prev)
 		);
 		// After the edit, which would mark them fresh again.
-		void queryClient.invalidateQueries({ queryKey: historyKey(), refetchType: "none" });
+		void queryClient.invalidateQueries({ queryKey: historyKey(source), refetchType: "none" });
 	};
 
-	return { entries: result.data ?? NO_ENTRIES, loading: result.isPending, change };
+	// The edits go to the library the lists are from.
+	const library = libraryOf(source);
+	return { entries: result.data ?? NO_ENTRIES, loading: result.isPending, change, library };
 };
 
 /**
@@ -50,10 +55,14 @@ export const useWatchHistory = (
  */
 export const useHistoryStaleOnLeave = () => {
 	const queryClient = useQueryClient();
+	const source = useLibrarySource();
 	useEffect(
 		() => () => {
-			void queryClient.invalidateQueries({ queryKey: historyKey(), refetchType: "none" });
+			void queryClient.invalidateQueries({
+				queryKey: historyKey(source),
+				refetchType: "none",
+			});
 		},
-		[queryClient]
+		[queryClient, source]
 	);
 };

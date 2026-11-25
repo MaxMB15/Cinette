@@ -197,6 +197,17 @@ fn known_types_match_the_message_enum() {
             items: vec![],
             next: None,
         },
+        Message::Library {
+            id: 0,
+            call: crate::remote::library::LibraryCall::Channels,
+        },
+        Message::LibraryData {
+            re: 0,
+            seq: 0,
+            last: true,
+            data: String::new(),
+        },
+        Message::LibraryAck { re: 0, seq: 0 },
         Message::Ok { re: 0, version: 0 },
         Message::Error {
             re: None,

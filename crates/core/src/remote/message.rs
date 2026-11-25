@@ -9,6 +9,7 @@
 //! [`ErrorCode::Unsupported`] rather than ending the connection.
 
 use super::catalog::{CatalogItem, CatalogQuery};
+use super::library::LibraryCall;
 use super::identity::DeviceId;
 use super::transfer::chunks::Chunk;
 use super::transfer::flow::{Direction, ProviderName, ProviderResult, ProviderSettings};
@@ -92,6 +93,8 @@ pub enum Feature {
     Providers,
     /// Reading [`Message::Renamed`], so a new name reaches an open session.
     Rename,
+    /// Reading and editing the target's library with [`Message::Library`].
+    Library,
     /// A feature from a newer version of Cinette, which this one ignores.
     #[serde(other)]
     Unknown,
@@ -392,6 +395,24 @@ pub enum Message {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         next: Option<String>,
     },
+    /// A call on the target's library. The answer comes in
+    /// [`Message::LibraryData`] pieces, or as an [`Message::Error`].
+    Library {
+        id: u64,
+        call: LibraryCall,
+    },
+    /// Piece `seq` of the answer to `re`: deflated JSON, in base64.
+    LibraryData {
+        re: u64,
+        seq: u32,
+        #[serde(default)]
+        last: bool,
+        data: String,
+    },
+    LibraryAck {
+        re: u64,
+        seq: u32,
+    },
     Ok {
         re: u64,
         version: u64,
@@ -486,6 +507,9 @@ pub(crate) const KNOWN_TYPES: &[&str] = &[
     "command",
     "catalog",
     "catalogPage",
+    "library",
+    "libraryData",
+    "libraryAck",
     "ok",
     "error",
     "ping",

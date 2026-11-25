@@ -150,5 +150,6 @@
 	"remote_ask_history": { "required": ["link", "direction", "what"], "optional": ["playing"] },
 	"remote_start_import": { "required": ["link", "transfer"] },
 	"remote_history_counts": { "required": ["what"] },
-	"remote_progress_saved": { "optional": ["playing"] }
+	"remote_progress_saved": { "optional": ["playing"] },
+	"remote_library": { "required": ["link", "call"] }
 }

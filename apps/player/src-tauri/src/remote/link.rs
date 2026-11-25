@@ -16,6 +16,7 @@ use super::conn::{self, Read, Writer};
 use mvp_core::remote::catalog::{CatalogItem, CatalogQuery};
 use mvp_core::remote::controller::{AskError, Controller, Event, PING_INTERVAL};
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
+use mvp_core::remote::library::LibraryCall;
 use mvp_core::remote::message::{CloseReason, Command, ErrorCode, Feature, Hello, VersionedState};
 use mvp_core::remote::target::IDLE_TIMEOUT;
 use mvp_core::remote::transfer::flow::{
@@ -168,6 +169,7 @@ pub enum LinkError {
 enum Input {
     Command(Command, oneshot::Sender<Result<u64, LinkError>>),
     Catalog(CatalogQuery, oneshot::Sender<Page>),
+    Library(LibraryCall, oneshot::Sender<Result<Vec<u8>, LinkError>>),
     AskProviders(Vec<ProviderName>, oneshot::Sender<Result<(), AskError>>),
     SendProviders(String, Vec<ProviderSettings>),
     CancelTransfer,
@@ -217,6 +219,16 @@ impl LinkHandle {
         let (tx, rx) = oneshot::channel();
         self.inbox
             .send(Input::Catalog(query, tx))
+            .map_err(|_| LinkError::NotConnected)?;
+        rx.await.unwrap_or(Err(LinkError::NotConnected))
+    }
+
+    /// Calls on the target's library. Resolves with the packed answer,
+    /// which [`mvp_core::remote::library::unpack`] reads.
+    pub async fn library(&self, call: LibraryCall) -> Result<Vec<u8>, LinkError> {
+        let (tx, rx) = oneshot::channel();
+        self.inbox
+            .send(Input::Library(call, tx))
             .map_err(|_| LinkError::NotConnected)?;
         rx.await.unwrap_or(Err(LinkError::NotConnected))
     }
@@ -515,6 +527,7 @@ async fn connect_any(
 enum Waiting {
     Command(oneshot::Sender<Result<u64, LinkError>>),
     Catalog(oneshot::Sender<Page>),
+    Library(oneshot::Sender<Result<Vec<u8>, LinkError>>),
 }
 
 impl Waiting {
@@ -526,6 +539,19 @@ impl Waiting {
             Waiting::Catalog(reply) => {
                 let _ = reply.send(Err(error));
             }
+            Waiting::Library(reply) => {
+                let _ = reply.send(Err(error));
+            }
+        }
+    }
+}
+
+/// The target answers library calls one at a time, so while it sends
+/// pieces of one, every call waiting gets until `until`.
+fn wait_for_library(waiting: &mut HashMap<u64, (Waiting, Instant)>, until: Instant) {
+    for (w, deadline) in waiting.values_mut() {
+        if matches!(w, Waiting::Library(_)) {
+            *deadline = until;
         }
     }
 }
@@ -668,10 +694,24 @@ async fn connection(
                             host.state(link, device, &state);
                         }
                         Event::State(state) => host.state(link, device, &state),
-                        Event::Reply { request, result } => {
-                            if let Some((Waiting::Command(reply), _)) = waiting.remove(&request) {
+                        Event::Reply { request, result } => match waiting.remove(&request) {
+                            Some((Waiting::Command(reply), _)) => {
                                 let _ = reply.send(result.map_err(LinkError::Refused));
                             }
+                            Some((Waiting::Library(reply), _)) => {
+                                let code = result.err().unwrap_or(ErrorCode::Invalid);
+                                let _ = reply.send(Err(LinkError::Refused(code)));
+                            }
+                            _ => {}
+                        },
+                        Event::Library { request, packed } => {
+                            if let Some((Waiting::Library(reply), _)) = waiting.remove(&request) {
+                                let _ = reply.send(Ok(packed));
+                            }
+                            wait_for_library(&mut waiting, last_heard + config.limits.request);
+                        }
+                        Event::LibraryPiece { .. } => {
+                            wait_for_library(&mut waiting, last_heard + config.limits.request);
                         }
                         Event::Page { request, items, next } => {
                             if let Some((Waiting::Catalog(reply), _)) = waiting.remove(&request) {
@@ -722,6 +762,23 @@ async fn connection(
                 Some(Input::Catalog(_, reply)) if waiting.len() >= config.limits.waiting => {
                     let _ = reply.send(Err(LinkError::Busy));
                 }
+                Some(Input::Library(_, reply)) if waiting.len() >= config.limits.waiting => {
+                    let _ = reply.send(Err(LinkError::Busy));
+                }
+                Some(Input::Library(call, reply)) => match controller.library(call) {
+                    Ok((id, bytes)) => {
+                        let _ = writer.send(bytes);
+                        last_sent = (config.clock)();
+                        let until = last_sent + config.limits.request;
+                        waiting.insert(id, (Waiting::Library(reply), until));
+                    }
+                    Err(AskError::Unsupported) => {
+                        let _ = reply.send(Err(LinkError::Refused(ErrorCode::Unsupported)));
+                    }
+                    Err(_) => {
+                        let _ = reply.send(Err(LinkError::NotConnected));
+                    }
+                },
                 Some(Input::Command(command, reply)) => match controller.command(command) {
                     Ok((id, bytes)) => {
                         let _ = writer.send(bytes);
@@ -823,6 +880,7 @@ async fn connection(
             .collect();
         for id in late {
             if let Some((w, _)) = waiting.remove(&id) {
+                controller.forget_library(id);
                 w.fail(LinkError::TimedOut);
             }
         }

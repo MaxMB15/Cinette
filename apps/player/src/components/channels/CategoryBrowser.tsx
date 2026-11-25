@@ -16,7 +16,8 @@ interface CategoryBrowserProps {
 	topLevelGroups: { name: string; channelCount: number }[];
 	onSelectCategory: (name: string) => void;
 	onSelectGroup: (name: string) => void;
-	onManage: () => void;
+	/** Opens the category manager. Without it there's no Manage button. */
+	onManage?: () => void;
 }
 
 interface CategoryTileProps {
@@ -52,9 +53,11 @@ export const CategoryBrowser = ({
 			<span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
 				Categories
 			</span>
-			<button onClick={onManage} className="text-xs text-primary hover:underline">
-				Manage
-			</button>
+			{onManage && (
+				<button onClick={onManage} className="text-xs text-primary hover:underline">
+					Manage
+				</button>
+			)}
 		</div>
 		<div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
 			{superCategories.map((cat) => (

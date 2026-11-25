@@ -42,6 +42,9 @@ import {
 	remoteSetState,
 } from "@/lib/tauri";
 import { setProgressSaver } from "@/lib/player-progress";
+import { channelsQuery, LOCAL, pinnedGroupsQuery, watchHistoryQuery } from "@/lib/queries";
+import { remoteSource } from "@/lib/library";
+import { createTestQueryClient, wrapperFor } from "@/test/query";
 import {
 	usePublishRemoteState,
 	useRemoteBlocked,
@@ -133,10 +136,13 @@ const pageOpens = () => {
 	return mocks;
 };
 
+const renderTarget = (client = createTestQueryClient()) =>
+	renderHook(() => useRemoteTarget(), { wrapper: wrapperFor(client) });
+
 describe("useRemoteTarget", () => {
 	it("saves the player's place when a controller copies history, and says what's open", async () => {
 		const stop = setProgressSaver(async () => "live-1");
-		renderHook(() => useRemoteTarget());
+		renderTarget();
 		await waitFor(() => expect(handlers.has("remote://save-progress")).toBe(true));
 		emit("remote://save-progress", null);
 		await waitFor(() => expect(remoteProgressSaved).toHaveBeenCalledWith("live-1"));
@@ -145,7 +151,7 @@ describe("useRemoteTarget", () => {
 
 	it("answers a save with nothing open", async () => {
 		vi.mocked(remoteProgressSaved).mockClear();
-		renderHook(() => useRemoteTarget());
+		renderTarget();
 		await waitFor(() => expect(handlers.has("remote://save-progress")).toBe(true));
 		emit("remote://save-progress", null);
 		await waitFor(() => expect(remoteProgressSaved).toHaveBeenCalledWith(null));
@@ -153,7 +159,7 @@ describe("useRemoteTarget", () => {
 
 	it("opens the player for a load when none is open, and plays there", async () => {
 		const page = pageOpens();
-		renderHook(() => useRemoteTarget());
+		renderTarget();
 		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
 		emit("remote://command", {
 			token: 4,
@@ -167,20 +173,20 @@ describe("useRemoteTarget", () => {
 	it("uses the channels as they are when the command comes", async () => {
 		pageOpens();
 		channels.list = [];
-		const { rerender } = renderHook(() => useRemoteTarget());
+		const { rerender } = renderTarget();
 		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
 		channels.list = [channel];
 		rerender();
 		emit("remote://command", { token: 5, command: { action: "load", itemId: "live-1" } });
 		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(5, "ok"));
-		// One listener each for commands and saves, not one more per render.
-		expect(vi.mocked(listen)).toHaveBeenCalledTimes(2);
+		// One listener each for commands, saves and library changes, not one more per render.
+		expect(vi.mocked(listen)).toHaveBeenCalledTimes(3);
 	});
 
 	it("sends other commands to the mounted player", async () => {
 		const { destination, mocks } = fakeDestination();
 		setMountedPlayer(destination);
-		renderHook(() => useRemoteTarget());
+		renderTarget();
 		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
 		emit("remote://command", { token: 6, command: { action: "play", itemId: "live-1" } });
 		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(6, "ok"));
@@ -190,7 +196,7 @@ describe("useRemoteTarget", () => {
 	it("plays an episode that comes with the command", async () => {
 		const episode = { ...channel, id: "ep-1", name: "Pilot", url: "http://x.test/ep1.mkv" };
 		const page = pageOpens();
-		renderHook(() => useRemoteTarget());
+		renderTarget();
 		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
 		emit("remote://command", {
 			token: 8,
@@ -206,7 +212,7 @@ describe("useRemoteTarget", () => {
 
 	it("looks in the channel list when the episode is another one", async () => {
 		const page = pageOpens();
-		renderHook(() => useRemoteTarget());
+		renderTarget();
 		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
 		emit("remote://command", {
 			token: 9,
@@ -218,7 +224,7 @@ describe("useRemoteTarget", () => {
 	});
 
 	it("stops mpv for a stop when no player page is open", async () => {
-		renderHook(() => useRemoteTarget());
+		renderTarget();
 		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
 		emit("remote://command", { token: 8, command: { action: "stop" } });
 		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(8, "ok"));
@@ -226,7 +232,7 @@ describe("useRemoteTarget", () => {
 	});
 
 	it("reports what wasn't found", async () => {
-		renderHook(() => useRemoteTarget());
+		renderTarget();
 		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
 		emit("remote://command", { token: 7, command: { action: "load", itemId: "nope" } });
 		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(7, "notFound"));
@@ -234,26 +240,80 @@ describe("useRemoteTarget", () => {
 	});
 
 	it("stops listening when unmounted, even before listening started", async () => {
-		const view = renderHook(() => useRemoteTarget());
-		await waitFor(() => expect(unlisteners).toHaveLength(2));
+		const view = renderTarget();
+		await waitFor(() => expect(unlisteners).toHaveLength(3));
 		view.unmount();
-		expect(unlisteners[0]).toHaveBeenCalledTimes(1);
-		expect(unlisteners[1]).toHaveBeenCalledTimes(1);
+		for (const unlisten of unlisteners) expect(unlisten).toHaveBeenCalledTimes(1);
 
 		let resolve: (stop: () => void) => void = () => {};
 		vi.mocked(listen).mockImplementationOnce(
 			() => new Promise((r) => (resolve = r as typeof resolve))
 		);
-		const early = renderHook(() => useRemoteTarget());
+		const early = renderTarget();
 		early.unmount();
 		const stop = vi.fn();
 		await act(async () => resolve(stop));
 		expect(stop).toHaveBeenCalledTimes(1);
 	});
 
+	it("shows a favorite a controller changed in this device's channels", async () => {
+		const client = createTestQueryClient();
+		const { queryKey } = channelsQuery(LOCAL);
+		client.setQueryData(queryKey, [channel, { ...channel, id: "live-2" }]);
+		renderTarget(client);
+		await waitFor(() => expect(handlers.has("remote://library-changed")).toBe(true));
+		const changed = (answer: unknown) =>
+			emit("remote://library-changed", {
+				call: { name: "toggleFavorite", id: "live-1" },
+				answer,
+			});
+
+		changed(true);
+		expect(client.getQueryData(queryKey)?.map((c) => c.isFavorite)).toEqual([true, false]);
+		changed(false);
+		expect(client.getQueryData(queryKey)?.map((c) => c.isFavorite)).toEqual([false, false]);
+	});
+
+	it("reloads the pinned groups a controller pinned or unpinned", async () => {
+		const client = createTestQueryClient();
+		const changed = pinnedGroupsQuery("p1", "live").queryKey;
+		const other = pinnedGroupsQuery("p1", "movie").queryKey;
+		renderTarget(client);
+		await waitFor(() => expect(handlers.has("remote://library-changed")).toBe(true));
+		for (const name of ["pinGroup", "unpinGroup"]) {
+			client.setQueryData(changed, []);
+			client.setQueryData(other, []);
+			emit("remote://library-changed", {
+				call: { name, providerId: "p1", contentType: "live", group: "News", order: 0 },
+				answer: null,
+			});
+			expect(client.getQueryState(changed)?.isInvalidated).toBe(true);
+			expect(client.getQueryState(other)?.isInvalidated).toBe(false);
+		}
+	});
+
+	it("reloads this device's history after a controller changes it", async () => {
+		const client = createTestQueryClient();
+		const local = watchHistoryQuery(20).queryKey;
+		const remote = watchHistoryQuery(20, undefined, remoteSource(2)).queryKey;
+		renderTarget(client);
+		await waitFor(() => expect(handlers.has("remote://library-changed")).toBe(true));
+		for (const call of [
+			{ name: "deleteHistory", channelId: "live-1" },
+			{ name: "deleteHistorySeries", seriesTitle: "Show" },
+			{ name: "clearHistory" },
+		]) {
+			client.setQueryData(local, []);
+			client.setQueryData(remote, []);
+			emit("remote://library-changed", { call, answer: null });
+			expect(client.getQueryState(local)?.isInvalidated).toBe(true);
+			expect(client.getQueryState(remote)?.isInvalidated).toBe(false);
+		}
+	});
+
 	it("survives a failure to listen", async () => {
 		vi.mocked(listen).mockRejectedValueOnce(new Error("no Tauri"));
-		const view = renderHook(() => useRemoteTarget());
+		const view = renderTarget();
 		await act(async () => {});
 		view.unmount();
 	});

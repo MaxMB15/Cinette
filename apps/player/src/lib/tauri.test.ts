@@ -869,6 +869,13 @@ describe("backend commands", () => {
 			"remote_cancel_transfer",
 			{ link: 5 },
 		],
+		[
+			"remoteLibrary",
+			// The mock answers nothing, which isn't JSON.
+			() => tauri.remoteLibrary(5, { name: "toggleFavorite", id: "c1" }).catch(() => {}),
+			"remote_library",
+			{ call: { name: "toggleFavorite", id: "c1" }, link: 5 },
+		],
 	];
 
 	const rows = cases.map(([name, call, command, args]) => ({ name, call, command, args }));
@@ -881,10 +888,21 @@ describe("backend commands", () => {
 		);
 	});
 
-	it.each(rows)("$name resolves to what the backend returns", async ({ call }) => {
-		const answer = { from: "backend" };
-		invoke.mockResolvedValue(answer);
-		await expect(call()).resolves.toBe(answer);
+	// These read the bytes the backend returns as JSON.
+	const decoded = new Set(["remoteLibrary"]);
+
+	it.each(rows.filter(({ name }) => !decoded.has(name)))(
+		"$name resolves to what the backend returns",
+		async ({ call }) => {
+			const answer = { from: "backend" };
+			invoke.mockResolvedValue(answer);
+			await expect(call()).resolves.toBe(answer);
+		}
+	);
+
+	it("remoteLibrary resolves to the JSON in the bytes the backend returns", async () => {
+		invoke.mockResolvedValue(new TextEncoder().encode('[{"id":"c1"}]').buffer);
+		await expect(tauri.remoteLibrary(5, { name: "channels" })).resolves.toEqual([{ id: "c1" }]);
 	});
 
 	it("passes a backend error on to the caller", async () => {

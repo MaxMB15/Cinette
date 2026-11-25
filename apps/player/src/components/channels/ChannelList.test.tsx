@@ -5,6 +5,7 @@ import { createTestQueryClient, wrapperFor } from "@/test/query";
 import { historyKey } from "@/lib/queries";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import type {
 	Channel,
 	DownloadRecord,
@@ -18,6 +19,10 @@ import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/brows
 import { formatHHMM } from "@/lib/epg-window";
 import { makeChannel, makeDownload, makeHistoryEntry } from "@/test/channel-fixtures";
 import { deferred } from "@/test/deferred";
+import { makeRecording } from "@/test/detail-fixtures";
+import { recordingChannel } from "@/lib/recordings";
+import { LibraryProvider } from "@/hooks/useLibrary";
+import { remoteSource } from "@/lib/library";
 import { answerFrom } from "@/test/guide-answers";
 import { ChannelList } from "./ChannelList";
 import { ROW_CARD_LEFT_WIDTH } from "./ChannelCard";
@@ -55,6 +60,7 @@ const tauri = vi.hoisted(() => ({
 	stopDownload: vi.fn(),
 	removeDownload: vi.fn(),
 	setDownloadKeep: vi.fn(),
+	remoteLibrary: vi.fn(),
 }));
 
 vi.mock("@/lib/tauri", () => tauri);
@@ -1417,6 +1423,22 @@ describe("ChannelList series", () => {
 		).toEqual(["Episode Harbor Lights S01E01", "Episode Harbor Lights S01E01"]);
 	});
 
+	it("loads every Xtream entry of a show that came after the list opened", async () => {
+		state.loading = true;
+		state.channels = [];
+		tauri.getXtreamSeriesEpisodes.mockImplementation(async (id: string) => [episodeOf(id, 1)]);
+		saveBrowseTab("series");
+		const { rerender } = await renderList();
+		state.loading = false;
+		state.channels = [xtreamShow, xtreamShowFr];
+		rerender(<ChannelList />);
+		await flush();
+
+		fireEvent.click(screen.getByText("Harbor Lights"));
+		await screen.findByRole("dialog", { name: "Episodes of Harbor Lights" });
+		expect(tauri.getXtreamSeriesEpisodes.mock.calls).toEqual([["xs-1"], ["xs-2"]]);
+	});
+
 	it("still opens a show when one of its other entries fails to load", async () => {
 		state.channels = [xtreamShow, xtreamShowFr];
 		tauri.getXtreamSeriesEpisodes.mockImplementation(async (id: string) => {
@@ -1979,6 +2001,23 @@ describe("ChannelList history tab", () => {
 		expect(played.seriesEpisodes.map((ep: Channel) => ep.id)).toEqual(["hl-1", "hl-2"]);
 	});
 
+	it("replays a channel that came after the list opened", async () => {
+		state.loading = true;
+		state.channels = [];
+		tauri.getWatchHistory.mockResolvedValue([watched("news", "News 24", "live")]);
+		saveBrowseTab("history");
+		const { rerender } = await renderList();
+		state.loading = false;
+		state.channels = library;
+		rerender(<ChannelList />);
+		await flush();
+
+		fireEvent.click(screen.getByRole("button", { name: /^News 24/ }));
+		expect(state.navigate).toHaveBeenCalledExactlyOnceWith("/player", {
+			state: { url: news.url, channelName: "News 24", channel: news },
+		});
+	});
+
 	it("finds the show from the episode name when the entry has no show title", async () => {
 		await playFromHistory(watched("hl-2", "Harbor Lights S01E02", "series"));
 		expect(playedWith()?.[1].state.channel.id).toBe("hl-2");
@@ -2034,11 +2073,103 @@ describe("ChannelList history tab", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
+	it("plays a finished recording from its file", async () => {
+		const rec = makeRecording({ status: "completed", destPath: "/recordings/city.ts" });
+		state.downloads = [rec];
+		await playFromHistory(
+			makeHistoryEntry({
+				channelId: "rec-1",
+				channelName: "City News",
+				contentType: "recording",
+			})
+		);
+		const ch = recordingChannel(rec);
+		expect(ch.url).toBe("/recordings/city.ts");
+		expect(state.navigate).toHaveBeenCalledExactlyOnceWith("/player", {
+			state: { url: ch.url, channelName: ch.name, channel: ch },
+		});
+	});
+
 	it("plays a watched live channel", async () => {
 		await playFromHistory(watched("sport", "Sport One", "live"));
 		expect(state.navigate).toHaveBeenCalledWith("/player", {
 			state: { url: sport.url, channelName: "Sport One", channel: sport },
 		});
+	});
+});
+
+describe("ChannelList showing another device's library", () => {
+	/** Answers the other device's calls: its episodes by series id, and nothing else. */
+	const answerRemote = (episodes: Record<string, Channel[]> = {}) =>
+		tauri.remoteLibrary.mockImplementation(
+			async (_link: number, call: { name: string; seriesId?: string }) =>
+				call.name === "seriesEpisodes" ? (episodes[call.seriesId!] ?? []) : []
+		);
+
+	const renderRemote = async () => {
+		const play = vi.fn();
+		const Cache = wrapperFor();
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<Cache>
+				<LibraryProvider value={{ source: remoteSource(2), play }}>
+					{children}
+				</LibraryProvider>
+			</Cache>
+		);
+		render(<ChannelList />, { wrapper });
+		await flush();
+		return play;
+	};
+
+	it("shows the same tabs and rows, without what only this device does", async () => {
+		answerRemote();
+		const play = await renderRemote();
+
+		expect(tab("Live")).toHaveTextContent(/^Live3$/);
+		expect(tab("History")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Downloads/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Show downloaded only" })).toBeNull();
+		expect(screen.queryByText("Channels not categorized yet.")).toBeNull();
+		expect(tauri.getEpgForLiveChannels).not.toHaveBeenCalled();
+		expect(tauri.remoteLibrary).toHaveBeenCalledWith(
+			2,
+			expect.objectContaining({ name: "guide" })
+		);
+
+		fireEvent.click(screen.getByText("News 24"));
+		expect(play).toHaveBeenCalledExactlyOnceWith({
+			url: news.url,
+			channelName: "News 24",
+			channel: news,
+		});
+		expect(state.navigate).not.toHaveBeenCalled();
+	});
+
+	it("loads a show's episodes from the other device and plays one there", async () => {
+		state.channels = [xtreamShow, xtreamShowFr];
+		const first = episodeOf("xs-1", 1);
+		answerRemote({ "xs-1": [first], "xs-2": [episodeOf("xs-2", 1)] });
+		saveBrowseTab("series");
+		const play = await renderRemote();
+
+		fireEvent.click(screen.getByText("Harbor Lights"));
+		const dialog = await screen.findByRole("dialog", { name: "Episodes of Harbor Lights" });
+		expect(
+			tauri.remoteLibrary.mock.calls
+				.filter(([, call]) => call.name === "seriesEpisodes")
+				.map(([link, call]) => [link, call.seriesId])
+		).toEqual([
+			[2, "xs-1"],
+			[2, "xs-2"],
+		]);
+		expect(tauri.getXtreamSeriesEpisodes).not.toHaveBeenCalled();
+
+		fireEvent.click(
+			within(dialog).getAllByRole("button", { name: "Episode Harbor Lights S01E01" })[0]
+		);
+		expect(play).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({ channel: first, channelName: first.name })
+		);
 	});
 });
 

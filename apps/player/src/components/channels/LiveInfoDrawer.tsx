@@ -6,7 +6,8 @@ import { X, TvMinimal, LoaderCircle, Circle, Square, CalendarClock } from "lucid
 import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
 import { useQuery } from "@tanstack/react-query";
 import { formatHHMM } from "@/lib/epg-window";
-import { scheduleQuery, SCHEDULE_STEP } from "@/lib/queries";
+import { LOCAL, scheduleQuery, SCHEDULE_STEP } from "@/lib/queries";
+import { useLibrarySource } from "@/hooks/useLibrary";
 import { isMobilePlatform } from "@/lib/platform";
 import { isRecordingOf, recordingOfProgram } from "@/lib/recordings";
 import { useChannels, useProviderIds } from "@/hooks/useChannels";
@@ -41,8 +42,11 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 	// of its ten minutes, so opening the same channel again soon reads the cache.
 	const [opened] = useState(() => Math.floor(Date.now() / 1000 / SCHEDULE_STEP) * SCHEDULE_STEP);
 	const { guideVersion } = useChannels();
+	const source = useLibrarySource();
+	// Another device's channel can only be watched from here.
+	const canRecord = RECORDING_SUPPORTED && source === LOCAL;
 	const schedule = useQuery({
-		...scheduleQuery(epgId, opened, guideVersion),
+		...scheduleQuery(epgId, opened, guideVersion, source),
 		// A refreshed guide keeps this channel's schedule on screen until the
 		// new one arrives. The key's third part is the guide id.
 		placeholderData: (previous, previousQuery) =>
@@ -66,7 +70,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 	const providerIds = useProviderIds();
 	const [recordRequest, setRecordRequest] = useState<RecordRequest | null>(null);
 	// The channel's recordings, found by its name too, since a refresh can change its id.
-	const recordings = RECORDING_SUPPORTED
+	const recordings = canRecord
 		? downloads.filter((r) => isRecordingOf(r, channel, providerIds))
 		: [];
 	const running = recordings.find((r) => r.status === "recording");
@@ -145,7 +149,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 						</p>
 					</div>
 
-					{RECORDING_SUPPORTED &&
+					{canRecord &&
 						(running ? (
 							<button
 								onClick={() =>
@@ -167,7 +171,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 								Record
 							</button>
 						))}
-					{RECORDING_SUPPORTED && (
+					{canRecord && (
 						<button
 							onClick={() => setRecordRequest({ type: "range" })}
 							aria-label="Record a time range"
@@ -316,10 +320,10 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 												</span>
 											) : null}
 										</button>
-										{RECORDING_SUPPORTED && isPast && (
+										{canRecord && isPast && (
 											<span className="w-8 shrink-0" aria-hidden />
 										)}
-										{RECORDING_SUPPORTED && !isPast && (
+										{canRecord && !isPast && (
 											<ProgramRecordButton
 												program={prog}
 												covering={recordingOfProgram(recordings, prog, now)}
@@ -344,7 +348,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 				<div className="shrink-0 pb-2" />
 			</div>
 
-			{RECORDING_SUPPORTED && (
+			{canRecord && (
 				<RecordDialog
 					channel={channel}
 					request={recordRequest}

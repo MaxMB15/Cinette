@@ -1083,3 +1083,32 @@ export const remoteCatalog = (
 	catalogQuery: CatalogQuery
 ): Promise<{ items: CatalogItem[]; next: string | null }> =>
 	invoke("remote_catalog", { catalogQuery, link });
+
+/** A read or an edit of the controlled device's library, as `remote_library` takes it. */
+export type LibraryCall =
+	| { name: "channels" | "providers" }
+	| { name: "groupHierarchy" | "pinnedGroups"; providerId: string; contentType: string }
+	| { name: "guide"; from: number; to: number; ids?: readonly string[] }
+	| { name: "schedule"; epgId: string; from: number; to: number }
+	| { name: "guideSearch"; query: string; from: number }
+	| { name: "history"; limit: number; contentType?: string }
+	| { name: "seriesEpisodes"; seriesId: string }
+	| { name: "omdb"; id: string; title: string; kind: string }
+	| { name: "whatson"; imdbId: string; kind: string }
+	| { name: "toggleFavorite"; id: string }
+	| { name: "pinGroup"; providerId: string; contentType: string; group: string; order: number }
+	| { name: "unpinGroup"; providerId: string; contentType: string; group: string }
+	| { name: "deleteHistory"; channelId: string }
+	| { name: "deleteHistorySeries"; seriesTitle: string }
+	| { name: "clearHistory"; contentType?: string };
+
+/**
+ * What the device link `link` goes to answers `call` with: what its own
+ * command gives, with no stream URLs, logins or provider servers. Each
+ * channel's `url` names it there, as `cinette-remote:` and its id.
+ */
+export const remoteLibrary = async <T>(link: number, call: LibraryCall): Promise<T> => {
+	// The answer comes as bytes, so a big library isn't read twice on the way.
+	const bytes = await invoke<ArrayBuffer>("remote_library", { call, link });
+	return JSON.parse(new TextDecoder().decode(bytes)) as T;
+};

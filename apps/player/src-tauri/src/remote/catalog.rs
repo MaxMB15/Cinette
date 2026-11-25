@@ -13,7 +13,7 @@ use mvp_core::cache::store::{CacheError, CacheStore};
 use mvp_core::models::channel::Channel;
 use mvp_core::models::playlist::Provider;
 use mvp_core::remote::catalog::{
-    group_page, provider_host, CatalogItem, CatalogQuery, MAX_PAGE,
+    group_page, provider_host, shareable_logo, CatalogItem, CatalogQuery, MAX_PAGE,
 };
 use mvp_core::remote::message::ErrorCode;
 use std::sync::Mutex;
@@ -157,19 +157,18 @@ pub(crate) fn hosts(providers: &[Provider], channels: &[Channel]) -> Vec<String>
     hosts
 }
 
-/// `channel` as a controller sees it. The core drops a logo on one of
-/// `hosts`; this also drops one elsewhere on the same site, such as
-/// `logos.panel.example` next to `panel.example`.
+/// `channel` as a controller sees it, with its logo only if [`shareable`].
 pub(crate) fn item(channel: &Channel, hosts: &[String]) -> CatalogItem {
     let mut item = CatalogItem::from_channel(channel, hosts);
-    if item
-        .logo
-        .as_deref()
-        .is_some_and(|logo| on_a_provider_site(logo, hosts))
-    {
-        item.logo = None;
-    }
+    item.logo = item.logo.filter(|logo| shareable(logo, hosts));
     item
+}
+
+/// Whether a logo may go to a controller. The core refuses one on one of
+/// `hosts`; this also refuses one elsewhere on the same site, such as
+/// `logos.panel.example` next to `panel.example`.
+pub(crate) fn shareable(logo: &str, hosts: &[String]) -> bool {
+    shareable_logo(logo, hosts) && !on_a_provider_site(logo, hosts)
 }
 
 /// The answer from a list of channels, in the order the cache gives them.

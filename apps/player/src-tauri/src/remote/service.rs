@@ -19,6 +19,7 @@ use mvp_core::remote::catalog::CatalogQuery;
 use mvp_core::remote::consent::RequestId;
 use mvp_core::remote::controller::AskError;
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
+use mvp_core::remote::library::LibraryCall;
 use mvp_core::remote::message::ErrorCode;
 use mvp_core::remote::message::{
     Command, DeviceType, Feature, Hello, VersionedState, PROTOCOL_VERSION,
@@ -752,6 +753,30 @@ impl<R: Runtime> TauriHost<R> {
         Some(episodes)
     }
 
+    /// The episodes of `series_id`, as [`super::catalog::episodes`] loads
+    /// them. A later page, or the same series asked again soon, comes from
+    /// what was loaded, so paging doesn't ask the provider each time. They
+    /// are kept so a play can find them. This blocks, so it runs on a
+    /// blocking thread.
+    fn series_episodes(&self, series_id: &str) -> Result<Vec<Channel>, ErrorCode> {
+        let gate = self.loading.enter(series_id);
+        let episodes = {
+            let _one = lock(&gate);
+            match self.fresh(series_id) {
+                Some(episodes) => Ok(episodes),
+                None => {
+                    let state = self.app.state::<AppState>();
+                    let may_ask = || lock(&self.fetches).take(Instant::now());
+                    tokio::runtime::Handle::current()
+                        .block_on(super::catalog::episodes(&state.cache, series_id, may_ask))
+                        .inspect(|loaded| self.remember(series_id.to_owned(), loaded.clone()))
+                }
+            }
+        };
+        self.loading.leave(gate);
+        episodes
+    }
+
     /// Keeps episodes just loaded.
     fn remember(&self, series_id: String, episodes: Vec<Channel>) {
         let mut remembered = lock(&self.episodes);
@@ -839,28 +864,25 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
             limit,
         } = query
         {
-            // A later page, or the same series asked again soon, comes from
-            // what was loaded, so paging doesn't ask the provider each time.
-            let gate = self.loading.enter(&series_id);
-            let episodes = {
-                // This runs on a blocking thread, which can wait.
-                let _one = lock(&gate);
-                match self.fresh(&series_id) {
-                    Some(episodes) => Ok(episodes),
-                    None => {
-                        let may_ask = || lock(&self.fetches).take(Instant::now());
-                        tokio::runtime::Handle::current()
-                            .block_on(super::catalog::episodes(&state.cache, &series_id, may_ask))
-                            .inspect(|loaded| self.remember(series_id.clone(), loaded.clone()))
-                    }
-                }
-            };
-            self.loading.leave(gate);
-            let episodes = episodes?;
+            let episodes = self.series_episodes(&series_id)?;
             let providers = super::catalog::read(&state.cache, |c| c.get_providers())?;
             return super::catalog::episode_page(&providers, &series_id, &episodes, cursor, limit);
         }
         super::catalog::answer(&state.cache, query)
+    }
+
+    fn library(&self, call: LibraryCall) -> Result<Vec<u8>, ErrorCode> {
+        let edit = call.edits().then(|| call.clone());
+        let answer = super::library::answer(&self.app, call, |id| self.series_episodes(id))?;
+        // This device's own screens show the change too.
+        if let Some(call) = edit {
+            let answer: serde_json::Value = serde_json::from_slice(&answer).unwrap_or_default();
+            let _ = self.app.emit(
+                "remote://library-changed",
+                serde_json::json!({ "call": call, "answer": answer }),
+            );
+        }
+        Ok(answer)
     }
 
     fn save_providers(&self, from: String, providers: Vec<ProviderSettings>, done: SavedProviders) {

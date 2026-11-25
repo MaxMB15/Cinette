@@ -527,7 +527,7 @@ pub async fn set_epg_url(
         .map_err(|e| e.to_string())
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpgSearchResultDto {
     pub channel_id: String,
@@ -1113,7 +1113,7 @@ pub async fn download_subtitle<R: Runtime>(
 
 // --- Watch History Commands ---
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WatchHistoryEntryDto {
     pub channel_id: String,

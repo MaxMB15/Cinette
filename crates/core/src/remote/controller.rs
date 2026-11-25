@@ -18,6 +18,7 @@ use super::channel::Channel;
 use super::consent::CONSENT_TIMEOUT;
 use super::handshake::{ControllerHandshake, Next, Peer, VerificationCode};
 use super::identity::{DeviceId, DeviceKey};
+use super::library::{Incoming, LibraryCall, Piece};
 use super::message::{
     self, CloseReason, Command, DecodeError, ErrorCode, Feature, Hello, Message, VersionedState,
 };
@@ -28,6 +29,7 @@ use super::transfer::flow::{
 };
 use super::transfer::merge::Report;
 use super::transfer::{Counts, Export, What};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// How often a controller pings a quiet connection.
@@ -64,6 +66,12 @@ pub enum Event {
         items: Vec<CatalogItem>,
         next: Option<String>,
     },
+    /// The whole answer to a library call, still packed: see
+    /// [`super::library::unpack`]. A call that failed gets
+    /// [`Event::Reply`] instead.
+    Library { request: u64, packed: Vec<u8> },
+    /// A piece of the answer to a library call came, and more are coming.
+    LibraryPiece { request: u64 },
     /// An error not tied to a request.
     Error(ErrorCode),
     /// Something about the transfer this controller asked for.
@@ -124,6 +132,8 @@ pub struct Controller {
     latest: Option<(String, u64)>,
     /// The transfer asked for or running.
     flow: Option<ControllerFlow>,
+    /// The answers to library calls coming in, by request.
+    library: HashMap<u64, Incoming>,
     /// Every message read in a session, for tests to check what the
     /// target sent.
     #[cfg(test)]
@@ -151,6 +161,7 @@ impl Controller {
                 next_request: 0,
                 latest: None,
                 flow: None,
+                library: HashMap::new(),
                 #[cfg(test)]
                 heard: Vec::new(),
             },
@@ -302,6 +313,37 @@ impl Controller {
                         return closed(out, reason);
                     }
                     Some(Message::Renamed { name }) => take_rename(&mut peer, &name, &mut out),
+                    Some(Message::LibraryData {
+                        re,
+                        seq,
+                        last,
+                        data,
+                    }) => {
+                        // Every piece is acknowledged, even of an answer
+                        // that broke, so the target's next answers go out.
+                        if let Ok(bytes) = channel.seal(&Message::LibraryAck { re, seq }) {
+                            out.send.push(bytes);
+                        }
+                        let piece = self.library.get_mut(&re).map(|i| i.add(seq, last, &data));
+                        match piece {
+                            None => {}
+                            Some(Piece::More) => out.events.push(Event::LibraryPiece { request: re }),
+                            Some(Piece::Done(packed)) => {
+                                self.library.remove(&re);
+                                out.events.push(Event::Library {
+                                    request: re,
+                                    packed,
+                                });
+                            }
+                            Some(Piece::Broken) => {
+                                self.library.remove(&re);
+                                out.events.push(Event::Reply {
+                                    request: re,
+                                    result: Err(ErrorCode::Failed),
+                                });
+                            }
+                        }
+                    }
                     // A grant for a request this device stopped making,
                     // such as one cancelled on its way: the target is told,
                     // so it doesn't keep the grant.
@@ -312,7 +354,12 @@ impl Controller {
                             out.send.push(bytes);
                         }
                     }
-                    Some(other) => handle_common(other, &mut out),
+                    Some(other) => {
+                        if let Message::Error { re: Some(re), .. } = &other {
+                            self.library.remove(re);
+                        }
+                        handle_common(other, &mut out)
+                    }
                 }
                 self.stage = Stage::InSession {
                     channel,
@@ -407,6 +454,28 @@ impl Controller {
     /// [`Event::Page`].
     pub fn catalog(&mut self, query: CatalogQuery) -> Result<(u64, Vec<u8>), NotConnected> {
         self.request(|id| Message::Catalog { id, query })
+    }
+
+    /// Calls on the target's library. The answer comes in
+    /// [`Event::Library`], or [`Event::Reply`] if it failed.
+    pub fn library(&mut self, call: LibraryCall) -> Result<(u64, Vec<u8>), AskError> {
+        let Stage::InSession { peer, .. } = &self.stage else {
+            return Err(AskError::NotConnected);
+        };
+        if !peer.features.contains(&Feature::Library) {
+            return Err(AskError::Unsupported);
+        }
+        let (id, bytes) = self
+            .request(|id| Message::Library { id, call })
+            .map_err(|_| AskError::NotConnected)?;
+        self.library.insert(id, Incoming::default());
+        Ok((id, bytes))
+    }
+
+    /// Stops waiting for the answer to a library call. Its pieces are still
+    /// acknowledged, and then dropped.
+    pub fn forget_library(&mut self, request: u64) {
+        self.library.remove(&request);
     }
 
     /// Asks for a transfer of history. With [`Direction::Send`], `counts`

@@ -23,6 +23,18 @@ describe("CategoryBrowser", () => {
 		expect(screen.getByText("Manage")).toBeDefined();
 	});
 
+	it("opens the category manager from Manage", () => {
+		render(<CategoryBrowser {...defaultProps} />);
+		fireEvent.click(screen.getByRole("button", { name: "Manage" }));
+		expect(defaultProps.onManage).toHaveBeenCalledOnce();
+	});
+
+	it("has no Manage button without a category manager", () => {
+		render(<CategoryBrowser {...defaultProps} onManage={undefined} />);
+		expect(screen.getByText("Categories")).toBeDefined();
+		expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();
+	});
+
 	it("calls onSelectCategory when clicking a super-category", () => {
 		render(<CategoryBrowser {...defaultProps} />);
 		fireEvent.click(screen.getAllByText("United States")[0]);

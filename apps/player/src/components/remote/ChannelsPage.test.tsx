@@ -21,11 +21,14 @@ vi.mock("@/components/remote/RemoteCatalog", () => ({
 		</button>
 	),
 }));
+vi.mock("@/components/remote/RemoteLibrary", () => ({
+	RemoteLibrary: ({ link }: { link: Link }) => <p>{link.name}'s library</p>,
+}));
 
 import { ChannelsPage } from "./ChannelsPage";
 
-const link = (phase: Link["phase"]) =>
-	({ deviceId: "tv1", name: "Living Room", phase }) as unknown as Link;
+const link = (phase: Link["phase"], features: string[] = []) =>
+	({ id: 3, deviceId: "tv1", name: "Living Room", phase, features }) as unknown as Link;
 
 describe("ChannelsPage", () => {
 	it("shows this device's channels without a link", () => {
@@ -44,6 +47,13 @@ describe("ChannelsPage", () => {
 			expect(screen.getByText("Living Room's catalog")).toBeInTheDocument();
 			unmount();
 		}
+	});
+
+	it("shows the other device's library in the channel screens when it sends one", () => {
+		control.link = link({ phase: "connected" }, ["library"]);
+		render(<ChannelsPage />);
+		expect(screen.getByText("Living Room's library")).toBeInTheDocument();
+		expect(screen.queryByText("Living Room's catalog")).not.toBeInTheDocument();
 	});
 
 	it("shows this device's channels where it can't control others", () => {

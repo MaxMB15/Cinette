@@ -3,6 +3,9 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
+import { LibraryProvider } from "@/hooks/useLibrary";
+import { remoteSource } from "@/lib/library";
 import type { OmdbData } from "@/lib/types";
 
 vi.mock("@/lib/tauri", () => ({
@@ -51,5 +54,14 @@ describe("useOmdbInfoState", () => {
 		const { result } = renderHook(() => useOmdbInfoState(null, false));
 		expect(result.current.infoLoading).toBe(false);
 		expect(result.current.hasOmdbKey).toBe(true);
+	});
+
+	it("doesn't check this device's key for another device's details", () => {
+		rememberHasOmdbKey(false);
+		const wrapper = ({ children }: { children: ReactNode }) =>
+			createElement(LibraryProvider, { value: { source: remoteSource(2) } }, children);
+		const { result } = renderHook(() => useOmdbInfoState(null, false), { wrapper });
+		expect(result.current).toEqual({ hasOmdbKey: true, infoLoading: false });
+		expect(mockGetKey).not.toHaveBeenCalled();
 	});
 });

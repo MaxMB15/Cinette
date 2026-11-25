@@ -9,6 +9,7 @@ import {
 	aggregateForSeries,
 	DownloadsProvider,
 	groupDownloads,
+	NoDownloadsProvider,
 	supersedes,
 	useDownloads,
 } from "./useDownloads";
@@ -292,5 +293,22 @@ describe("DownloadsProvider", () => {
 		} finally {
 			consoleError.mockRestore();
 		}
+	});
+});
+
+describe("NoDownloadsProvider", () => {
+	it("has no downloads and asks the backend for none", async () => {
+		const { result } = renderHook(() => useDownloads(), {
+			wrapper: ({ children }: { children: ReactNode }) =>
+				createElement(NoDownloadsProvider, null, children),
+		});
+		expect(result.current.downloads).toEqual([]);
+		expect(result.current.byChannel.size).toBe(0);
+		expect(result.current.bySeries.size).toBe(0);
+		expect(result.current.retentionDays).toBeNull();
+		await expect(result.current.refresh()).resolves.toBeUndefined();
+		await expect(result.current.setRetentionDays(7)).resolves.toBe(0);
+		expect(listDownloads).not.toHaveBeenCalled();
+		expect(setDownloadRetention).not.toHaveBeenCalled();
 	});
 });
